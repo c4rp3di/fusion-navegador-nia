@@ -45,4 +45,5 @@ android {
 dependencies {
     // Motor y contratos viven fuera de la UI; :app solo los consume.
     implementation project(':contracts')
+    implementation project(':engine-core')
 }
