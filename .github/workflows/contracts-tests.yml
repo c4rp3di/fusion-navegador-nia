@@ -81,6 +81,8 @@ jobs:
             engine-core/src/main/java/nia/engine/css/CssCascade.kt \
             engine-core/src/test/java/nia/engine/css/CssParserTest.kt \
             engine-core/src/test/java/nia/engine/css/CssCascadeTest.kt \
+            engine-core/src/main/java/nia/engine/layout/Layout.kt \
+            engine-core/src/test/java/nia/engine/layout/LayoutTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/AndroidManifest.xml \
             app/build.gradle \
