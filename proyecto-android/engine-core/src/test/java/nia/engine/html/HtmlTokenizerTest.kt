@@ -224,17 +224,17 @@ class HtmlTokenizerTest {
 
     @Test
     fun nulEnTexto() {
-        assertEquals(listOf(HtmlToken.Data("ab"), HtmlToken.Eof), tokens("ab"))
-        assertTrue(parseErrors("ab").isNotEmpty())
+        assertEquals(listOf(HtmlToken.Data("a\uFFFDb"), HtmlToken.Eof), tokens("a\u0000b"))
+        assertTrue(parseErrors("a\u0000b").isNotEmpty())
     }
 
     @Test
     fun nulEnAtributo() {
         assertEquals(
-            listOf(HtmlToken.StartTag("a", mapOf("href" to "x"), false), HtmlToken.Eof),
-            tokens("<a href=\"x\">")
+            listOf(HtmlToken.StartTag("a", mapOf("href" to "x\uFFFDy"), false), HtmlToken.Eof),
+            tokens("<a href=\"x\u0000y\">")
         )
-        assertTrue(parseErrors("<a href=\"x\">").isNotEmpty())
+        assertTrue(parseErrors("<a href=\"x\u0000y\">").isNotEmpty())
     }
 
     @Test

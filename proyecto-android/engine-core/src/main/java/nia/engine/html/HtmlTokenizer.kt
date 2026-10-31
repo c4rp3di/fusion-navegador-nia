@@ -59,7 +59,7 @@ object HtmlTokenizer {
         }
 
         private fun isWs(c: Char): Boolean =
-            c == ' ' || c == '\t' || c == '\n' || c == '' || c == '\r'
+            c == ' ' || c == '\t' || c == '\n' || c == '\u000C' || c == '\r'
 
         private fun isAlpha(c: Char): Boolean =
             c in 'a'..'z' || c in 'A'..'Z'
@@ -140,7 +140,7 @@ object HtmlTokenizer {
                             state = State.TAG_OPEN
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            dataBuf.append('')
+                            dataBuf.append('\uFFFD')
                         } else {
                             dataBuf.append(c)
                         }
@@ -172,7 +172,7 @@ object HtmlTokenizer {
                             i += 2
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            dataBuf.append('')
+                            dataBuf.append('\uFFFD')
                             i++
                         } else {
                             dataBuf.append(c)
@@ -263,7 +263,7 @@ object HtmlTokenizer {
                             emitTag()
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            tagName.append('')
+                            tagName.append('\uFFFD')
                         } else {
                             tagName.append(lowerChar(c))
                         }
@@ -285,7 +285,7 @@ object HtmlTokenizer {
                             err("unexpected-null-character")
                             finalizeAttr()
                             attrName = StringBuilder()
-                            attrName.append('')
+                            attrName.append('\uFFFD')
                             state = State.ATTR_NAME
                         } else if (c == '=') {
                             err("unexpected-equals-sign-before-attribute-name")
@@ -314,7 +314,7 @@ object HtmlTokenizer {
                             state = State.BEFORE_ATTR_VALUE
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            attrName.append('')
+                            attrName.append('\uFFFD')
                         } else if (c == '"' || c == '\'' || c == '<') {
                             err("unexpected-character-in-attribute-name")
                             attrName.append(lowerChar(c))
@@ -376,7 +376,7 @@ object HtmlTokenizer {
                             state = State.AFTER_ATTR_VALUE_QUOTED
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            attrValue.append('')
+                            attrValue.append('\uFFFD')
                         } else {
                             attrValue.append(c)
                         }
@@ -395,8 +395,9 @@ object HtmlTokenizer {
                             emitTag()
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            attrValue.append('')
-                        } else if (c == '"' || c == '\'' || c == '<' || c == '=' || c == 'unexpected-character-in-unquoted-attribute-value")
+                            attrValue.append('\uFFFD')
+                        } else if (c == '"' || c == '\'' || c == '<' || c == '=' || c == '\u0060') {
+                            err("unexpected-character-in-unquoted-attribute-value")
                             attrValue.append(c)
                         } else {
                             attrValue.append(c)
@@ -512,7 +513,7 @@ object HtmlTokenizer {
                             state = State.COMMENT_END_DASH
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            commentBuf.append('')
+                            commentBuf.append('\uFFFD')
                         } else {
                             commentBuf.append(c)
                         }
@@ -619,7 +620,7 @@ object HtmlTokenizer {
                             state = State.DATA
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            dtName = (dtName ?: "") + ''
+                            dtName = (dtName ?: "") + '\uFFFD'
                         } else {
                             dtName = (dtName ?: "") + lowerChar(c)
                         }
@@ -651,7 +652,7 @@ object HtmlTokenizer {
                             state = State.DATA
                         } else if (c.code == 0) {
                             err("unexpected-null-character")
-                            commentBuf.append('')
+                            commentBuf.append('\uFFFD')
                         } else {
                             commentBuf.append(c)
                         }
