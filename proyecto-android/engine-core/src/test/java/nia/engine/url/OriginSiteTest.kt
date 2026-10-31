@@ -73,4 +73,10 @@ class OriginSiteTest {
         val lh = Site.fromOrigin(tuple("http://localhost:8080/"))
         assertEquals("localhost", lh.registrableDomain)
     }
+
+    @Test
+    fun siteConHostIdna() {
+        val s = Site.fromOrigin(tuple("https://tienda.españa.com/"))
+        assertEquals("xn--espaa-rta.com", s.registrableDomain)
+    }
 }

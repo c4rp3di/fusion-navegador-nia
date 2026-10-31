@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0009)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0014)
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
@@ -19,6 +19,7 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 - **R0009 (T004/T005)**: harness de resultados (`Harness.kt`, estados NOT_RUN/PASS/FAIL/BLOCKED/UNSUPPORTED separados), registro de capacidades declaradas (`Capabilities.kt`), tests del harness (`HarnessTest.kt`), verificación de roundtrip de fuentes tras la importación y XML de tests publicado como artefacto del workflow. `ContractsVersion` pasa a 0.2.0 (adición compatible).
 - **R0011**: corrección en `HarnessTest.kt` (línea 36): la llamada de prueba pasaba solo `passed` y el constructor exige `failed`/`skipped` (sin valor por defecto), lo que rompía `:contracts:compileTestKotlin`. El resto de archivos no cambia.
 - **R0012 (T010 inicio)**: nuevo módulo `:engine-core` (Kotlin JVM puro, sin Android) con parseo de URL absoluta según un subconjunto práctico del algoritmo WHATWG: esquemas especiales (http/https/ws/wss/ftp/file), userinfo, host (dominio ASCII, IPv4, IPv6), puerto con normalización de defectos, normalización de rutas (`.`/`..`), query y fragmento. Además `Origin` (tupla u opaco; nunca la URL como identidad) y `Site` (dominio registrable con tabla de sufijos embebida — aproximación al PSL, no usar aún para decisiones de seguridad). Tests: `UrlParserTest` y `OriginSiteTest`. El workflow ejecuta `:engine-core:test` y el paso de roundtrip vigila también las fuentes del módulo nuevo.
+- **R0014 (T010 completo)**: IDNA/punycode en el parser de URL (RFC 3492, solo encode): los dominios con caracteres no-ASCII se normalizan a minúsculas Unicode y cada etiqueta se convierte a su forma `xn--` (p. ej. `españa.com` → `xn--espaa-rta.com`). Limitaciones documentadas: sin normalización NFC ni validación bidi/de-hyfen. `Capabilities` declara `engine.url` en PASS con los tests del workflow (21 + 9).
 
 Incluye:
 

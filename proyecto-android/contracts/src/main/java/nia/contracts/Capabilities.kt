@@ -25,7 +25,7 @@ object Capabilities {
         Capability("contracts.ipc", TestStatus.PASS, "IpcTest en verde"),
         Capability("contracts.harness", TestStatus.PASS, "HarnessTest en verde"),
         Capability("app.first-draw", TestStatus.PASS, "APK instalada con dibujo propio, sin WebView (2026-10-30)"),
-        Capability("engine.url", TestStatus.NOT_RUN, "T010 (R0012): parser URL/Origin/Site entregado; PASS cuando el CI lo verifique"),
+        Capability("engine.url", TestStatus.PASS, "T010 (R0014): parser URL/Origin/Site con IDNA/punycode (RFC 3492); UrlParserTest y OriginSiteTest en el workflow contracts-tests"),
         Capability("engine.html", TestStatus.NOT_RUN, "P2 sin iniciar"),
         Capability("engine.css", TestStatus.NOT_RUN, "P2 sin iniciar"),
         Capability("engine.js", TestStatus.NOT_RUN, "P3 sin iniciar"),

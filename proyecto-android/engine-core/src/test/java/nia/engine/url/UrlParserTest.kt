@@ -132,4 +132,27 @@ class UrlParserTest {
         assertFailsWith<UrlParseException> { UrlParser.parse("http://a%.com/") }
         assertFailsWith<UrlParseException> { UrlParser.parse("http://exa mple.com/") }
     }
+
+    @Test
+    fun idnaDominioNoAscii() {
+        val u = UrlParser.parse("https://españa.com/")
+        assertEquals("xn--espaa-rta.com", u.host)
+    }
+
+    @Test
+    fun idnaVectoresPunycode() {
+        assertEquals("xn--bcher-kva.example", UrlParser.parse("https://bücher.example/").host)
+        assertEquals("xn--wgv71a.jp", UrlParser.parse("https://日本.jp/").host)
+    }
+
+    @Test
+    fun idnaMinusculasUnicode() {
+        assertEquals("xn--ber-goa.com", UrlParser.parse("https://ÜBER.com/").host)
+        assertEquals("xn--espaa-rta.com", UrlParser.parse("https://ESPAÑA.COM/").host)
+    }
+
+    @Test
+    fun idnaYaPunycodeNoCambia() {
+        assertEquals("xn--espaa-rta.com", UrlParser.parse("https://xn--espaa-rta.com/").host)
+    }
 }

@@ -6,12 +6,12 @@ class UrlParseException(val reason: String) : Exception("URL invalida: $reason")
 /**
  * URL absoluta parseada (T010 v1): subconjunto practico del algoritmo WHATWG.
  *
- * Alceance v1: esquemas especiales (http, https, ws, wss, ftp, file), userinfo
- * opcional, host (dominio ASCII, IPv4 o IPv6 entre corchetes), puerto, ruta
- * normalizada (segmentos `.` y `..`), query y fragmento.
+ * Alcance v2: esquemas especiales (http, https, ws, wss, ftp, file), userinfo
+ * opcional, host (dominio con IDNA/punycode, IPv4 o IPv6 entre corchetes),
+ * puerto, ruta normalizada (segmentos `.` y `..`), query y fragmento.
  *
- * Fuera de alcance v1: referencias relativas (requieren base), IDNA/punycode
- * (se rechazan dominios no-ASCII) y esquemas no especiales.
+ * Fuera de alcance v2: referencias relativas (requieren base) y esquemas no
+ * especiales. IDNA simplificado: sin normalizacion NFC ni validacion bidi.
  */
 data class Url(
     val scheme: String,
@@ -230,14 +230,24 @@ object UrlParser {
             val c = ch.code
             if (c <= 0x20 || c == 0x7F) throw UrlParseException("caracter de control en host")
             if (FORBIDDEN_HOST.contains(ch)) throw UrlParseException("caracter prohibido en host")
-            if (c > 0x7E) throw UrlParseException("dominio no ASCII no soportado v1 (IDNA pendiente)")
         }
         val lower = raw.lowercase()
         if (isIpv4Candidate(lower)) {
             return parseIpv4(lower)
         }
-        return lower
+        return toAsciiDomain(lower)
     }
+
+    /**
+     * IDNA simplificado (R0014): cada etiqueta del dominio con caracteres
+     * no-ASCII se convierte a punycode con prefijo xn-- (RFC 3490/3492);
+     * las etiquetas ASCII pasan sin cambios. Limitaciones v2: sin
+     * normalizacion NFC ni validacion bidi/de-hyfen del RFC 3491.
+     */
+    private fun toAsciiDomain(lower: String): String =
+        lower.split('.').joinToString(".") { label ->
+            if (label.all { it.code < 128 }) label else "xn--" + Punycode.encode(label)
+        }
 
     private fun validatePercent(s: String) {
         var i = 0
@@ -319,5 +329,95 @@ object UrlParser {
             if (!((ch in '0'..'9') || (ch in 'a'..'f') || (ch in 'A'..'F'))) return false
         }
         return true
+    }
+}
+
+/**
+ * Codificacion Punycode (RFC 3492, solo encode) para IDNA (T010, R0014).
+ * Sin dependencias: aritmetica Int pura.
+ */
+private object Punycode {
+
+    private const val BASE = 36
+    private const val TMIN = 1
+    private const val TMAX = 26
+    private const val SKEW = 38
+    private const val DAMP = 700
+    private const val INITIAL_BIAS = 72
+    private const val INITIAL_N = 128
+
+    fun encode(input: String): String {
+        val cps = codePoints(input)
+        val output = StringBuilder()
+        for (cp in cps) {
+            if (cp < 128) output.append(cp.toChar())
+        }
+        var h = output.length
+        val b = h
+        if (b > 0) output.append('-')
+        var n = INITIAL_N
+        var delta = 0
+        var bias = INITIAL_BIAS
+        while (h < cps.size) {
+            var m = Int.MAX_VALUE
+            for (cp in cps) {
+                if (cp >= n && cp < m) m = cp
+            }
+            delta += (m - n) * (h + 1)
+            n = m
+            for (cp in cps) {
+                if (cp < n) {
+                    delta += 1
+                } else if (cp == n) {
+                    var q = delta
+                    var k = BASE
+                    while (true) {
+                        val t = if (k <= bias) TMIN else if (k >= bias + TMAX) TMAX else k - bias
+                        if (q < t) break
+                        output.append(digitChar(t + (q - t) % (BASE - t)))
+                        q = (q - t) / (BASE - t)
+                        k += BASE
+                    }
+                    output.append(digitChar(q))
+                    bias = adapt(delta, h + 1, h == b)
+                    delta = 0
+                    h += 1
+                }
+            }
+            delta += 1
+            n += 1
+        }
+        return output.toString()
+    }
+
+    private fun adapt(delta: Int, numpoints: Int, firsttime: Boolean): Int {
+        var d = if (firsttime) delta / DAMP else delta / 2
+        d += d / numpoints
+        var k = 0
+        while (d > ((BASE - TMIN) * TMAX) / 2) {
+            d /= (BASE - TMIN)
+            k += BASE
+        }
+        return k + (((BASE - TMIN + 1) * d) / (d + SKEW))
+    }
+
+    private fun digitChar(d: Int): Char =
+        if (d < 26) ('a' + d) else ('0' + (d - 26))
+
+    /** Puntos de codigo reales (pares sustitutos UTF-16 unidos). */
+    private fun codePoints(s: String): IntArray {
+        val out = ArrayList<Int>(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c.isHighSurrogate() && i + 1 < s.length && s[i + 1].isLowSurrogate()) {
+                out.add(0x10000 + ((c.code - 0xD800) shl 10) + (s[i + 1].code - 0xDC00))
+                i += 2
+            } else {
+                out.add(c.code)
+                i += 1
+            }
+        }
+        return out.toIntArray()
     }
 }
