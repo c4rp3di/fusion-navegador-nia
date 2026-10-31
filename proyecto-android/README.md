@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0014)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0016)
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
@@ -20,6 +20,8 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 - **R0011**: corrección en `HarnessTest.kt` (línea 36): la llamada de prueba pasaba solo `passed` y el constructor exige `failed`/`skipped` (sin valor por defecto), lo que rompía `:contracts:compileTestKotlin`. El resto de archivos no cambia.
 - **R0012 (T010 inicio)**: nuevo módulo `:engine-core` (Kotlin JVM puro, sin Android) con parseo de URL absoluta según un subconjunto práctico del algoritmo WHATWG: esquemas especiales (http/https/ws/wss/ftp/file), userinfo, host (dominio ASCII, IPv4, IPv6), puerto con normalización de defectos, normalización de rutas (`.`/`..`), query y fragmento. Además `Origin` (tupla u opaco; nunca la URL como identidad) y `Site` (dominio registrable con tabla de sufijos embebida — aproximación al PSL, no usar aún para decisiones de seguridad). Tests: `UrlParserTest` y `OriginSiteTest`. El workflow ejecuta `:engine-core:test` y el paso de roundtrip vigila también las fuentes del módulo nuevo.
 - **R0014 (T010 completo)**: IDNA/punycode en el parser de URL (RFC 3492, solo encode): los dominios con caracteres no-ASCII se normalizan a minúsculas Unicode y cada etiqueta se convierte a su forma `xn--` (p. ej. `españa.com` → `xn--espaa-rta.com`). Limitaciones documentadas: sin normalización NFC ni validación bidi/de-hyfen. `Capabilities` declara `engine.url` en PASS con los tests del workflow (21 + 9).
+- **R0015**: la aserción de `HarnessTest.kt` que exigía NOT_RUN para toda capability del motor se sustituye por su forma general: una capability del motor en PASS exige evidencia declarada (detalle no vacío). Compatible con `engine.url` PASS.
+- **R0016 (T012 v1)**: tokenizer HTML (subconjunto práctico de la tokenization WHATWG, spec 13.2.5) en `:engine-core` (`nia/engine/html`): tokens Data/StartTag/EndTag/Comment/Doctype/Eof con errores de parseo tipificados; nombres de etiqueta y atributo en minúsculas ASCII, atributos con comillas dobles/simples/sin comillas (duplicados: gana el primero), self-closing, comentarios incluidos `--!>` y cierres abruptos, doctype con nombre + forceQuirks (ids PUBLIC/SYSTEM consumidos, no guardados), RAWTEXT/RCDATA aproximado para `script/style/textarea/title/xmp/iframe/noembed/noframes` y el quirk documentado del spec (`<a href = x>` abre un atributo llamado `=`). Casos malformados cubiertos: `<` suelto, EOF dentro de etiquetas, `</>`, comentarios sin cerrar, doctype sin nombre, NUL → U+FFFD. Limitaciones v1: sin character references (`&` pasa literal), CDATA degradado a comentario (como en HTML), atributos de etiquetas de cierre descartados. 42 tests (`HtmlTokenizerTest`); `Capabilities` declara `engine.html` en PASS.
 
 Incluye:
 
@@ -36,6 +38,7 @@ Incluye:
 ```
 settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
+engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer HTML + tests)
 app/                aplicación Android mínima
 docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)

@@ -70,6 +70,9 @@ jobs:
             engine-core/src/main/java/nia/engine/url/UrlParser.kt \
             engine-core/src/test/java/nia/engine/url/OriginSiteTest.kt \
             engine-core/src/test/java/nia/engine/url/UrlParserTest.kt \
+            engine-core/src/main/java/nia/engine/html/HtmlToken.kt \
+            engine-core/src/main/java/nia/engine/html/HtmlTokenizer.kt \
+            engine-core/src/test/java/nia/engine/html/HtmlTokenizerTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/AndroidManifest.xml \
             app/build.gradle \
