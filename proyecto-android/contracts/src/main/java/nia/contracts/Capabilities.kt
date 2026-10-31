@@ -26,7 +26,7 @@ object Capabilities {
         Capability("contracts.harness", TestStatus.PASS, "HarnessTest en verde"),
         Capability("app.first-draw", TestStatus.PASS, "APK instalada con dibujo propio, sin WebView (2026-10-30)"),
         Capability("engine.url", TestStatus.PASS, "T010 (R0014): parser URL/Origin/Site con IDNA/punycode (RFC 3492); UrlParserTest y OriginSiteTest en el workflow contracts-tests"),
-        Capability("engine.html", TestStatus.PASS, "T012 (R0016): tokenizer HTML (subconjunto WHATWG, errores tipificados) en :engine-core; HtmlTokenizerTest en el workflow contracts-tests"),
+        Capability("engine.html", TestStatus.PASS, "T012 (R0017): tokenizer HTML + tree builder v1 (subconjunto WHATWG, modos de insercion con recovery tipificado) en :engine-core; HtmlTokenizerTest y HtmlTreeBuilderTest en el workflow contracts-tests"),
         Capability("engine.css", TestStatus.NOT_RUN, "P2 sin iniciar"),
         Capability("engine.js", TestStatus.NOT_RUN, "P3 sin iniciar"),
         Capability("engine.network", TestStatus.NOT_RUN, "P2 sin iniciar")
