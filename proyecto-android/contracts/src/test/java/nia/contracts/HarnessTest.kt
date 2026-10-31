@@ -71,7 +71,12 @@ class HarnessTest {
     fun capacidadesDeclaradasNuncaMientenSobreElMotor() {
         val caps = Capabilities.baseline()
         assertTrue(caps.any { it.id == "contracts.ids" && it.status == TestStatus.PASS })
-        assertTrue(caps.filter { it.id.startsWith("engine.") }.all { it.status == TestStatus.NOT_RUN })
+        // Una capacidad del motor en PASS exige evidencia declarada (detalle);
+        // sin evidencia debe seguir en NOT_RUN (seccion 1.5).
+        val motor = caps.filter { it.id.startsWith("engine.") }
+        assertTrue(motor.all { it.status != TestStatus.PASS || !it.detail.isNullOrBlank() })
+        // T010 (R0014): el parser URL/Origin/Site con IDNA ya tiene tests en el workflow.
+        assertTrue(motor.any { it.id == "engine.url" && it.status == TestStatus.PASS })
         assertFailsWith<IllegalArgumentException> { Capability(" ", TestStatus.PASS) }
     }
 }
