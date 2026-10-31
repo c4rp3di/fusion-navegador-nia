@@ -17,7 +17,7 @@ class DomDocumentTest {
     private fun revision(doc: DomDocument): Long = doc.snapshot().revision
 
     private fun assertCode(code: String, block: () -> Unit) {
-        val e = assertFailsWith<DomException>(block)
+        val e = assertFailsWith<DomException> { block() }
         assertEquals(code, e.code)
     }
 
