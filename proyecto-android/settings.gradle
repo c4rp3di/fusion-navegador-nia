@@ -18,3 +18,4 @@ rootProject.name = 'NavegadorNIA'
 
 include ':app'
 include ':contracts'
+include ':engine-core'
