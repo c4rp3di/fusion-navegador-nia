@@ -77,6 +77,10 @@ jobs:
             engine-core/src/test/java/nia/engine/html/HtmlTreeBuilderTest.kt \
             engine-core/src/main/java/nia/engine/dom/DomDocument.kt \
             engine-core/src/test/java/nia/engine/dom/DomDocumentTest.kt \
+            engine-core/src/main/java/nia/engine/css/Css.kt \
+            engine-core/src/main/java/nia/engine/css/CssCascade.kt \
+            engine-core/src/test/java/nia/engine/css/CssParserTest.kt \
+            engine-core/src/test/java/nia/engine/css/CssCascadeTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/AndroidManifest.xml \
             app/build.gradle \

@@ -28,7 +28,7 @@ object Capabilities {
         Capability("engine.url", TestStatus.PASS, "T010 (R0014): parser URL/Origin/Site con IDNA/punycode (RFC 3492); UrlParserTest y OriginSiteTest en el workflow contracts-tests"),
         Capability("engine.html", TestStatus.PASS, "T012 (R0017): tokenizer HTML + tree builder v1 (subconjunto WHATWG, modos de insercion con recovery tipificado) en :engine-core; HtmlTokenizerTest y HtmlTreeBuilderTest en el workflow contracts-tests"),
         Capability("engine.dom", TestStatus.PASS, "T013 (R0018): DOM propio con handles/generacion, mutaciones con errores tipificados y snapshots con revision monotona en :engine-core; DomDocumentTest en el workflow contracts-tests"),
-        Capability("engine.css", TestStatus.NOT_RUN, "P2 sin iniciar"),
+        Capability("engine.css", TestStatus.PASS, "T014 (R0019): CSS v1 con parser de selectores (tipo/universal/clase/id/atributo, combinadores descendente e hijo), especificidad, cascada con orden, herencia y estilos computados en :engine-core; CssParserTest y CssCascadeTest en el workflow contracts-tests"),
         Capability("engine.js", TestStatus.NOT_RUN, "P3 sin iniciar"),
         Capability("engine.network", TestStatus.NOT_RUN, "P2 sin iniciar")
     )
