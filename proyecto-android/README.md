@@ -17,6 +17,7 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 - `buildTypes` se declara una sola vez en `app/build.gradle`.
 - **R0007**: el primer `:contracts:compileKotlin` real (run #350) destapó dos bugs del código, nunca compilado antes: entradas de enum sin calificar en `when` y fábricas `Outcome.success`/`Outcome.failure` ausentes. Corregidos en `Errors.kt`.
 - **R0009 (T004/T005)**: harness de resultados (`Harness.kt`, estados NOT_RUN/PASS/FAIL/BLOCKED/UNSUPPORTED separados), registro de capacidades declaradas (`Capabilities.kt`), tests del harness (`HarnessTest.kt`), verificación de roundtrip de fuentes tras la importación y XML de tests publicado como artefacto del workflow. `ContractsVersion` pasa a 0.2.0 (adición compatible).
+- **R0011**: corrección en `HarnessTest.kt` (línea 36): la llamada de prueba pasaba solo `passed` y el constructor exige `failed`/`skipped` (sin valor por defecto), lo que rompía `:contracts:compileTestKotlin`. El resto de archivos no cambia.
 
 Incluye:
 
