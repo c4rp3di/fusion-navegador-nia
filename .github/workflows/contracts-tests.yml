@@ -65,6 +65,11 @@ jobs:
             contracts/src/main/java/nia/contracts/Ipc.kt \
             contracts/src/test/java/nia/contracts/ContractsTest.kt \
             contracts/src/test/java/nia/contracts/HarnessTest.kt \
+            engine-core/src/main/java/nia/engine/url/Origin.kt \
+            engine-core/src/main/java/nia/engine/url/Site.kt \
+            engine-core/src/main/java/nia/engine/url/UrlParser.kt \
+            engine-core/src/test/java/nia/engine/url/OriginSiteTest.kt \
+            engine-core/src/test/java/nia/engine/url/UrlParserTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/AndroidManifest.xml \
             app/build.gradle \
@@ -82,15 +87,16 @@ jobs:
           fi
           exit $faltan
 
-      - name: Tests unitarios del modulo contracts (T002)
-        run: gradle --no-daemon :contracts:test
+      - name: Tests unitarios (contracts + engine-core)
+        run: gradle --no-daemon :contracts:test :engine-core:test
 
       - name: Resumen del harness (T004)
         if: always()
         run: |
-          if ls contracts/build/test-results/*/TEST-*.xml >/dev/null 2>&1; then
+          if ls contracts/build/test-results/*/TEST-*.xml >/dev/null 2>&1 || ls engine-core/build/test-results/*/TEST-*.xml >/dev/null 2>&1; then
             echo "== Suites XML generadas =="
-            head -n 2 contracts/build/test-results/*/TEST-*.xml
+            head -n 2 contracts/build/test-results/*/TEST-*.xml 2>/dev/null
+            head -n 2 engine-core/build/test-results/*/TEST-*.xml 2>/dev/null
           else
             echo "::warning::Sin XML de resultados de tests"
           fi
@@ -100,7 +106,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results-xml
-          path: proyecto-android/contracts/build/test-results/*/TEST-*.xml
+          path: |
+            proyecto-android/contracts/build/test-results/*/TEST-*.xml
+            proyecto-android/engine-core/build/test-results/*/TEST-*.xml
           if-no-files-found: warn
 
       - name: Smoke build del APK debug (T003)
