@@ -87,7 +87,7 @@ object LayoutEngine {
     ): LayoutResult = Machine(root, styleOf, viewportWidth).run()
 
     private class Machine(
-        root: DomNode.Document,
+        private val root: DomNode.Document,
         private val styleOf: (DomNode, String) -> String?,
         private val viewport: Double
     ) {
