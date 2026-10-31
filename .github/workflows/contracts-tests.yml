@@ -1,0 +1,114 @@
+name: contracts-tests
+
+on:
+  push:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: proyecto-android
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Plataforma y build-tools android-34 (solo si faltan)
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ -d "$SDK/platforms/android-34" ] && [ -d "$SDK/build-tools/34.0.0" ]; then
+            echo "SDK android-34 ya presente, se omite la descarga."
+          else
+            yes | sdkmanager --licenses > /dev/null || true
+            sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          fi
+
+      - name: Keystore debug si falta (el repo suele traerlo en apk-build/)
+        run: |
+          mkdir -p apk-build
+          if [ -f apk-build/debug.keystore ]; then
+            echo "Keystore debug del repo presente; firma estable."
+          else
+            keytool -genkeypair -v \
+              -keystore apk-build/debug.keystore \
+              -storepass android -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "::warning::No habia keystore en el repo; se genera uno local para este run."
+          fi
+
+      - name: Verificar fuentes tras roundtrip de Fusion (T005)
+        run: |
+          faltan=0
+          for f in \
+            contracts/src/main/java/nia/contracts/Cancellation.kt \
+            contracts/src/main/java/nia/contracts/Capabilities.kt \
+            contracts/src/main/java/nia/contracts/ContractsVersion.kt \
+            contracts/src/main/java/nia/contracts/Errors.kt \
+            contracts/src/main/java/nia/contracts/Handles.kt \
+            contracts/src/main/java/nia/contracts/Harness.kt \
+            contracts/src/main/java/nia/contracts/Ids.kt \
+            contracts/src/main/java/nia/contracts/Ipc.kt \
+            contracts/src/test/java/nia/contracts/ContractsTest.kt \
+            contracts/src/test/java/nia/contracts/HarnessTest.kt \
+            app/src/main/java/app/nia/navegador/MainActivity.kt \
+            app/src/main/AndroidManifest.xml \
+            app/build.gradle \
+            contracts/build.gradle \
+            build.gradle \
+            settings.gradle \
+            gradle.properties; do
+            if [ ! -s "$f" ]; then
+              echo "::error::$f falta o esta vacio tras la importacion/push (roundtrip roto)"
+              faltan=1
+            fi
+          done
+          if [ "$faltan" = "0" ]; then
+            echo "Roundtrip OK: todas las fuentes esperadas estan presentes."
+          fi
+          exit $faltan
+
+      - name: Tests unitarios del modulo contracts (T002)
+        run: gradle --no-daemon :contracts:test
+
+      - name: Resumen del harness (T004)
+        if: always()
+        run: |
+          if ls contracts/build/test-results/*/TEST-*.xml >/dev/null 2>&1; then
+            echo "== Suites XML generadas =="
+            head -n 2 contracts/build/test-results/*/TEST-*.xml
+          else
+            echo "::warning::Sin XML de resultados de tests"
+          fi
+
+      - name: Publicar XML de resultados de tests (T004)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-xml
+          path: proyecto-android/contracts/build/test-results/*/TEST-*.xml
+          if-no-files-found: warn
+
+      - name: Smoke build del APK debug (T003)
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Publicar APK debug como artefacto
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: navegador-nia-debug-apk
+          path: proyecto-android/app/build/outputs/apk/debug/*.apk
