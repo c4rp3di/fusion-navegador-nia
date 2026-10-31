@@ -5,7 +5,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Tests de la cascada CSS (T014 v1): espejo validado del gemelo TS (69/69).
+ * Tests de la cascada CSS v2 (R0023): espejo validado del gemelo TS.
+ * v1 (T014) + hermanos adyacente/general, pseudo-clases estaticas,
+ * shorthands margin/padding/border-width y unidades em/rem/%.
  */
 class CssCascadeTest {
 
@@ -204,5 +206,261 @@ class CssCascadeTest {
         val p = el("p", mapOf("id" to "z"))
         val d = doc(el("body", emptyMap(), listOf(p)))
         assertEquals("red", css(d, "#z{color:red}p{color:blue}").propertyOf(p, "color"), "id temprano")
+    }
+
+    @Test
+    fun hermanosAdyacentes() {
+        val p1 = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val p2 = el("p", emptyMap(), listOf(DomNode.Text("b")))
+        val p3 = el("p", emptyMap(), listOf(DomNode.Text("c")))
+        val d = doc(el("body", emptyMap(), listOf(p1, p2, p3)))
+        val c = css(d, "p+p{color:red}")
+        assertEquals("#000000", c.propertyOf(p1, "color"), "p1 no")
+        assertEquals("red", c.propertyOf(p2, "color"), "p2 si")
+        assertEquals("red", c.propertyOf(p3, "color"), "p3 si")
+    }
+
+    @Test
+    fun hermanosGenerales() {
+        val h = el("h1", emptyMap(), listOf(DomNode.Text("t")))
+        val q1 = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val q2 = el("p", emptyMap(), listOf(DomNode.Text("b")))
+        val d = doc(el("body", emptyMap(), listOf(h, q1, q2)))
+        val c = css(d, "h1~p{color:red}")
+        assertEquals("red", c.propertyOf(q1, "color"), "p1")
+        assertEquals("red", c.propertyOf(q2, "color"), "p2")
+        assertEquals("#000000", c.propertyOf(h, "color"), "h1 no")
+    }
+
+    @Test
+    fun adyacenteNoSaltaElementos() {
+        val p1 = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val dv = el("div", emptyMap(), listOf(el("p", emptyMap(), listOf(DomNode.Text("x")))))
+        val p2 = el("p", emptyMap(), listOf(DomNode.Text("b")))
+        val d = doc(el("body", emptyMap(), listOf(p1, dv, p2)))
+        assertEquals("#000000", css(d, "p+p{color:red}").propertyOf(p2, "color"), "adj con div intermedio no")
+        assertEquals("red", css(d, "p~p{color:red}").propertyOf(p2, "color"), "general si salta")
+    }
+
+    @Test
+    fun primerHijo() {
+        val p1 = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val p2 = el("p", emptyMap(), listOf(DomNode.Text("b")))
+        val p3 = el("p", emptyMap(), listOf(DomNode.Text("c")))
+        val d = doc(el("body", emptyMap(), listOf(p1, p2, p3)))
+        val c = css(d, "p:first-child{color:red}")
+        assertEquals("red", c.propertyOf(p1, "color"), "p1")
+        assertEquals("#000000", c.propertyOf(p2, "color"), "p2 no")
+    }
+
+    @Test
+    fun ultimoHijo() {
+        val p1 = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val p2 = el("p", emptyMap(), listOf(DomNode.Text("b")))
+        val p3 = el("p", emptyMap(), listOf(DomNode.Text("c")))
+        val d = doc(el("body", emptyMap(), listOf(p1, p2, p3)))
+        val c = css(d, "p:last-child{color:red}")
+        assertEquals("red", c.propertyOf(p3, "color"), "p3")
+        assertEquals("#000000", c.propertyOf(p1, "color"), "p1 no")
+    }
+
+    @Test
+    fun hijoUnico() {
+        val solo = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d1 = doc(el("body", emptyMap(), listOf(solo)))
+        assertEquals("red", css(d1, "p:only-child{color:red}").propertyOf(solo, "color"), "unico")
+        val o1 = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val o2 = el("p", emptyMap(), listOf(DomNode.Text("b")))
+        val d2 = doc(el("body", emptyMap(), listOf(o1, o2)))
+        assertEquals("#000000", css(d2, "p:only-child{color:red}").propertyOf(o1, "color"), "con hermano no")
+    }
+
+    @Test
+    fun nthImpares() {
+        val ps = (1..4).map { el("p", emptyMap(), listOf(DomNode.Text(it.toString()))) }
+        val d = doc(el("body", emptyMap(), ps))
+        val c = css(d, "p:nth-child(2n+1){color:red}")
+        assertEquals("red", c.propertyOf(ps[0], "color"), "p1")
+        assertEquals("#000000", c.propertyOf(ps[1], "color"), "p2 no")
+        assertEquals("red", c.propertyOf(ps[2], "color"), "p3")
+        assertEquals("#000000", c.propertyOf(ps[3], "color"), "p4 no")
+    }
+
+    @Test
+    fun nthExacto() {
+        val ps = (1..4).map { el("p", emptyMap(), listOf(DomNode.Text(it.toString()))) }
+        val d = doc(el("body", emptyMap(), ps))
+        val c = css(d, "p:nth-child(3){color:red}")
+        assertEquals("#000000", c.propertyOf(ps[0], "color"), "p1 no")
+        assertEquals("red", c.propertyOf(ps[2], "color"), "p3")
+    }
+
+    @Test
+    fun nthNegativo() {
+        val ps = (1..4).map { el("p", emptyMap(), listOf(DomNode.Text(it.toString()))) }
+        val d = doc(el("body", emptyMap(), ps))
+        val c = css(d, "p:nth-child(-n+2){color:red}")
+        assertEquals("red", c.propertyOf(ps[0], "color"), "p1")
+        assertEquals("red", c.propertyOf(ps[1], "color"), "p2")
+        assertEquals("#000000", c.propertyOf(ps[2], "color"), "p3 no")
+    }
+
+    @Test
+    fun shorthandMargin() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        val c = css(d, "p{margin:10px 5px}")
+        assertEquals("10px", c.propertyOf(p, "margin-top"), "top")
+        assertEquals("5px", c.propertyOf(p, "margin-right"), "right")
+        assertEquals("10px", c.propertyOf(p, "margin-bottom"), "bottom")
+        assertEquals("5px", c.propertyOf(p, "margin-left"), "left")
+    }
+
+    @Test
+    fun shorthandPadding() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        val c = css(d, "p{padding:1px 2px 3px}")
+        assertEquals("1px", c.propertyOf(p, "padding-top"), "top")
+        assertEquals("2px", c.propertyOf(p, "padding-right"), "right")
+        assertEquals("3px", c.propertyOf(p, "padding-bottom"), "bottom")
+        assertEquals("2px", c.propertyOf(p, "padding-left"), "left")
+    }
+
+    @Test
+    fun shorthandBorderWidth() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        val c = css(d, "p{border-width:4px}")
+        assertEquals("4px", c.propertyOf(p, "border-top-width"), "top")
+        assertEquals("4px", c.propertyOf(p, "border-left-width"), "left")
+    }
+
+    @Test
+    fun shorthandAutoDescartado() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("0px", css(d, "p{margin:auto}").propertyOf(p, "margin-top"), "auto no vale")
+    }
+
+    @Test
+    fun shorthandCero() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("0px", css(d, "p{margin:0}").propertyOf(p, "margin-top"), "cero")
+    }
+
+    @Test
+    fun fontSizeEm() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("16.0px", css(d, "body{font-size:32px}p{font-size:0.5em}").propertyOf(p, "font-size"), "em")
+    }
+
+    @Test
+    fun fontSizeEmGrande() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("48.0px", css(d, "body{font-size:32px}p{font-size:1.5em}").propertyOf(p, "font-size"), "em grande")
+    }
+
+    @Test
+    fun fontSizePct() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("16.0px", css(d, "body{font-size:32px}p{font-size:50%}").propertyOf(p, "font-size"), "pct")
+    }
+
+    @Test
+    fun fontSizeRem() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val b = el("body", emptyMap(), listOf(p))
+        val h = el("html", emptyMap(), listOf(b))
+        val d = doc(h)
+        assertEquals("30.0px", css(d, "html{font-size:20px}p{font-size:1.5rem}").propertyOf(p, "font-size"), "rem")
+    }
+
+    @Test
+    fun lineHeightEm() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("24.0px", css(d, "p{font-size:16px;line-height:1.5em}").propertyOf(p, "line-height"), "em")
+    }
+
+    @Test
+    fun lineHeightNumero() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("24.0px", css(d, "p{line-height:1.5}").propertyOf(p, "line-height"), "numero")
+    }
+
+    @Test
+    fun letterSpacingEm() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("8.0px", css(d, "body{font-size:32px}p{letter-spacing:0.25em}").propertyOf(p, "letter-spacing"), "em")
+    }
+
+    @Test
+    fun marginEm() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("16.0px", css(d, "p{font-size:32px;margin:0.5em}").propertyOf(p, "margin-top"), "em")
+    }
+
+    @Test
+    fun marginPctSeQueda() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("5%", css(d, "p{margin:5%}").propertyOf(p, "margin-top"), "pct se queda")
+    }
+
+    @Test
+    fun paddingRem() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("32.0px", css(d, "p{padding:2rem}").propertyOf(p, "padding-top"), "rem")
+    }
+
+    @Test
+    fun remConRaiz() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val b = el("body", emptyMap(), listOf(p))
+        val h = el("html", emptyMap(), listOf(b))
+        val d = doc(h)
+        assertEquals("20.0px", css(d, "html{font-size:20px}p{margin:1rem}").propertyOf(p, "margin-top"), "rem raiz")
+    }
+
+    @Test
+    fun marginNoHereda() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("0px", css(d, "body{margin:10px}").propertyOf(p, "margin-top"), "no hereda")
+    }
+
+    @Test
+    fun emCompuesto() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val dv = el("div", emptyMap(), listOf(p))
+        val d = doc(el("body", emptyMap(), listOf(dv)))
+        val c = css(d, "body{font-size:32px}div{font-size:0.5em}p{font-size:0.5em}")
+        assertEquals("16.0px", c.propertyOf(dv, "font-size"), "div")
+        assertEquals("8.0px", c.propertyOf(p, "font-size"), "p")
+    }
+
+    @Test
+    fun borderEm() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        val c = css(d, "p{font-size:32px;border-width:0.25em}")
+        assertEquals("8.0px", c.propertyOf(p, "border-top-width"), "top")
+        assertEquals("8.0px", c.propertyOf(p, "border-left-width"), "left")
+    }
+
+    @Test
+    fun paddingPctSeQueda() {
+        val p = el("p", emptyMap(), listOf(DomNode.Text("a")))
+        val d = doc(el("body", emptyMap(), listOf(p)))
+        assertEquals("10%", css(d, "p{padding:10%}").propertyOf(p, "padding-top"), "pct se queda")
     }
 }

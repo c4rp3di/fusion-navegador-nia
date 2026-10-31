@@ -1,26 +1,32 @@
 package nia.engine.css
 
 /**
- * CSS v1 (T014): parser de hojas de estilo y modelo de selectores.
+ * CSS v2 (R0023): parser de hojas de estilo y modelo de selectores.
  * Selectores soportados: tipo, universal, clase, id y atributo
- * ([a], [a=v], [a~=v]); combinadores descendente e hijo; agrupacion por comas.
- * Errores tipificados: unsupported-at-rule, invalid-selector,
+ * ([a], [a=v], [a~=v]); combinadores descendente, hijo, hermano adyacente
+ * (+) y hermano general (~); pseudo-clases estaticas :first-child,
+ * :last-child, :only-child y :nth-child(an+b, odd, even, entero); agrupacion
+ * por comas. Errores tipificados: unsupported-at-rule, invalid-selector,
  * unsupported-pseudo, unterminated-block, invalid-declaration,
- * unexpected-character. Limitaciones v1: sin pseudo-clases, sin @-rules,
- * sin combinadores de hermanos.
+ * unexpected-character. Limitaciones v2: sin @-rules, sin pseudo-clases
+ * dinamicas u otras (hover, :not, :root...), nombres de pseudo-clase solo
+ * en minusculas.
  */
+data class CssNth(val a: Int, val b: Int)
+
 sealed class CssSimpleSelector {
     object Universal : CssSimpleSelector()
     data class Type(val name: String) : CssSimpleSelector()
     data class Id(val value: String) : CssSimpleSelector()
     data class Cls(val value: String) : CssSimpleSelector()
     data class Attr(val name: String, val op: String, val value: String?) : CssSimpleSelector()
+    data class Pseudo(val name: String, val nth: CssNth?) : CssSimpleSelector()
 }
 
 /** Compound: todos los simples deben matchear sobre el mismo elemento. */
 data class CssCompoundSelector(val simples: List<CssSimpleSelector>)
 
-/** Complejo: cadena de compounds unidos por combinadores ("desc" | "child"). */
+/** Complejo: cadena de compounds unidos por combinadores ("desc" | "child" | "adj" | "gen"). */
 data class CssComplexSelector(
     val compounds: List<CssCompoundSelector>,
     val combinators: List<String>
@@ -110,6 +116,29 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
             }
         }
 
+        /** Argumento an+b de :nth-child: odd/even, entero, an, an+b, -n+b, an-b. */
+        private fun parseNth(arg: String): CssNth? {
+            val s = arg.replace(Regex("\\s+"), "")
+            if (s.isEmpty()) return null
+            if (s == "odd") return CssNth(2, 1)
+            if (s == "even") return CssNth(2, 0)
+            val m = Regex("^([+-]?\\d*)n([+-]\\d+)?$").find(s)
+            if (m != null) {
+                val head = m.groupValues[1]
+                val a = when {
+                    head.isEmpty() || head == "+" -> 1
+                    head == "-" -> -1
+                    else -> head.toInt()
+                }
+                val tail = m.groupValues[2]
+                val b = if (tail.isEmpty()) 0 else tail.toInt()
+                return CssNth(a, b)
+            }
+            val mi = Regex("^[+-]?\\d+$").find(s)
+            if (mi != null) return CssNth(0, s.toInt())
+            return null
+        }
+
         private sealed class Cmp {
             data class Ok(val compound: CssCompoundSelector) : Cmp()
             data class Bad(val code: String) : Cmp()
@@ -196,7 +225,34 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                         return Cmp.Bad("invalid-selector")
                     }
                 } else if (c == ':') {
-                    return Cmp.Bad("unsupported-pseudo")
+                    i++
+                    if (i >= n || !isIdentStart(text[i])) return Cmp.Bad("invalid-selector")
+                    val sb = StringBuilder()
+                    while (i < n && isIdent(text[i])) {
+                        sb.append(text[i])
+                        i++
+                    }
+                    val name = sb.toString()
+                    if (name == "first-child" || name == "last-child" || name == "only-child") {
+                        if (i < n && text[i] == '(') return Cmp.Bad("invalid-selector")
+                        simples.add(CssSimpleSelector.Pseudo(name, null))
+                    } else if (name == "nth-child") {
+                        if (i >= n || text[i] != '(') return Cmp.Bad("invalid-selector")
+                        i++
+                        skipNoise()
+                        val asb = StringBuilder()
+                        while (i < n && text[i] != ')') {
+                            asb.append(text[i])
+                            i++
+                        }
+                        if (i >= n) return Cmp.Bad("invalid-selector")
+                        i++
+                        val nth = parseNth(asb.toString())
+                        if (nth == null) return Cmp.Bad("invalid-selector")
+                        simples.add(CssSimpleSelector.Pseudo("nth-child", nth))
+                    } else {
+                        return Cmp.Bad("unsupported-pseudo")
+                    }
                 } else {
                     break
                 }
@@ -220,6 +276,18 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                 skipNoise()
                 if (i < n && text[i] == '>') {
                     combinators.add("child")
+                    i++
+                    skipNoise()
+                    continue
+                }
+                if (i < n && text[i] == '+') {
+                    combinators.add("adj")
+                    i++
+                    skipNoise()
+                    continue
+                }
+                if (i < n && text[i] == '~') {
+                    combinators.add("gen")
                     i++
                     skipNoise()
                     continue

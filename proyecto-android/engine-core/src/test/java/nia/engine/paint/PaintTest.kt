@@ -11,7 +11,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Tests de pintura v1 (T016): espejo validado del gemelo TS (20 tests).
+ * Tests de pintura v2 (R0023): espejo validado del gemelo TS.
+ * v1 (T016) + tiras de borde (hasta 4 por elemento tras el fondo).
  * Cada test construye el arbol, computa estilos con la cascada CSS real,
  * corre el layout real y comprueba la display list y el hitTest.
  */
@@ -201,5 +202,81 @@ class PaintTest {
         val s = scene(doc(el("body", emptyMap(), listOf(outer))), "#out{background-color:#111111}#in{background-color:#222222}", 200.0)
         val hit = s.hitTest(100.0, 10.0)
         assertTrue(hit is PaintOp.DrawRect && hit.color == "#222222", "inner gana")
+    }
+
+    @Test
+    fun fondoConMargin() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val s = scene(doc(el("body", emptyMap(), listOf(p))), "p{background-color:#00ff00;margin:10px}", 200.0)
+        assertEquals(2, s.ops.size, "dos ops")
+        val r = s.ops[0] as PaintOp.DrawRect
+        assertEquals(10.0, r.x, 0.01, "x")
+        assertEquals(10.0, r.y, 0.01, "y")
+        assertEquals(180.0, r.width, 0.01, "w")
+        assertEquals(19.2, r.height, 0.01, "h")
+        assertEquals("#00ff00", r.color, "color")
+        assertTrue(s.ops[1] is PaintOp.DrawText, "texto despues")
+    }
+
+    @Test
+    fun bordesCompletos() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val s = scene(doc(el("body", emptyMap(), listOf(p))), "p{background-color:#eeeeee;border-width:4px;border-color:#ff0000}", 200.0)
+        assertEquals(6, s.ops.size, "seis ops")
+        val rect: (Int) -> PaintOp.DrawRect = { s.ops[it] as PaintOp.DrawRect }
+        assertEquals(0.0, rect(0).x, 0.01, "bg x")
+        assertEquals(27.2, rect(0).height, 0.01, "bg h")
+        assertEquals("#eeeeee", rect(0).color, "bg color")
+        assertEquals(4.0, rect(1).height, 0.01, "top h")
+        assertEquals(23.2, rect(2).y, 0.01, "bottom y")
+        assertEquals(4.0, rect(2).height, 0.01, "bottom h")
+        assertEquals(4.0, rect(3).width, 0.01, "left w")
+        assertEquals(19.2, rect(3).height, 0.01, "left h")
+        assertEquals(196.0, rect(4).x, 0.01, "right x")
+        assertEquals(19.2, rect(4).height, 0.01, "right h")
+        for (i in 1..4) assertEquals("#ff0000", rect(i).color, "tira color " + i)
+        val t = s.ops[5] as PaintOp.DrawText
+        assertEquals(4.0, t.x, 0.01, "texto x")
+        assertEquals(4.0, t.y, 0.01, "texto y")
+    }
+
+    @Test
+    fun bordeSinFondo() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val s = scene(doc(el("body", emptyMap(), listOf(p))), "p{border-width:2px}", 200.0)
+        assertEquals(5, s.ops.size, "cinco ops")
+        for (i in 0..3) assertEquals("#000000", (s.ops[i] as PaintOp.DrawRect).color, "tira color " + i)
+        assertEquals(21.2, (s.ops[1] as PaintOp.DrawRect).y, 0.01, "bottom y")
+        val t = s.ops[4] as PaintOp.DrawText
+        assertEquals(2.0, t.x, 0.01, "texto x")
+        assertEquals(2.0, t.y, 0.01, "texto y")
+        val hit = s.hitTest(1.0, 1.0)
+        assertTrue(hit is PaintOp.DrawRect, "hit rect")
+    }
+
+    @Test
+    fun paddingMueveTexto() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val s = scene(doc(el("body", emptyMap(), listOf(p))), "p{padding:6px}", 200.0)
+        assertEquals(1, s.ops.size, "una op")
+        assertEquals(6.0, (s.ops[0] as PaintOp.DrawText).x, 0.01, "x")
+        assertEquals(6.0, (s.ops[0] as PaintOp.DrawText).y, 0.01, "y")
+    }
+
+    @Test
+    fun bordeCeroSoloTexto() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val s = scene(doc(el("body", emptyMap(), listOf(p))), "p{border-width:0px}", 200.0)
+        assertEquals(1, s.ops.size, "una op")
+        assertTrue(s.ops[0] is PaintOp.DrawText, "solo texto")
+    }
+
+    @Test
+    fun bordeColorHeredado() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val b = el("body", emptyMap(), listOf(p))
+        val s = scene(doc(b), "body{color:#123456}p{border-width:4px}", 200.0)
+        assertEquals(5, s.ops.size, "cinco ops")
+        for (i in 0..3) assertEquals("#123456", (s.ops[i] as PaintOp.DrawRect).color, "tira hereda color " + i)
     }
 }

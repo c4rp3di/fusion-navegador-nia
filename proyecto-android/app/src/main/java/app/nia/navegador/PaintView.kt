@@ -16,11 +16,13 @@ import nia.engine.paint.PaintScene
 import nia.engine.paint.PaintSceneBuilder
 
 /**
- * Adaptador Android del motor (T016, R0021): ejecuta el pipeline completo
+ * Adaptador Android del motor (v2, R0023): ejecuta el pipeline completo
  * (HTML -> CSS -> layout -> display list) en el init y dibuja la escena
- * escalando el viewport logico de 360px al ancho de pantalla. El toque se
- * convierte a coordenadas de documento y se resuelve con hitTest del motor;
- * el op topmost queda resaltado. Sin WebView y sin layout XML.
+ * escalando el viewport logico de 360px al ancho de pantalla. La demo usa
+ * las novedades v2: padding de body, bordes de h1 y de la tarjeta con
+ * border-color, pseudo-clase :first-child y selector de hermano p+p. El
+ * toque se convierte a coordenadas de documento y se resuelve con hitTest
+ * del motor; el op topmost queda resaltado. Sin WebView y sin layout XML.
  */
 class PaintView(context: Context) : View(context) {
 
@@ -28,13 +30,16 @@ class PaintView(context: Context) : View(context) {
 
     private val demoHtml = "<html><body>" +
         "<h1>Navegador NIA</h1>" +
-        "<p>Motor propio: tokenizer, arbol HTML, CSS, layout y pintura. Sin WebView.</p>" +
-        "<div id=\"card\"><p>Esta pantalla la genera el pipeline completo del motor. Toca cualquier zona para resaltar el op topmost que resuelve hitTest.</p></div>" +
+        "<p>Motor propio con CSS v2: hermanos, pseudo-clases, unidades relativas, margenes, padding y bordes. Sin WebView.</p>" +
+        "<div id=\"card\"><p>Primera tarjeta: borde y padding reales (px, em, %).</p><p>La segunda raya queda mas cerca: p+p con margin-top.</p></div>" +
         "</body></html>"
 
-    private val demoCss = "body{background-color:#141428;font-size:18px;color:#f0eef8}" +
-        "h1{font-size:28px;color:#7fe0bc}" +
-        "#card{background-color:#23233f}"
+    private val demoCss = "body{background-color:#141428;font-size:18px;color:#f0eef8;padding:12px}" +
+        "h1{font-size:28px;color:#7fe0bc;border-width:2px;border-color:#7fe0bc;padding:6px}" +
+        "p{margin-top:8px}" +
+        "#card{background-color:#23233f;border-width:3px;border-color:#4a4a7a;padding:12px;margin-top:12px}" +
+        "#card p:first-child{color:#ffd610}" +
+        "p+p{margin-top:4px}"
 
     private val scene: PaintScene
 
