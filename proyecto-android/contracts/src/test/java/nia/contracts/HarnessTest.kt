@@ -33,7 +33,7 @@ class HarnessTest {
 
     @Test
     fun contadoresNegativosRechazados() {
-        assertFailsWith<IllegalArgumentException> { SuiteResult("x", passed = -1) }
+        assertFailsWith<IllegalArgumentException> { SuiteResult("x", passed = -1, failed = 0, skipped = 0) }
         assertFailsWith<IllegalArgumentException> { SuiteResult("x", 0, 0, 0, blocked = -1) }
     }
 
