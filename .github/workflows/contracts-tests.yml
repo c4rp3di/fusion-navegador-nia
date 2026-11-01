@@ -88,6 +88,9 @@ jobs:
             engine-core/src/main/java/nia/engine/js/JsToken.kt \
             engine-core/src/main/java/nia/engine/js/JsLexer.kt \
             engine-core/src/test/java/nia/engine/js/JsLexerTest.kt \
+            engine-core/src/main/java/nia/engine/js/JsAst.kt \
+            engine-core/src/main/java/nia/engine/js/JsParser.kt \
+            engine-core/src/test/java/nia/engine/js/JsParserTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/AndroidManifest.xml \
