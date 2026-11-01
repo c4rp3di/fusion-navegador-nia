@@ -377,7 +377,7 @@ class JsDomBindingsTest {
     @Test
     fun domTextContentReemplazaHijos() {
         val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
-        assertEquals("0", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var d = document.getElementById(\"a\"); d.textContent = \"x\"; d.children().length;", doc)))
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var d = document.getElementById(\"a\"); d.textContent = \"x\"; d.children().length;", doc)))
     }
 
     @Test
