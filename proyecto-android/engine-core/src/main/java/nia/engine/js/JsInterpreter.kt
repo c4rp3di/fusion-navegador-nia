@@ -22,47 +22,14 @@ object JsInterpreter {
 
     private class Completion(val type: CType, val value: JsValue, val label: String?)
 
-    class Env(val parent: Env?, val fnScope: Boolean) {
-        val vars = HashMap<String, JsValue>()
-
-        fun lookupEnv(name: String): Env? {
-            var e: Env? = this
-            while (e != null) {
-                if (e.vars.containsKey(name)) return e
-                e = e.parent
-            }
-            return null
-        }
-
-        fun get(name: String): JsValue {
-            val e = lookupEnv(name)
-            if (e == null) throw JsRuntime.throwNative("ReferenceError", name + " is not defined")
-            return e.vars[name] ?: JsUndefined
-        }
-
-        fun declare(name: String, v: JsValue) {
-            vars[name] = v
-        }
-
-        fun declareFnVar(name: String, v: JsValue) {
-            var e: Env? = this
-            while (e != null && !e.fnScope) e = e.parent
-            if (e == null) e = this
-            e.vars[name] = v
-        }
-
-        fun setExisting(name: String, v: JsValue): Boolean {
-            val e = lookupEnv(name)
-            if (e == null) return false
-            e.vars[name] = v
-            return true
-        }
-    }
-
     private fun rootEnv(e: Env): Env {
-        var x = e
-        while (x.parent != null) x = x.parent
-        return x
+        var x: Env? = e
+        while (x != null) {
+            val p = x.parent
+            if (p == null) return x
+            x = p
+        }
+        return e
     }
 
     private fun normal(): Completion = Completion(CType.NORMAL, JsUndefined, null)
@@ -78,7 +45,10 @@ object JsInterpreter {
             entry = JsProp.Value(JsRuntime.newObj())
             f.props["prototype"] = entry
         }
-        if (entry is JsProp.Value && entry.v is JsObj) return entry.v
+        if (entry is JsProp.Value) {
+            val v = entry.v
+            if (v is JsObj) return v
+        }
         return JsRuntime.newObj()
     }
 
@@ -727,7 +697,7 @@ object JsInterpreter {
             return JsNum((JsRuntime.toInt32(cur) shr (JsRuntime.toUint32(rv) and 31L).toInt()).toDouble())
         }
         if (op == ">>>=") {
-            return JsNum((JsRuntime.toUint32(cur) ushr (JsRuntime.toUint32(rv) and 31L)).toDouble())
+            return JsNum((JsRuntime.toUint32(cur) ushr (JsRuntime.toUint32(rv) and 31L).toInt()).toDouble())
         }
         if (op == "&=") return JsNum((JsRuntime.toInt32(cur) and JsRuntime.toInt32(rv)).toDouble())
         if (op == "|=") return JsNum((JsRuntime.toInt32(cur) or JsRuntime.toInt32(rv)).toDouble())
@@ -900,7 +870,7 @@ object JsInterpreter {
                     return JsNum((JsRuntime.toInt32(l) shr (JsRuntime.toUint32(r) and 31L).toInt()).toDouble())
                 }
                 if (e.op == ">>>") {
-                    return JsNum((JsRuntime.toUint32(l) ushr (JsRuntime.toUint32(r) and 31L)).toDouble())
+                    return JsNum((JsRuntime.toUint32(l) ushr (JsRuntime.toUint32(r) and 31L).toInt()).toDouble())
                 }
                 if (e.op == "&") return JsNum((JsRuntime.toInt32(l) and JsRuntime.toInt32(r)).toDouble())
                 if (e.op == "|") return JsNum((JsRuntime.toInt32(l) or JsRuntime.toInt32(r)).toDouble())

@@ -66,6 +66,49 @@ class JsNative(val name: String) : JsValue()
  */
 class JsThrown(val value: JsValue) : RuntimeException(value.toString(), null, false, false)
 
+/**
+ * Entorno de variables: cadena de scopes con frontera de funcion (fnScope).
+ * var con hoisting a la funcion (declareFnVar), let/const de bloque (declare).
+ * Vive a nivel de paquete porque JsFun/JsClass guardan su Env de closure y
+ * el runtime no puede depender de tipos anidados en el interprete.
+ */
+class Env(val parent: Env?, val fnScope: Boolean) {
+    val vars = HashMap<String, JsValue>()
+
+    fun lookupEnv(name: String): Env? {
+        var e: Env? = this
+        while (e != null) {
+            if (e.vars.containsKey(name)) return e
+            e = e.parent
+        }
+        return null
+    }
+
+    fun get(name: String): JsValue {
+        val e = lookupEnv(name)
+        if (e == null) throw JsRuntime.throwNative("ReferenceError", name + " is not defined")
+        return e.vars[name] ?: JsUndefined
+    }
+
+    fun declare(name: String, v: JsValue) {
+        vars[name] = v
+    }
+
+    fun declareFnVar(name: String, v: JsValue) {
+        var e: Env? = this
+        while (e != null && !e.fnScope) e = e.parent
+        if (e == null) e = this
+        e.vars[name] = v
+    }
+
+    fun setExisting(name: String, v: JsValue): Boolean {
+        val e = lookupEnv(name)
+        if (e == null) return false
+        e.vars[name] = v
+        return true
+    }
+}
+
 object JsRuntime {
 
     fun newObj(): JsObj = JsObj(LinkedHashMap(), null, false, ArrayList())
