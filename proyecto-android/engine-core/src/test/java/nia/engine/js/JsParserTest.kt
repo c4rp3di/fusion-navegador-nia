@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Tests del parser ECMAScript v1 (T018 v2). Espejo 1:1 del gemelo TS/JS
+ * Tests del parser ECMAScript v2 (T018 v3). Espejo 1:1 del gemelo TS/JS
  * validado: mismas fuentes, mismas expectativas (generadas desde las
  * salidas del gemelo, nunca transcritas a mano).
  */
@@ -510,9 +510,9 @@ class JsParserTest {
 
     @Test
     fun errorSentenciaNoSoportada() {
-        val r = parse("class A; x;")
+        val r = parse("with (x) y; x;")
         assertEquals("(program (expr (id x)))", JsAstDump.program(r.program))
-        assertEquals("unsupported-statement@0-5:1:1", JsAstDump.parseErrors(r.program))
+        assertEquals("unsupported-statement@0-4:1:1", JsAstDump.parseErrors(r.program))
         assertEquals("", JsAstDump.lexErrors(r.lexErrors))
     }
 
@@ -549,14 +549,6 @@ class JsParserTest {
     }
 
     @Test
-    fun errorArrowExcluido() {
-        val r = parse("var f = (a) => a;")
-        assertEquals("(program (var (decl f (paren (id a)))))", JsAstDump.program(r.program))
-        assertEquals("missing-semicolon@11-11:1:12;unexpected-token@12-14:1:13", JsAstDump.parseErrors(r.program))
-        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
-    }
-
-    @Test
     fun errorObjetoDefaultExcluido() {
         val r = parse("({a = 1});")
         assertEquals("(program)", JsAstDump.program(r.program))
@@ -580,4 +572,355 @@ class JsParserTest {
         assertEquals("", JsAstDump.lexErrors(r.lexErrors))
     }
 
+    @Test
+    fun arrowSingle() {
+        val r = parse("var f = x => x + 1;")
+        assertEquals("(program (var (decl f (arrow (params (p x)) (bin + (id x) (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun arrowParentesis() {
+        val r = parse("var f = (a, b) => a + b;")
+        assertEquals("(program (var (decl f (arrow (params (p a) (p b)) (bin + (id a) (id b))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun arrowDefaults() {
+        val r = parse("var f = (a, b = 2) => a * b;")
+        assertEquals("(program (var (decl f (arrow (params (p a) (p b (num 2))) (bin * (id a) (id b))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun arrowCuerpoBloque() {
+        val r = parse("var f = (a) => { return a; };")
+        assertEquals("(program (var (decl f (arrow (params (p a)) (block (return (id a)))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun arrowVacio() {
+        val r = parse("var f = () => 1;")
+        assertEquals("(program (var (decl f (arrow (params) (num 1)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun arrowEnArgs() {
+        val r = parse("g(a => a * 2, b => b);")
+        assertEquals("(program (expr (call (id g) (arrow (params (p a)) (bin * (id a) (num 2))) (arrow (params (p b)) (id b)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun arrowEncadenado() {
+        val r = parse("var f = x => y => x + y;")
+        assertEquals("(program (var (decl f (arrow (params (p x)) (arrow (params (p y)) (bin + (id x) (id y)))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun parenNoArrow() {
+        val r = parse("var x = (a);")
+        assertEquals("(program (var (decl x (paren (id a)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun parenComaNoArrow() {
+        val r = parse("var x = (a, b);")
+        assertEquals("(program (var (decl x (paren (seq (id a) (id b))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun parenExprNoArrow() {
+        val r = parse("var x = (a + b);")
+        assertEquals("(program (var (decl x (paren (bin + (id a) (id b))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseVacia() {
+        val r = parse("class A {}")
+        assertEquals("(program (class A))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseAnonimaVacia() {
+        val r = parse("var C = class {};")
+        assertEquals("(program (var (decl C (classx))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseMetodo() {
+        val r = parse("class A { m() { return 1; } }")
+        assertEquals("(program (class A (cm (key m) (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseConstructor() {
+        val r = parse("class A { constructor(a) { this.x = a; } }")
+        assertEquals("(program (class A (cm (key constructor) (params (p a)) (block (expr (asg = (mem (this).x) (id a)))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseStatic() {
+        val r = parse("class A { static s() { return 1; } }")
+        assertEquals("(program (class A (cm static (key s) (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseGet() {
+        val r = parse("class A { get x() { return 1; } }")
+        assertEquals("(program (class A (cm get (key x) (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseSet() {
+        val r = parse("class A { set x(v) { this.y = v; } }")
+        assertEquals("(program (class A (cm set (key x) (params (p v)) (block (expr (asg = (mem (this).y) (id v)))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseStaticGet() {
+        val r = parse("class A { static get x() { return 1; } }")
+        assertEquals("(program (class A (cm static get (key x) (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseComputed() {
+        val r = parse("class A { [k](v) { return v; } }")
+        assertEquals("(program (class A (cm (keyc (id k)) (params (p v)) (block (return (id v))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseMetodoKeyword() {
+        val r = parse("class A { delete() { return 1; } }")
+        assertEquals("(program (class A (cm (key delete) (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseMetodoString() {
+        val r = parse("class A { \"m n\"() { return 1; } }")
+        assertEquals("(program (class A (cm (keystr \"m n\") (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseMetodoNumero() {
+        val r = parse("class A { 0() { return 1; } }")
+        assertEquals("(program (class A (cm (keyn 0) (params) (block (return (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseExtends() {
+        val r = parse("class B extends A {}")
+        assertEquals("(program (class B (extends (id A))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseExtendsMiembro() {
+        val r = parse("class B extends a.b {}")
+        assertEquals("(program (class B (extends (mem (id a).b))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseExpresion() {
+        val r = parse("var C = class { m() { return 1; } };")
+        assertEquals("(program (var (decl C (classx (cm (key m) (params) (block (return (num 1))))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseExpresionNombre() {
+        val r = parse("var C = class D extends B {};")
+        assertEquals("(program (var (decl C (classx D (extends (id B))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseMiembrosMultiples() {
+        val r = parse("class A { constructor() { x = 1; } m(a) { return a; } static get v() { return 2; } }")
+        assertEquals("(program (class A (cm (key constructor) (params) (block (expr (asg = (id x) (num 1))))) (cm (key m) (params (p a)) (block (return (id a)))) (cm static get (key v) (params) (block (return (num 2))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun claseMetodoArrow() {
+        val r = parse("class A { m() { return x => x; } }")
+        assertEquals("(program (class A (cm (key m) (params) (block (return (arrow (params (p x)) (id x)))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun errorClaseSinLlave() {
+        val r = parse("class A; x;")
+        assertEquals("(program (expr (id x)))", JsAstDump.program(r.program))
+        assertEquals("unexpected-token@7-8:1:8", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun labelWhile() {
+        val r = parse("outer: while (true) { break outer; }")
+        assertEquals("(program (label outer (while (bool true) (block (break outer)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun labelForContinue() {
+        val r = parse("outer: for (;;) { continue outer; }")
+        assertEquals("(program (label outer (for - - - (block (continue outer)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun labelSentencia() {
+        val r = parse("a: x = 1;")
+        assertEquals("(program (label a (expr (asg = (id x) (num 1)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun breakLabelSolo() {
+        val r = parse("while (true) { break x; }")
+        assertEquals("(program (while (bool true) (block (break x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun getterEnObjeto() {
+        val r = parse("var o = { get x() { return 1; } };")
+        assertEquals("(program (var (decl o (obj (get (key x) (params) (block (return (num 1))))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun setterEnObjeto() {
+        val r = parse("var o = { set x(v) { y = v; } };")
+        assertEquals("(program (var (decl o (obj (set (key x) (params (p v)) (block (expr (asg = (id y) (id v)))))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun accessorComputedObjeto() {
+        val r = parse("var o = { get [k]() { return 1; } };")
+        assertEquals("(program (var (decl o (obj (get (keyc (id k)) (params) (block (return (num 1))))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun metodoNombreGet() {
+        val r = parse("var o = { get: 1 };")
+        assertEquals("(program (var (decl o (obj (kv (key get) (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun metodoGetNormal() {
+        val r = parse("var o = { get() { return 1; } };")
+        assertEquals("(program (var (decl o (obj (meth (key get) (params) (block (return (num 1))))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun opcionalMiembro() {
+        val r = parse("a?.b;")
+        assertEquals("(program (expr (mem? (id a).b)))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun opcionalIndice() {
+        val r = parse("a?.[0];")
+        assertEquals("(program (expr (memic? (id a) (num 0))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun opcionalLlamada() {
+        val r = parse("f?.(1);")
+        assertEquals("(program (expr (call? (id f) (num 1))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun opcionalCadena() {
+        val r = parse("a?.b?.[0]?.c?.(2);")
+        assertEquals("(program (expr (call? (mem? (memic? (mem? (id a).b) (num 0)).c) (num 2))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun opcionalMiembroLlamada() {
+        val r = parse("a?.b(1);")
+        assertEquals("(program (expr (call (mem? (id a).b) (num 1))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun newMiembroOpcional() {
+        val r = parse("var x = new a?.b;")
+        assertEquals("(program (var (decl x (new (mem? (id a).b)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
 }

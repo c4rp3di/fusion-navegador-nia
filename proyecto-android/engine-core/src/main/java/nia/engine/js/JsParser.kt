@@ -1,13 +1,17 @@
 package nia.engine.js
 
 /**
- * Parser ECMAScript v1 (T018 v2). Recursive descent con precedencias sobre el
- * token stream del lexer v1. AST con spans [start, end), errores tipificados
+ * Parser ECMAScript v2 (T018 v3). Recursive descent con precedencias sobre el
+ * token stream del lexer v2. AST con spans [start, end), errores tipificados
  * con linea/columna 1-based y recuperacion a nivel de sentencia (skip hasta
  * ';' o '}', con avance garantizado). Espejo del gemelo TS/JS validado.
- * Exclusiones v1: clases, async/await, generators, arrows, destructuring,
- * labels, with, modulos, getters/setters, optional chaining (el lexer v1 no
- * emite '?.'), ASI (los puntos y coma son obligatorios).
+ * Novedades v2: arrows (parametro unico o parentesis, defaults, cuerpo bloque
+ * o expresion), clases (sentencia y expresion: nombre opcional, extends,
+ * constructor/metodos/static/get/set/computed keys), labels (etiqueta +
+ * break/continue con label), getters/setters en object literal, optional
+ * chaining '?.' y spread en call args.
+ * Exclusiones v2: async/await, generators, destructuring (todas las formas),
+ * modulos, class fields, with, ASI (los puntos y coma son obligatorios).
  */
 object JsParser {
 
@@ -39,6 +43,8 @@ object JsParser {
     private class ParseAbort(val code: String, val start: Int, val end: Int) : Exception()
 
     private class Args(val list: List<JsExpr>, val closeEnd: Int)
+
+    private class Members(val list: List<ClassMember>, val closeEnd: Int)
 
     private class Parser(private val source: String, private val toks: List<JsToken>) {
 
@@ -156,12 +162,20 @@ object JsParser {
                     "throw" -> return parseThrow()
                     "try" -> return parseTry()
                     "switch" -> return parseSwitch()
-                    "class", "import", "export", "with", "debugger" -> {
+                    "class" -> return parseClassStmt()
+                    "import", "export", "with", "debugger" -> {
                         next()
                         throw abort("unsupported-statement", t.start, t.end)
                     }
                     else -> {}
                 }
+            }
+            val p1 = peek(1)
+            if (t is JsToken.Identifier && p1 is JsToken.Punctuator && p1.value == ":") {
+                next()
+                next()
+                val body = parseStatement()
+                return JsStmt.Labeled(t.start, body.end, t.value, body)
             }
             if (t is JsToken.Identifier && t.value == "let" && peek(1) is JsToken.Identifier) {
                 return parseVarStatement("let")
@@ -424,8 +438,15 @@ object JsParser {
 
         fun parseBreakContinue(kw: String): JsStmt {
             val t = next()
-            val end = expectSemi(t.end)
-            return if (kw == "break") JsStmt.Break(t.start, end) else JsStmt.Continue(t.start, end)
+            var label: String? = null
+            val c = cur()
+            if (c is JsToken.Identifier) {
+                next()
+                label = c.value
+            }
+            val prevEnd = if (label == null) t.end else toks[i - 1].end
+            val end = expectSemi(prevEnd)
+            return if (kw == "break") JsStmt.Break(t.start, end, label) else JsStmt.Continue(t.start, end, label)
         }
 
         fun parseThrow(): JsStmt.Throw {
@@ -510,6 +531,106 @@ object JsParser {
             return JsStmt.ExprStmt(e.start, end, e)
         }
 
+        // ---- Clases (v2) ----
+
+        fun isKeyStart(t: JsToken): Boolean {
+            return t is JsToken.Identifier || t is JsToken.Keyword || t is JsToken.StringLiteral ||
+                t is JsToken.NumberLiteral || t is JsToken.BigIntLiteral ||
+                (t is JsToken.Punctuator && t.value == "[")
+        }
+
+        fun parseKeyToken(): Key {
+            val t = cur()
+            if (t is JsToken.Identifier || t is JsToken.Keyword) {
+                next()
+                return Key.IdentKey(t.start, t.end, if (t is JsToken.Identifier) t.value else (t as JsToken.Keyword).value)
+            }
+            if (t is JsToken.StringLiteral) {
+                next()
+                return Key.StringKey(t.start, t.end, t.value)
+            }
+            if (t is JsToken.NumberLiteral || t is JsToken.BigIntLiteral) {
+                next()
+                return Key.NumberKey(t.start, t.end, if (t is JsToken.NumberLiteral) t.raw else (t as JsToken.BigIntLiteral).raw)
+            }
+            if (t is JsToken.Punctuator && t.value == "[") {
+                val open = next()
+                val e = parseAssign()
+                expectP("]")
+                return Key.ComputedKey(open.start, toks[i - 1].end, e)
+            }
+            throw abort(if (t is JsToken.Eof) "unexpected-eof" else "unexpected-token", t.start, t.end)
+        }
+
+        fun parseClassMembers(): Members {
+            val members = mutableListOf<ClassMember>()
+            while (!isP("}")) {
+                val t = cur()
+                if (t is JsToken.Eof) throw abort("unexpected-eof", t.start, t.end)
+                if (isP(";")) {
+                    next()
+                    continue
+                }
+                val mstart = t.start
+                var isStatic = false
+                var kind = "method"
+                if (t is JsToken.Identifier && t.value == "static" && isKeyStart(peek(1))) {
+                    next()
+                    isStatic = true
+                    val t2 = cur()
+                    if (t2 is JsToken.Identifier && (t2.value == "get" || t2.value == "set") && isKeyStart(peek(1))) {
+                        kind = t2.value
+                        next()
+                    }
+                } else if (t is JsToken.Identifier && (t.value == "get" || t.value == "set") && isKeyStart(peek(1))) {
+                    kind = t.value
+                    next()
+                }
+                val key = parseKeyToken()
+                val params = parseParams()
+                val body = parseBlock()
+                members.add(ClassMember(mstart, body.end, isStatic, kind, key, params, body))
+            }
+            val close = next()
+            return Members(members, close.end)
+        }
+
+        fun parseClassStmt(): JsStmt.ClassStmt {
+            val kw = next()
+            var name: String? = null
+            val t = cur()
+            if (t is JsToken.Identifier) {
+                next()
+                name = t.value
+            }
+            var superClass: JsExpr? = null
+            if (isKw("extends")) {
+                next()
+                superClass = parseCallMember()
+            }
+            expectP("{")
+            val m = parseClassMembers()
+            return JsStmt.ClassStmt(kw.start, m.closeEnd, name, superClass, m.list)
+        }
+
+        fun parseClassExpr(): JsExpr.ClassExpr {
+            val kw = next()
+            var name: String? = null
+            val t = cur()
+            if (t is JsToken.Identifier) {
+                next()
+                name = t.value
+            }
+            var superClass: JsExpr? = null
+            if (isKw("extends")) {
+                next()
+                superClass = parseCallMember()
+            }
+            expectP("{")
+            val m = parseClassMembers()
+            return JsExpr.ClassExpr(kw.start, m.closeEnd, name, superClass, m.list)
+        }
+
         // ---- Expresiones ----
 
         fun parseExpr(noIn: Boolean = false): JsExpr {
@@ -529,14 +650,47 @@ object JsParser {
                 (e is JsExpr.Paren && isAssignTarget(e.expr))
         }
 
+        fun parseArrowSingle(t: JsToken.Identifier): JsExpr.Arrow {
+            next()
+            next()
+            val params = listOf(Param(t.start, t.end, t.value, null))
+            return finishArrow(t.start, params)
+        }
+
+        fun finishArrow(start: Int, params: List<Param>): JsExpr.Arrow {
+            if (isP("{")) {
+                val body = parseBlock()
+                return JsExpr.Arrow(start, body.end, params, null, body)
+            }
+            val e = parseAssign()
+            return JsExpr.Arrow(start, e.end, params, e, null)
+        }
+
         fun parseAssign(noIn: Boolean = false): JsExpr {
-            val left = parseCond(noIn)
             val t = cur()
-            if (t is JsToken.Punctuator && t.value in ASSIGN_OPS) {
-                if (!isAssignTarget(left)) throw abort("invalid-assignment-target", t.start, t.end)
+            val p1 = peek(1)
+            if (t is JsToken.Identifier && p1 is JsToken.Punctuator && p1.value == "=>") {
+                return parseArrowSingle(t)
+            }
+            if (t is JsToken.Punctuator && t.value == "(") {
+                val save = i
+                try {
+                    val params = parseParams()
+                    if (isP("=>")) {
+                        next()
+                        return finishArrow(t.start, params)
+                    }
+                } catch (e: ParseAbort) {
+                }
+                i = save
+            }
+            val left = parseCond(noIn)
+            val t2 = cur()
+            if (t2 is JsToken.Punctuator && t2.value in ASSIGN_OPS) {
+                if (!isAssignTarget(left)) throw abort("invalid-assignment-target", t2.start, t2.end)
                 next()
                 val right = parseAssign(noIn)
-                return JsExpr.Assign(left.start, right.end, t.value, left, right)
+                return JsExpr.Assign(left.start, right.end, t2.value, left, right)
             }
             return left
         }
@@ -625,6 +779,26 @@ object JsParser {
                         else -> throw abort("unexpected-token", p.start, p.end)
                     }
                     e = JsExpr.Member(e.start, p.end, e, false, pname, null)
+                } else if (t is JsToken.Punctuator && t.value == "?.") {
+                    next()
+                    val p = cur()
+                    if (p is JsToken.Punctuator && p.value == "(") {
+                        val args = parseArgs()
+                        e = JsExpr.Call(e.start, args.closeEnd, e, args.list, true)
+                    } else if (p is JsToken.Punctuator && p.value == "[") {
+                        next()
+                        val idx = parseExpr()
+                        expectP("]")
+                        e = JsExpr.Member(e.start, toks[i - 1].end, e, true, null, idx)
+                    } else {
+                        val pname = when (p) {
+                            is JsToken.Identifier -> p.value
+                            is JsToken.Keyword -> p.value
+                            else -> throw abort("unexpected-token", p.start, p.end)
+                        }
+                        next()
+                        e = JsExpr.Member(e.start, p.end, e, true, pname, null)
+                    }
                 } else if (t is JsToken.Punctuator && t.value == "[") {
                     next()
                     val idx = parseExpr()
@@ -632,7 +806,7 @@ object JsParser {
                     e = JsExpr.Member(e.start, toks[i - 1].end, e, false, null, idx)
                 } else if (t is JsToken.Punctuator && t.value == "(") {
                     val args = parseArgs()
-                    e = JsExpr.Call(e.start, args.closeEnd, e, args.list)
+                    e = JsExpr.Call(e.start, args.closeEnd, e, args.list, false)
                 } else {
                     break
                 }
@@ -709,6 +883,7 @@ object JsParser {
                         }
                         "function" -> return parseFunctionExpr()
                         "new" -> return parseNew()
+                        "class" -> return parseClassExpr()
                     }
                     throw abort("unexpected-token", t.start, t.end)
                 }
@@ -787,6 +962,13 @@ object JsParser {
                     next()
                     val e = parseAssign()
                     props.add(Prop.SpreadProp(t.start, e.end, e))
+                } else if (t is JsToken.Identifier && (t.value == "get" || t.value == "set") && isKeyStart(peek(1))) {
+                    next()
+                    val isGetter = t.value == "get"
+                    val key = parseKeyToken()
+                    val params = parseParams()
+                    val body = parseBlock()
+                    props.add(Prop.Accessor(t.start, body.end, isGetter, key, params, body))
                 } else {
                     var key: Key? = null
                     if (t is JsToken.Identifier || t is JsToken.Keyword) {
@@ -848,6 +1030,23 @@ object JsParser {
                         else -> throw abort("unexpected-token", p.start, p.end)
                     }
                     callee = JsExpr.Member(callee.start, p.end, callee, false, pname, null)
+                } else if (t is JsToken.Punctuator && t.value == "?.") {
+                    next()
+                    val p = cur()
+                    if (p is JsToken.Punctuator && p.value == "[") {
+                        next()
+                        val idx = parseExpr()
+                        expectP("]")
+                        callee = JsExpr.Member(callee.start, toks[i - 1].end, callee, true, null, idx)
+                    } else {
+                        val pname = when (p) {
+                            is JsToken.Identifier -> p.value
+                            is JsToken.Keyword -> p.value
+                            else -> throw abort("unexpected-token", p.start, p.end)
+                        }
+                        next()
+                        callee = JsExpr.Member(callee.start, p.end, callee, true, pname, null)
+                    }
                 } else if (t is JsToken.Punctuator && t.value == "[") {
                     next()
                     val idx = parseExpr()

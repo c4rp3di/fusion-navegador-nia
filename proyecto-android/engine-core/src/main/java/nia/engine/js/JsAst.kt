@@ -1,7 +1,7 @@
 package nia.engine.js
 
 /**
- * AST del parser ECMAScript (T018 v2 v1). Cada nodo cubre el rango de fuente
+ * AST del parser ECMAScript (T018 v3 v2). Cada nodo cubre el rango de fuente
  * [start, end). El programa acumula los errores de parseo tipificados con
  * linea/columna 1-based (la recuperacion es a nivel de sentencia); los
  * errores lexicos viajan aparte en JsParseResult tal como los emite el lexer.
@@ -36,9 +36,9 @@ sealed class JsStmt(start: Int, end: Int) : JsNode(start, end) {
 
     class ForInOf(start: Int, end: Int, val isOf: Boolean, val leftKind: String?, val leftName: String?, val leftExpr: JsExpr?, val right: JsExpr, val body: JsStmt) : JsStmt(start, end)
 
-    class Break(start: Int, end: Int) : JsStmt(start, end)
+    class Break(start: Int, end: Int, val label: String?) : JsStmt(start, end)
 
-    class Continue(start: Int, end: Int) : JsStmt(start, end)
+    class Continue(start: Int, end: Int, val label: String?) : JsStmt(start, end)
 
     class Throw(start: Int, end: Int, val value: JsExpr) : JsStmt(start, end)
 
@@ -47,6 +47,10 @@ sealed class JsStmt(start: Int, end: Int) : JsNode(start, end) {
     class Switch(start: Int, end: Int, val disc: JsExpr, val cases: List<SwitchCase>) : JsStmt(start, end)
 
     class ExprStmt(start: Int, end: Int, val expr: JsExpr) : JsStmt(start, end)
+
+    class Labeled(start: Int, end: Int, val label: String, val body: JsStmt) : JsStmt(start, end)
+
+    class ClassStmt(start: Int, end: Int, val name: String?, val superClass: JsExpr?, val members: List<ClassMember>) : JsStmt(start, end)
 }
 
 class Declarator(start: Int, end: Int, val name: String, val init: JsExpr?) : JsNode(start, end)
@@ -54,6 +58,8 @@ class Declarator(start: Int, end: Int, val name: String, val init: JsExpr?) : Js
 class Param(start: Int, end: Int, val name: String, val def: JsExpr?) : JsNode(start, end)
 
 class SwitchCase(start: Int, end: Int, val test: JsExpr?, val statements: List<JsStmt>) : JsNode(start, end)
+
+class ClassMember(start: Int, end: Int, val isStatic: Boolean, val kind: String, val key: Key, val params: List<Param>, val body: JsStmt.Block) : JsNode(start, end)
 
 sealed class JsExpr(start: Int, end: Int) : JsNode(start, end) {
 
@@ -95,7 +101,7 @@ sealed class JsExpr(start: Int, end: Int) : JsNode(start, end) {
 
     class Cond(start: Int, end: Int, val test: JsExpr, val cons: JsExpr, val alt: JsExpr) : JsExpr(start, end)
 
-    class Call(start: Int, end: Int, val callee: JsExpr, val args: List<JsExpr>) : JsExpr(start, end)
+    class Call(start: Int, end: Int, val callee: JsExpr, val args: List<JsExpr>, val optional: Boolean) : JsExpr(start, end)
 
     class New(start: Int, end: Int, val callee: JsExpr, val args: List<JsExpr>) : JsExpr(start, end)
 
@@ -104,6 +110,10 @@ sealed class JsExpr(start: Int, end: Int) : JsNode(start, end) {
     class Seq(start: Int, end: Int, val exprs: List<JsExpr>) : JsExpr(start, end)
 
     class FunctionExpr(start: Int, end: Int, val name: String?, val params: List<Param>, val body: JsStmt.Block) : JsExpr(start, end)
+
+    class Arrow(start: Int, end: Int, val params: List<Param>, val bodyExpr: JsExpr?, val bodyBlock: JsStmt.Block?) : JsExpr(start, end)
+
+    class ClassExpr(start: Int, end: Int, val name: String?, val superClass: JsExpr?, val members: List<ClassMember>) : JsExpr(start, end)
 }
 
 sealed class Prop(start: Int, end: Int) : JsNode(start, end) {
@@ -115,6 +125,8 @@ sealed class Prop(start: Int, end: Int) : JsNode(start, end) {
     class Shorthand(start: Int, end: Int, val name: String) : Prop(start, end)
 
     class SpreadProp(start: Int, end: Int, val expr: JsExpr) : Prop(start, end)
+
+    class Accessor(start: Int, end: Int, val isGetter: Boolean, val key: Key, val params: List<Param>, val body: JsStmt.Block) : Prop(start, end)
 }
 
 sealed class Key(start: Int, end: Int) : JsNode(start, end) {
@@ -178,6 +190,13 @@ object JsAstDump {
         is Key.ComputedKey -> "(keyc " + expression(k.expr) + ")"
     }
 
+    private fun classMember(m: ClassMember): String {
+        var r = "(cm"
+        if (m.isStatic) r += " static"
+        if (m.kind != "method") r += " " + m.kind
+        r + " " + key(m.key) + " " + params(m.params) + " " + statement(m.body) + ")"
+    }
+
     private fun statement(s: JsStmt): String = when (s) {
         is JsStmt.Empty -> "(empty)"
         is JsStmt.Block -> {
@@ -213,8 +232,8 @@ object JsAstDump {
             val left = if (s.leftKind != null) "(bind " + s.leftName + ")" else expression(s.leftExpr!!)
             "(" + (if (s.isOf) "forof" else "forin") + " " + left + " " + expression(s.right) + " " + statement(s.body) + ")"
         }
-        is JsStmt.Break -> "(break)"
-        is JsStmt.Continue -> "(continue)"
+        is JsStmt.Break -> if (s.label == null) "(break)" else "(break " + s.label + ")"
+        is JsStmt.Continue -> if (s.label == null) "(continue)" else "(continue " + s.label + ")"
         is JsStmt.Throw -> "(throw " + expression(s.value) + ")"
         is JsStmt.Try -> {
             var r = "(try " + statement(s.block)
@@ -233,6 +252,14 @@ object JsAstDump {
             sb.append(")").toString()
         }
         is JsStmt.ExprStmt -> "(expr " + expression(s.expr) + ")"
+        is JsStmt.Labeled -> "(label " + s.label + " " + statement(s.body) + ")"
+        is JsStmt.ClassStmt -> {
+            var r = "(class"
+            if (s.name != null) r += " " + s.name
+            if (s.superClass != null) r += " (extends " + expression(s.superClass) + ")"
+            for (m in s.members) r += " " + classMember(m)
+            r + ")"
+        }
     }
 
     private fun expression(e: JsExpr): String = when (e) {
@@ -264,6 +291,7 @@ object JsAstDump {
                     is Prop.Method -> sb.append(" (meth ").append(key(p.key)).append(" ").append(params(p.params)).append(" ").append(statement(p.body)).append(")")
                     is Prop.Shorthand -> sb.append(" (short ").append(p.name).append(")")
                     is Prop.SpreadProp -> sb.append(" (spr ").append(expression(p.expr)).append(")")
+                    is Prop.Accessor -> sb.append(" (").append(if (p.isGetter) "get" else "set").append(" ").append(key(p.key)).append(" ").append(params(p.params)).append(" ").append(statement(p.body)).append(")")
                 }
             }
             sb.append(")").toString()
@@ -277,7 +305,9 @@ object JsAstDump {
         is JsExpr.Assign -> "(asg " + e.op + " " + expression(e.target) + " " + expression(e.value) + ")"
         is JsExpr.Cond -> "(cond " + expression(e.test) + " " + expression(e.cons) + " " + expression(e.alt) + ")"
         is JsExpr.Call -> {
-            val sb = StringBuilder("(call " + expression(e.callee))
+            val sb = StringBuilder("(call")
+            if (e.optional) sb.append("?")
+            sb.append(" ").append(expression(e.callee))
             for (a in e.args) sb.append(" ").append(expression(a))
             sb.append(")").toString()
         }
@@ -287,8 +317,8 @@ object JsAstDump {
             sb.append(")").toString()
         }
         is JsExpr.Member -> {
-            if (e.name != null) "(mem " + expression(e.obj) + "." + e.name + ")"
-            else "(memic " + expression(e.obj) + " " + expression(e.computed!!) + ")"
+            if (e.name != null) "(mem" + (if (e.optional) "?" else "") + " " + expression(e.obj) + "." + e.name + ")"
+            else "(memic" + (if (e.optional) "?" else "") + " " + expression(e.obj) + " " + expression(e.computed!!) + ")"
         }
         is JsExpr.Seq -> {
             val sb = StringBuilder("(seq")
@@ -299,6 +329,14 @@ object JsAstDump {
             var r = "(funx"
             if (e.name != null) r += " " + e.name
             r + " " + params(e.params) + " " + statement(e.body) + ")"
+        }
+        is JsExpr.Arrow -> "(arrow " + params(e.params) + " " + (if (e.bodyExpr != null) expression(e.bodyExpr) else statement(e.bodyBlock!!)) + ")"
+        is JsExpr.ClassExpr -> {
+            var r = "(classx"
+            if (e.name != null) r += " " + e.name
+            if (e.superClass != null) r += " (extends " + expression(e.superClass) + ")"
+            for (m in e.members) r += " " + classMember(m)
+            r + ")"
         }
     }
 }
