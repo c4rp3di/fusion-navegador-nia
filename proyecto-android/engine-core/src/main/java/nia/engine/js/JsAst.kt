@@ -194,7 +194,7 @@ object JsAstDump {
         var r = "(cm"
         if (m.isStatic) r += " static"
         if (m.kind != "method") r += " " + m.kind
-        r + " " + key(m.key) + " " + params(m.params) + " " + statement(m.body) + ")"
+        return r + " " + key(m.key) + " " + params(m.params) + " " + statement(m.body) + ")"
     }
 
     private fun statement(s: JsStmt): String = when (s) {
