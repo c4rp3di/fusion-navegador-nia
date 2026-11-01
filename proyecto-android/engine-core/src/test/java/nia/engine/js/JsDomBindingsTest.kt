@@ -16,6 +16,9 @@ import kotlin.test.assertNotNull
  * documento Kotlin (revision incluida). T024 v1 anade captura/burbujeo
  * por el arbol (fases captura/objetivo/burbuja con stopPropagation) y
  * querySelector/querySelectorAll con los selectores de CssCascade.
+ * T024 v2 anade textContent como accessor real (get concatena los textos
+ * descendientes, set reemplaza los hijos por un Text), stopImmediatePropagation
+ * y listeners de captura del propio objetivo en fase objetivo.
  */
 class JsDomBindingsTest {
 
@@ -342,6 +345,66 @@ class JsDomBindingsTest {
     }
 
     @Test
+    fun domTextContentLectura() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"hola\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"#saludo\").textContent;", doc)))
+    }
+
+    @Test
+    fun domTextContentAnidado() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"hola\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"a\").textContent;", doc)))
+    }
+
+    @Test
+    fun domTextContentVacio() {
+        val doc = DomDocument.parse("<html><body><div id=\"v\"><span></span></div></body></html>")
+        assertEquals("\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"v\").textContent;", doc)))
+    }
+
+    @Test
+    fun domTextContentEnTexto() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"hola\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"#saludo\").children()[0].textContent;", doc)))
+    }
+
+    @Test
+    fun domTextContentEscritura() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"nuevo\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var p = document.querySelector(\"#saludo\"); p.textContent = \"nuevo\"; p.textContent;", doc)))
+    }
+
+    @Test
+    fun domTextContentReemplazaHijos() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("0", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var d = document.getElementById(\"a\"); d.textContent = \"x\"; d.children().length;", doc)))
+    }
+
+    @Test
+    fun domTextContentAccesorTipo() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"string\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("typeof document.body.textContent;", doc)))
+    }
+
+    @Test
+    fun domStopImmediateMismoNodo() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"a\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); p.addEventListener(\"e\", function(ev) { ev.stopImmediatePropagation(); o = o + \"a\"; }); p.addEventListener(\"e\", function() { o = o + \"b\"; }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
+    fun domStopImmediateCortaBurbuja() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"p\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); p.addEventListener(\"e\", function(ev) { ev.stopImmediatePropagation(); o = o + \"p\"; }); d.addEventListener(\"e\", function() { o = o + \"d\"; }); p.dispatchEvent(new Event(\"e\", {bubbles: true})); o;", doc)))
+    }
+
+    @Test
+    fun domCapturaEnFaseObjetivo() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"cb\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); p.addEventListener(\"e\", function() { o = o + \"c\"; }, true); p.addEventListener(\"e\", function() { o = o + \"b\"; }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
     fun domMutacionAtributo() {
         val doc = DomDocument.parse("<html><body><p id=\"q\">viejo</p></body></html>")
         JsInterpreter.evaluateWithDom("var p = document.getElementById(\"q\"); p.setAttribute(\"class\", \"nuevo\");", doc)
@@ -381,5 +444,15 @@ class JsDomBindingsTest {
         val parents = CssCascade.parentMap(doc.nodeOf(doc.rootHandle()))
         val p = assertNotNull(doc.findFirst("p"))
         assertEquals(true, CssCascade.matchesAny(doc.nodeOf(p), sels, parents))
+    }
+
+    @Test
+    fun domTextContentKotlin() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p></body></html>")
+        JsInterpreter.evaluateWithDom("document.getElementById(\"saludo\").textContent = \"kotlin\";", doc)
+        val p = assertNotNull(doc.findFirst("p"))
+        val kids = doc.childrenOf(p)
+        assertEquals(1, kids.size)
+        assertEquals("kotlin", doc.textOf(kids[0]))
     }
 }

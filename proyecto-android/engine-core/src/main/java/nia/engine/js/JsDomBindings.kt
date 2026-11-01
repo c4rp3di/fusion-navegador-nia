@@ -21,9 +21,14 @@ import nia.engine.html.DomNode
  * tercer argumento useCapture; dispatchEvent recorre los ancestros en
  * captura de raiz a padre y burbujea de padre a raiz solo si ev.bubbles;
  * stopPropagation corta el recorrido) y querySelector/querySelectorAll en
- * document y nodos con los selectores de CssCascade. Exclusiones: sin
- * textContent de Element, sin accessors sobre nodos, sin
- * stopImmediatePropagation y document.body fijo al body del parseo.
+ * document y nodos con los selectores de CssCascade. T024 v2: textContent
+ * de Element/Text como accessor real (JsProp.Accessor con JsFun generados
+ * por el propio parser: get concatena los textos descendientes, set
+ * reemplaza los hijos por un unico Text y en Text fija su data),
+ * stopImmediatePropagation (corta la lista actual y las fases restantes)
+ * y listeners de captura del propio objetivo invocados en fase objetivo
+ * antes que los de burbuja. Exclusiones: pseudo-clases dinamicas y
+ * document.body fijo al body del parseo.
  */
 object JsDomBindings {
 
@@ -160,6 +165,30 @@ object JsDomBindings {
             return arr
         }
 
+        /** Accessors de textContent: JsFun parseados una vez por sesion. */
+        private val tcGet = parseAccessorFun("(function () { return this.__textContentGet(); })")
+        private val tcSet = parseAccessorFun("(function (v) { this.__textContentSet(v); })")
+
+        private fun parseAccessorFun(src: String): JsFun {
+            val r = JsInterpreter.evaluate(src)
+            val v = r.value
+            if (v is JsFun) return v
+            throw JsRuntime.throwNative("TypeError", "accessor-no-compilable")
+        }
+
+        private fun deepTextOf(node: DomNode): String {
+            val sb = StringBuilder()
+            fun go(n: DomNode) {
+                if (n is DomNode.Text) sb.append(n.data)
+                when (n) {
+                    is DomNode.Document -> for (c in n.children) go(c)
+                    is DomNode.Element -> for (c in n.children) go(c)
+                }
+            }
+            go(node)
+            return sb.toString()
+        }
+
         private fun installNodeApi(w: JsObj) {
             w.props["__listeners"] = JsProp.Value(JsRuntime.newObj())
             w.props["appendChild"] = JsProp.Value(JsBuiltins.fn("appendChild") { args, thiz ->
@@ -243,6 +272,32 @@ object JsDomBindings {
                 val sel = strArg(JsBuiltins.a0(args))
                 queryArray(h, sel)
             })
+            w.props["__textContentGet"] = JsProp.Value(JsBuiltins.fn("textContent-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "textContent exige un nodo del documento")
+                }
+                val node = domOp { doc.nodeOf(h) }
+                JsStr(deepTextOf(node))
+            })
+            w.props["__textContentSet"] = JsProp.Value(JsBuiltins.fn("textContent-set") { args, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "textContent exige un nodo del documento")
+                }
+                val v = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                domOp {
+                    val node = doc.nodeOf(h)
+                    if (node is DomNode.Text) {
+                        doc.setText(h, v)
+                    } else {
+                        for (c in doc.childrenOf(h)) doc.removeChild(h, c)
+                        if (v.isNotEmpty()) doc.appendChild(h, doc.createTextNode(v))
+                    }
+                }
+                JsUndefined
+            })
+            w.props["textContent"] = JsProp.Accessor(tcGet, tcSet)
 
             w.props["addEventListener"] = JsProp.Value(JsBuiltins.fn("addEventListener") { args, thiz ->
                 val target = thiz as? JsObj
@@ -344,13 +399,24 @@ object JsDomBindings {
                     ev.props["__stopped"] = JsProp.Value(JsBool(true))
                     JsUndefined
                 })
+                ev.props["stopImmediatePropagation"] = JsProp.Value(JsBuiltins.fn("stopImmediatePropagation") { _, _ ->
+                    ev.props["__stopped"] = JsProp.Value(JsBool(true))
+                    ev.props["__immediate"] = JsProp.Value(JsBool(true))
+                    JsUndefined
+                })
                 fun stopped(): Boolean {
                     val sEntry = ev.props["__stopped"]
                     val sVal = (sEntry as? JsProp.Value)?.v
                     return sVal is JsBool && sVal.value
                 }
+                fun immediate(): Boolean {
+                    val iEntry = ev.props["__immediate"]
+                    val iVal = (iEntry as? JsProp.Value)?.v
+                    return iVal is JsBool && iVal.value
+                }
                 fun fire(list: List<JsValue>, current: JsObj) {
                     for (cb in list) {
+                        if (immediate()) break
                         ev.props["currentTarget"] = JsProp.Value(current)
                         JsInterpreter.callFunction(cb, current, listOf(ev))
                     }
@@ -364,13 +430,19 @@ object JsDomBindings {
                     if (cl != null) fire(ArrayList(cl), anc)
                 }
                 if (!stopped()) {
-                    val lEntry = target.props["__listeners"]
-                    val map = (lEntry as? JsProp.Value)?.v as? JsObj
-                    if (map != null) {
-                        val listEntry = map.props[type]
-                        val list = (listEntry as? JsProp.Value)?.v as? JsObj
-                        if (list != null) {
-                            fire(ArrayList(list.elems), target)
+                    val capList = captureListeners[targetH.nodeId]?.get(type)
+                    if (capList != null) {
+                        fire(ArrayList(capList), target)
+                    }
+                    if (!immediate()) {
+                        val lEntry = target.props["__listeners"]
+                        val map = (lEntry as? JsProp.Value)?.v as? JsObj
+                        if (map != null) {
+                            val listEntry = map.props[type]
+                            val list = (listEntry as? JsProp.Value)?.v as? JsObj
+                            if (list != null) {
+                                fire(ArrayList(list.elems), target)
+                            }
                         }
                     }
                 }
