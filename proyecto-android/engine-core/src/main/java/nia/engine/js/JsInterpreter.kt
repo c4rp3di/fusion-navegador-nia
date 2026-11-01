@@ -35,7 +35,7 @@ object JsInterpreter {
     private fun normal(): Completion = Completion(CType.NORMAL, JsUndefined, null)
 
     private fun makeFun(
-        name: String?, params: List<Param>, body: JsStmt.Block, bodyExpr: JsExpr?,
+        name: String?, params: List<Param>, body: JsStmt.Block?, bodyExpr: JsExpr?,
         env: Env, isArrow: Boolean
     ): JsFun = JsFun(name, params, body, bodyExpr, env, isArrow, LinkedHashMap())
 
@@ -999,7 +999,7 @@ object JsInterpreter {
                 return last
             }
             is JsExpr.FunctionExpr -> return makeFun(e.name, e.params, e.body, null, env, false)
-            is JsExpr.Arrow -> return makeFun(null, e.params, e.bodyBlock!!, e.bodyExpr, env, true)
+            is JsExpr.Arrow -> return makeFun(null, e.params, e.bodyBlock, e.bodyExpr, env, true)
             is JsExpr.ClassExpr -> return makeClassValue(e.name, e.superClass, e.members, env)
         }
     }
