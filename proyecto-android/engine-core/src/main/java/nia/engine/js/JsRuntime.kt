@@ -58,7 +58,12 @@ class JsClass(
 ) : JsValue()
 
 /** Builtin nativo: solo el constructor Error en v1. */
-class JsNative(val name: String, val call: ((List<JsValue>, JsValue) -> JsValue)? = null, val props: LinkedHashMap<String, JsProp> = LinkedHashMap()) : JsValue()
+class JsNative(
+    val name: String,
+    val call: ((List<JsValue>, JsValue) -> JsValue)? = null,
+    val props: LinkedHashMap<String, JsProp> = LinkedHashMap(),
+    val construct: ((List<JsValue>) -> JsValue)? = null
+) : JsValue()
 
 /**
  * Valor lanzado. WritableStackTrace desactivado: los throws internos son
@@ -111,9 +116,13 @@ class Env(val parent: Env?, val fnScope: Boolean) {
 
 object JsRuntime {
 
-    fun newObj(): JsObj = JsObj(LinkedHashMap(), null, false, ArrayList())
+    /** Raices de prototipo (asignadas por JsBuiltins.install; null hasta entonces). */
+    var objProto: JsObj? = null
+    var arrProto: JsObj? = null
 
-    fun newArr(): JsObj = JsObj(LinkedHashMap(), null, true, ArrayList())
+    fun newObj(): JsObj = JsObj(LinkedHashMap(), objProto, false, ArrayList())
+
+    fun newArr(): JsObj = JsObj(LinkedHashMap(), arrProto, true, ArrayList())
 
     fun makeErrorObj(name: String, message: String): JsObj {
         val o = newObj()

@@ -1,30 +1,34 @@
 package nia.engine.js
 
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.pow
 
 /**
- * Builtins JS v1 (T020): Math, Number, globales de conversion,
- * Object.keys, Array.isArray y JSON.parse/stringify (subconjunto).
- * Expectativas de los tests generadas contra el oraculo ECMAScript
- * (JS nativo), nunca transcritas a mano.
- * Exclusiones v1: metodos de prototipo y Object.prototype real
- * (v2 con Event/EventTarget), console (T022), Date/Promise/RegExp.exec.
+ * Builtins JS v1+v2 (T020): Math, Number, globales de conversion,
+ * Object.keys, Array.isArray, JSON.parse/stringify (v1) y prototipos
+ * reales con metodos esenciales de Object/Array/String/Number/Boolean
+ * mas Event (v2). Expectativas generadas contra el oraculo ECMAScript
+ * (JS nativo; Event/EventTarget por semantica del estandar DOM),
+ * nunca transcritas a mano.
+ * Exclusiones: console (T022), Date/Promise/RegExp.exec, fracciones en
+ * Number.prototype.toString(radix) y metodos menos comunes.
  */
 object JsBuiltins {
 
     private fun d(x: Double): JsValue = JsNum(x)
 
-    private fun a0(args: List<JsValue>): JsValue {
+    internal fun a0(args: List<JsValue>): JsValue {
         if (args.isNotEmpty()) return args[0]
         return JsUndefined
     }
 
-    private fun a1(args: List<JsValue>): JsValue {
+    internal fun a1(args: List<JsValue>): JsValue {
         if (args.size > 1) return args[1]
         return JsUndefined
     }
 
-    private fun fn(name: String, f: (List<JsValue>, JsValue) -> JsValue): JsNative {
+    internal fun fn(name: String, f: (List<JsValue>, JsValue) -> JsValue): JsNative {
         return JsNative(name, f)
     }
 
@@ -34,6 +38,65 @@ object JsBuiltins {
             return
         }
         if (o is JsNative) o.props[k] = JsProp.Value(v)
+    }
+
+    // ---- Prototipos v2 (T020): raices de la cadena de busqueda ----
+
+    val protoObj: JsObj = JsObj(LinkedHashMap(), null, false, ArrayList())
+    val protoArr: JsObj = JsObj(LinkedHashMap(), protoObj, true, ArrayList())
+    val protoStr: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+    val protoNum: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+    val protoBool: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+    val protoFun: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+
+    private fun str(s: String): JsValue = JsStr(s)
+
+    private fun strOf(v: JsValue): String = JsRuntime.toStringJs(v)
+
+    /** this de un metodo de array: exige objeto array. */
+    internal fun arrThis(thiz: JsValue): JsObj {
+        val o = thiz as? JsObj
+        if (o == null || !o.isArr) {
+            throw JsRuntime.throwNative("TypeError", "Array method called on non-array")
+        }
+        return o
+    }
+
+    /** Igualdad estricta espejo (indexOf de arrays y listeners). */
+    internal fun same(a: JsValue, b: JsValue): Boolean {
+        if (a is JsUndefined && b is JsUndefined) return true
+        if (a is JsNull && b is JsNull) return true
+        if (a is JsBool && b is JsBool) return a.value == b.value
+        if (a is JsNum && b is JsNum) return a.value == b.value
+        if (a is JsStr && b is JsStr) return a.value == b.value
+        if (a is JsObj && b is JsObj) return a === b
+        if (a is JsFun && b is JsFun) return a === b
+        if (a is JsNative && b is JsNative) return a === b
+        if (a is JsClass && b is JsClass) return a === b
+        if (a is JsRegExp && b is JsRegExp) return a === b
+        return false
+    }
+
+    /** Normaliza un indice relativo: negativo desde el final, clamped. */
+    private fun normIdx(v: JsValue, len: Int, def: Int): Int {
+        if (v is JsUndefined) return def
+        var n = JsRuntime.toInt32(v)
+        if (n < 0) n += len
+        if (n < 0) n = 0
+        if (n > len) n = len
+        return n
+    }
+
+    private fun joinStrings(o: JsObj, sep: String): String {
+        val sb = StringBuilder()
+        var first = true
+        for (e in o.elems) {
+            if (!first) sb.append(sep)
+            first = false
+            if (e is JsUndefined || e is JsNull) continue
+            sb.append(JsRuntime.toStringJs(e))
+        }
+        return sb.toString()
     }
 
     // ---- parseInt / parseFloat (espejo del algoritmo ECMAScript) ----
@@ -365,9 +428,15 @@ object JsBuiltins {
         genv.declare("isFinite", fn("isFinite") { args, _ ->
             JsBool(JsRuntime.toNumber(a0(args)).isFinite())
         })
-        genv.declare("String", fn("String") { args, _ ->
-            if (args.isEmpty()) JsStr("") else JsStr(JsRuntime.toStringJs(args[0]))
+        val stringNat = fn("String") { args, _ ->
+            if (args.isEmpty()) str("") else str(strOf(args[0]))
+        }
+        put(stringNat, "fromCharCode", fn("fromCharCode") { args, _ ->
+            val sb = StringBuilder()
+            for (a in args) sb.append(JsRuntime.toInt32(a).toChar())
+            str(sb.toString())
         })
+        genv.declare("String", stringNat)
         genv.declare("Number", fn("Number") { args, _ ->
             if (args.isEmpty()) JsNum(0.0) else JsNum(JsRuntime.toNumber(args[0]))
         })
@@ -456,6 +525,7 @@ object JsBuiltins {
             }
             arr
         })
+        put(obj, "prototype", protoObj)
         genv.declare("Object", obj)
 
         // Array: constructor simple con isArray
@@ -485,5 +555,331 @@ object JsBuiltins {
         })
         put(json, "stringify", fn("stringify") { args, _ -> stringify(args) })
         genv.declare("JSON", json)
+
+        // ---- v2: prototipos, raiz de todos los objetos y arrays ----
+        JsRuntime.objProto = protoObj
+        JsRuntime.arrProto = protoArr
+        installProtoObj()
+        installProtoArr()
+        installProtoStr()
+        installProtoNum()
+        installProtoBool()
+        genv.declare("Event", JsNative("Event", construct = { args -> makeEvent(args) }))
+    }
+
+    // ---- Object.prototype ----
+
+    private fun installProtoObj() {
+        put(protoObj, "hasOwnProperty", fn("hasOwnProperty") { args, thiz ->
+            val o = thiz as? JsObj
+            if (o == null) return@fn JsBool(false)
+            val k = strOf(a0(args))
+            if (o.isArr) {
+                if (k == "length") return@fn JsBool(true)
+                val ix = k.toIntOrNull()
+                if (ix != null && ix >= 0 && ix < o.elems.size) return@fn JsBool(true)
+            }
+            JsBool(o.props.containsKey(k))
+        })
+        put(protoObj, "toString", fn("toString") { _, thiz ->
+            str(JsRuntime.toStringJs(thiz))
+        })
+    }
+
+    // ---- Array.prototype (los metodos con callbacks van en JsInterpreter) ----
+
+    private fun installProtoArr() {
+        put(protoArr, "push", fn("push") { args, thiz ->
+            val o = arrThis(thiz)
+            for (x in args) o.elems.add(x)
+            d(o.elems.size.toDouble())
+        })
+        put(protoArr, "pop", fn("pop") { _, thiz ->
+            val o = arrThis(thiz)
+            if (o.elems.isEmpty()) return@fn JsUndefined
+            o.elems.removeAt(o.elems.size - 1)
+        })
+        put(protoArr, "shift", fn("shift") { _, thiz ->
+            val o = arrThis(thiz)
+            if (o.elems.isEmpty()) return@fn JsUndefined
+            o.elems.removeAt(0)
+        })
+        put(protoArr, "unshift", fn("unshift") { args, thiz ->
+            val o = arrThis(thiz)
+            o.elems.addAll(0, args)
+            d(o.elems.size.toDouble())
+        })
+        put(protoArr, "slice", fn("slice") { args, thiz ->
+            val o = arrThis(thiz)
+            val st = normIdx(a0(args), o.elems.size, 0)
+            val en = normIdx(a1(args), o.elems.size, o.elems.size)
+            val r = JsRuntime.newArr()
+            if (en > st) r.elems.addAll(o.elems.subList(st, en))
+            r
+        })
+        put(protoArr, "splice", fn("splice") { args, thiz ->
+            val o = arrThis(thiz)
+            val len = o.elems.size
+            val st = normIdx(a0(args), len, 0)
+            var dc = len - st
+            if (args.size > 1 && args[1] !is JsUndefined) {
+                dc = JsRuntime.toInt32(args[1])
+            }
+            if (dc < 0) dc = 0
+            if (dc > len - st) dc = len - st
+            val removed = JsRuntime.newArr()
+            for (j in 0 until dc) removed.elems.add(o.elems[st + j])
+            for (j in 0 until dc) o.elems.removeAt(st)
+            if (args.size > 2) o.elems.addAll(st, args.subList(2, args.size))
+            removed
+        })
+        put(protoArr, "indexOf", fn("indexOf") { args, thiz ->
+            val o = arrThis(thiz)
+            val target = a0(args)
+            var from = 0
+            if (args.size > 1 && args[1] !is JsUndefined) {
+                from = JsRuntime.toInt32(args[1])
+                if (from < 0) from += o.elems.size
+                if (from < 0) from = 0
+            }
+            var j = from
+            while (j < o.elems.size) {
+                if (same(o.elems[j], target)) return@fn d(j.toDouble())
+                j++
+            }
+            d(-1.0)
+        })
+        put(protoArr, "lastIndexOf", fn("lastIndexOf") { args, thiz ->
+            val o = arrThis(thiz)
+            val target = a0(args)
+            var j = o.elems.size - 1
+            while (j >= 0) {
+                if (same(o.elems[j], target)) return@fn d(j.toDouble())
+                j--
+            }
+            d(-1.0)
+        })
+        put(protoArr, "includes", fn("includes") { args, thiz ->
+            val o = arrThis(thiz)
+            val target = a0(args)
+            for (e in o.elems) {
+                if (same(e, target)) return@fn JsBool(true)
+                if (e is JsNum && target is JsNum && e.value.isNaN() && target.value.isNaN()) return@fn JsBool(true)
+            }
+            JsBool(false)
+        })
+        put(protoArr, "join", fn("join") { args, thiz ->
+            val o = arrThis(thiz)
+            val sep = if (args.isNotEmpty() && args[0] !is JsUndefined) strOf(args[0]) else ","
+            str(joinStrings(o, sep))
+        })
+        put(protoArr, "concat", fn("concat") { args, thiz ->
+            val o = arrThis(thiz)
+            val r = JsRuntime.newArr()
+            r.elems.addAll(o.elems)
+            for (a in args) {
+                if (a is JsObj && a.isArr) r.elems.addAll(a.elems) else r.elems.add(a)
+            }
+            r
+        })
+        put(protoArr, "reverse", fn("reverse") { _, thiz ->
+            val o = arrThis(thiz)
+            o.elems.reverse()
+            o
+        })
+        put(protoArr, "toString", fn("toString") { _, thiz ->
+            str(joinStrings(arrThis(thiz), ","))
+        })
+    }
+
+    // ---- String.prototype ----
+
+    private fun installProtoStr() {
+        put(protoStr, "charAt", fn("charAt") { args, thiz ->
+            val s = strOf(thiz)
+            val i = if (args.isNotEmpty() && args[0] !is JsUndefined) JsRuntime.toInt32(args[0]) else 0
+            if (i < 0 || i >= s.length) return@fn str("")
+            str(s[i].toString())
+        })
+        put(protoStr, "charCodeAt", fn("charCodeAt") { args, thiz ->
+            val s = strOf(thiz)
+            val i = if (args.isNotEmpty() && args[0] !is JsUndefined) JsRuntime.toInt32(args[0]) else 0
+            if (i < 0 || i >= s.length) return@fn d(Double.NaN)
+            d(s[i].code.toDouble())
+        })
+        put(protoStr, "indexOf", fn("indexOf") { args, thiz ->
+            val s = strOf(thiz)
+            val q = strOf(a0(args))
+            var from = 0
+            if (args.size > 1 && args[1] !is JsUndefined) {
+                from = JsRuntime.toInt32(args[1])
+                if (from < 0) from = 0
+            }
+            if (from >= s.length) {
+                if (q.isEmpty() && from == s.length) return@fn d(from.toDouble())
+                return@fn d(-1.0)
+            }
+            d(s.indexOf(q, from).toDouble())
+        })
+        put(protoStr, "lastIndexOf", fn("lastIndexOf") { args, thiz ->
+            val s = strOf(thiz)
+            d(s.lastIndexOf(strOf(a0(args))).toDouble())
+        })
+        put(protoStr, "includes", fn("includes") { args, thiz ->
+            JsBool(strOf(thiz).contains(strOf(a0(args))))
+        })
+        put(protoStr, "startsWith", fn("startsWith") { args, thiz ->
+            JsBool(strOf(thiz).startsWith(strOf(a0(args))))
+        })
+        put(protoStr, "endsWith", fn("endsWith") { args, thiz ->
+            JsBool(strOf(thiz).endsWith(strOf(a0(args))))
+        })
+        put(protoStr, "slice", fn("slice") { args, thiz ->
+            val s = strOf(thiz)
+            val st = normIdx(a0(args), s.length, 0)
+            val en = normIdx(a1(args), s.length, s.length)
+            if (en <= st) return@fn str("")
+            str(s.substring(st, en))
+        })
+        put(protoStr, "substring", fn("substring") { args, thiz ->
+            val s = strOf(thiz)
+            var st = normIdx(a0(args), s.length, 0)
+            var en = normIdx(a1(args), s.length, s.length)
+            if (st > en) {
+                val tmp = st
+                st = en
+                en = tmp
+            }
+            str(s.substring(st, en))
+        })
+        put(protoStr, "toUpperCase", fn("toUpperCase") { _, thiz -> str(strOf(thiz).uppercase()) })
+        put(protoStr, "toLowerCase", fn("toLowerCase") { _, thiz -> str(strOf(thiz).lowercase()) })
+        put(protoStr, "trim", fn("trim") { _, thiz -> str(strOf(thiz).trim()) })
+        put(protoStr, "split", fn("split") { args, thiz ->
+            val s = strOf(thiz)
+            val r = JsRuntime.newArr()
+            if (args.isEmpty() || args[0] is JsUndefined) {
+                r.elems.add(str(s))
+                return@fn r
+            }
+            val sep = strOf(args[0])
+            if (sep.isEmpty()) {
+                for (c in s) r.elems.add(str(c.toString()))
+                return@fn r
+            }
+            for (p in s.split(sep)) r.elems.add(str(p))
+            r
+        })
+        put(protoStr, "replace", fn("replace") { args, thiz ->
+            val s = strOf(thiz)
+            val old = strOf(a0(args))
+            val nw = strOf(a1(args))
+            val i = s.indexOf(old)
+            if (i < 0) return@fn str(s)
+            str(s.substring(0, i) + nw + s.substring(i + old.length))
+        })
+        put(protoStr, "repeat", fn("repeat") { args, thiz ->
+            val n = JsRuntime.toInt32(a0(args))
+            if (n <= 0) return@fn str("")
+            str(strOf(thiz).repeat(n))
+        })
+        put(protoStr, "padStart", fn("padStart") { args, thiz ->
+            val s = strOf(thiz)
+            val t = JsRuntime.toInt32(a0(args))
+            val p = if (args.size > 1 && args[1] !is JsUndefined) strOf(args[1]) else " "
+            if (t <= s.length || p.isEmpty()) return@fn str(s)
+            var out = p
+            while (out.length < t - s.length) out += p
+            str(out.substring(0, t - s.length) + s)
+        })
+        put(protoStr, "padEnd", fn("padEnd") { args, thiz ->
+            val s = strOf(thiz)
+            val t = JsRuntime.toInt32(a0(args))
+            val p = if (args.size > 1 && args[1] !is JsUndefined) strOf(args[1]) else " "
+            if (t <= s.length || p.isEmpty()) return@fn str(s)
+            var out = p
+            while (out.length < t - s.length) out += p
+            str(s + out.substring(0, t - s.length))
+        })
+        put(protoStr, "concat", fn("concat") { args, thiz ->
+            val sb = StringBuilder(strOf(thiz))
+            for (a in args) sb.append(strOf(a))
+            str(sb.toString())
+        })
+        put(protoStr, "toString", fn("toString") { _, thiz -> str(strOf(thiz)) })
+    }
+
+    // ---- Number.prototype y Boolean.prototype ----
+
+    private fun installProtoNum() {
+        put(protoNum, "toFixed", fn("toFixed") { args, thiz ->
+            val n = JsRuntime.toNumber(thiz)
+            if (n.isNaN()) return@fn str("NaN")
+            if (n.isInfinite()) return@fn str(if (n > 0) "Infinity" else "-Infinity")
+            var f = 0
+            if (args.isNotEmpty() && args[0] !is JsUndefined) f = JsRuntime.toInt32(args[0])
+            if (f < 0) f = 0
+            val bd = BigDecimal(n).setScale(f, RoundingMode.HALF_UP)
+            str(bd.toPlainString())
+        })
+        put(protoNum, "toString", fn("toString") { args, thiz ->
+            val n = JsRuntime.toNumber(thiz)
+            if (args.isEmpty() || args[0] is JsUndefined) return@fn str(JsRuntime.jsNumToString(n))
+            val r = JsRuntime.toInt32(a0(args))
+            if (r < 2 || r > 36) throw JsRuntime.throwNative("RangeError", "toString() radix must be between 2 and 36")
+            if (n.isNaN()) return@fn str("NaN")
+            if (n.isInfinite()) return@fn str(if (n > 0) "Infinity" else "-Infinity")
+            if (Math.abs(n) >= 1.0e21) return@fn str(JsRuntime.jsNumToString(n))
+            if (n == 0.0) return@fn str("0")
+            val neg = n < 0
+            var m = kotlin.math.floor(Math.abs(n))
+            val digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+            var out = ""
+            while (m >= 1.0) {
+                val rem = (m % r).toInt()
+                out = digits[rem].toString() + out
+                m = kotlin.math.floor(m / r)
+            }
+            str(if (neg) "-" + out else out)
+        })
+    }
+
+    private fun installProtoBool() {
+        put(protoBool, "toString", fn("toString") { _, thiz ->
+            str(JsRuntime.toStringJs(thiz))
+        })
+    }
+
+    // ---- Event (semantica del estandar DOM; la propagacion por el arbol llega con T024) ----
+
+    private fun makeEvent(args: List<JsValue>): JsObj {
+        val e = JsRuntime.newObj()
+        e.props["type"] = JsProp.Value(str(strOf(a0(args))))
+        var bubbles = false
+        var cancelable = false
+        val init = a1(args)
+        if (init is JsObj) {
+            val b = init.props["bubbles"]
+            if (b is JsProp.Value) bubbles = JsRuntime.toBoolean(b.v)
+            val c = init.props["cancelable"]
+            if (c is JsProp.Value) cancelable = JsRuntime.toBoolean(c.v)
+        }
+        e.props["bubbles"] = JsProp.Value(JsBool(bubbles))
+        e.props["cancelable"] = JsProp.Value(JsBool(cancelable))
+        e.props["defaultPrevented"] = JsProp.Value(JsBool(false))
+        e.props["target"] = JsProp.Value(JsNull)
+        e.props["currentTarget"] = JsProp.Value(JsNull)
+        e.props["preventDefault"] = JsProp.Value(fn("preventDefault") { _, thiz ->
+            val ev = thiz as? JsObj
+            if (ev != null) {
+                val cEntry = ev.props["cancelable"]
+                val cVal = (cEntry as? JsProp.Value)?.v
+                val can = cVal is JsBool && cVal.value
+                if (can) ev.props["defaultPrevented"] = JsProp.Value(JsBool(true))
+            }
+            JsUndefined
+        })
+        e.props["stopPropagation"] = JsProp.Value(fn("stopPropagation") { _, _ -> JsUndefined })
+        return e
     }
 }

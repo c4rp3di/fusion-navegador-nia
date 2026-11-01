@@ -112,22 +112,37 @@ object JsInterpreter {
         }
         var cur: JsValue = o
         while (true) {
-            val props = propsOf(cur) ?: break
-            val entry = props[key]
-            if (entry != null) {
-                if (entry is JsProp.Accessor) {
-                    if (entry.get == null) {
-                        throw JsRuntime.throwNative("TypeError", "No getter for property " + key)
+            val props = propsOf(cur)
+            if (props != null) {
+                val entry = props[key]
+                if (entry != null) {
+                    if (entry is JsProp.Accessor) {
+                        if (entry.get == null) {
+                            throw JsRuntime.throwNative("TypeError", "No getter for property " + key)
+                        }
+                        return callFunction(entry.get, o, ArrayList())
                     }
-                    return callFunction(entry.get, o, ArrayList())
+                    if (entry is JsProp.Value) return entry.v
                 }
-                if (entry is JsProp.Value) return entry.v
             }
-            val p = protoOf(cur)
+            val p = protoFor(cur)
             if (p == null) break
             cur = p
         }
         return JsUndefined
+    }
+
+    /** Prototipo para la busqueda de miembros, tambien sobre primitivos (v2). */
+    private fun protoFor(o: JsValue): JsObj? {
+        return when (o) {
+            is JsObj -> o.proto
+            is JsStr -> JsBuiltins.protoStr
+            is JsNum -> JsBuiltins.protoNum
+            is JsBool -> JsBuiltins.protoBool
+            is JsFun -> JsBuiltins.protoFun
+            is JsNative -> JsBuiltins.protoFun
+            else -> null
+        }
     }
 
     fun setMember(o: JsValue, key: String, v: JsValue) {
@@ -984,6 +999,8 @@ object JsInterpreter {
                 val args = evalArgs(e.args, env)
                 if (c is JsClass) return instantiate(c, args)
                 if (c is JsNative) {
+                    val ct = c.construct
+                    if (ct != null) return ct(args)
                     val msg = if (args.isNotEmpty()) JsRuntime.toStringJs(args[0]) else ""
                     return JsRuntime.makeErrorObj("Error", msg)
                 }
@@ -1012,6 +1029,248 @@ object JsInterpreter {
         }
     }
 
+
+    // ---- Builtins con callbacks (v2): Array iterables, Function.call/apply/bind, EventTarget ----
+
+    fun installCallbackBuiltins(genv: Env) {
+        JsBuiltins.protoArr.props["sort"] = JsProp.Value(JsBuiltins.fn("sort") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cmp = JsBuiltins.a0(args)
+            val hasCmp = cmp is JsFun || cmp is JsNative
+            var i = 1
+            while (i < o.elems.size) {
+                val x = o.elems[i]
+                var j = i - 1
+                while (j >= 0) {
+                    val y = o.elems[j]
+                    val yAfter = if (hasCmp) {
+                        JsRuntime.toNumber(callFunction(cmp, JsUndefined, listOf(y, x))) > 0.0
+                    } else {
+                        JsRuntime.toStringJs(y) > JsRuntime.toStringJs(x)
+                    }
+                    if (!yAfter) break
+                    o.elems[j + 1] = y
+                    j--
+                }
+                o.elems[j + 1] = x
+                i++
+            }
+            o
+        })
+        JsBuiltins.protoArr.props["forEach"] = JsProp.Value(JsBuiltins.fn("forEach") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            var j = 0
+            while (j < o.elems.size) {
+                callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o))
+                j++
+            }
+            JsUndefined
+        })
+        JsBuiltins.protoArr.props["map"] = JsProp.Value(JsBuiltins.fn("map") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            val r = JsRuntime.newArr()
+            var j = 0
+            while (j < o.elems.size) {
+                r.elems.add(callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o)))
+                j++
+            }
+            r
+        })
+        JsBuiltins.protoArr.props["filter"] = JsProp.Value(JsBuiltins.fn("filter") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            val r = JsRuntime.newArr()
+            var j = 0
+            while (j < o.elems.size) {
+                if (JsRuntime.toBoolean(callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o)))) {
+                    r.elems.add(o.elems[j])
+                }
+                j++
+            }
+            r
+        })
+        JsBuiltins.protoArr.props["find"] = JsProp.Value(JsBuiltins.fn("find") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            var j = 0
+            while (j < o.elems.size) {
+                if (JsRuntime.toBoolean(callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o)))) {
+                    return@fn o.elems[j]
+                }
+                j++
+            }
+            JsUndefined
+        })
+        JsBuiltins.protoArr.props["findIndex"] = JsProp.Value(JsBuiltins.fn("findIndex") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            var j = 0
+            while (j < o.elems.size) {
+                if (JsRuntime.toBoolean(callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o)))) {
+                    return@fn JsNum(j.toDouble())
+                }
+                j++
+            }
+            JsNum(-1.0)
+        })
+        JsBuiltins.protoArr.props["some"] = JsProp.Value(JsBuiltins.fn("some") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            var j = 0
+            while (j < o.elems.size) {
+                if (JsRuntime.toBoolean(callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o)))) {
+                    return@fn JsBool(true)
+                }
+                j++
+            }
+            JsBool(false)
+        })
+        JsBuiltins.protoArr.props["every"] = JsProp.Value(JsBuiltins.fn("every") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            val tArg = if (args.size > 1) args[1] else JsUndefined
+            var j = 0
+            while (j < o.elems.size) {
+                if (!JsRuntime.toBoolean(callFunction(cb, tArg, listOf(o.elems[j], JsNum(j.toDouble()), o)))) {
+                    return@fn JsBool(false)
+                }
+                j++
+            }
+            JsBool(true)
+        })
+        JsBuiltins.protoArr.props["reduce"] = JsProp.Value(JsBuiltins.fn("reduce") { args, thiz ->
+            val o = JsBuiltins.arrThis(thiz)
+            val cb = JsBuiltins.a0(args)
+            var acc: JsValue
+            var start = 0
+            if (args.size > 1) {
+                acc = args[1]
+            } else {
+                if (o.elems.isEmpty()) {
+                    throw JsRuntime.throwNative("TypeError", "Reduce of empty array with no initial value")
+                }
+                acc = o.elems[0]
+                start = 1
+            }
+            var j = start
+            while (j < o.elems.size) {
+                acc = callFunction(cb, JsUndefined, listOf(acc, o.elems[j], JsNum(j.toDouble()), o))
+                j++
+            }
+            acc
+        })
+        JsBuiltins.protoFun.props["call"] = JsProp.Value(JsBuiltins.fn("call") { args, thiz ->
+            val t = if (args.isNotEmpty()) args[0] else JsUndefined
+            callFunction(thiz, t, args.drop(1))
+        })
+        JsBuiltins.protoFun.props["apply"] = JsProp.Value(JsBuiltins.fn("apply") { args, thiz ->
+            val t = if (args.isNotEmpty()) args[0] else JsUndefined
+            val arrV = JsBuiltins.a1(args)
+            val cargs = ArrayList<JsValue>()
+            if (arrV is JsObj && arrV.isArr) cargs.addAll(arrV.elems)
+            callFunction(thiz, t, cargs)
+        })
+        JsBuiltins.protoFun.props["bind"] = JsProp.Value(JsBuiltins.fn("bind") { args, thiz ->
+            val t = if (args.isNotEmpty()) args[0] else JsUndefined
+            val pre = args.drop(1)
+            JsNative("bound", { later, _ ->
+                val all = ArrayList<JsValue>()
+                all.addAll(pre)
+                all.addAll(later)
+                callFunction(thiz, t, all)
+            })
+        })
+        genv.declare("EventTarget", JsNative("EventTarget", construct = { _ ->
+            val t = JsRuntime.newObj()
+            t.props["__listeners"] = JsProp.Value(JsRuntime.newObj())
+            t.props["addEventListener"] = JsProp.Value(JsBuiltins.fn("addEventListener") { args, thiz ->
+                val target = thiz as? JsObj
+                if (target != null) {
+                    val lEntry = target.props["__listeners"]
+                    val map = (lEntry as? JsProp.Value)?.v as? JsObj
+                    if (map != null) {
+                        val type = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                        val cb = JsBuiltins.a1(args)
+                        val listEntry = map.props[type]
+                        var list = (listEntry as? JsProp.Value)?.v as? JsObj
+                        if (list == null) {
+                            list = JsRuntime.newArr()
+                            map.props[type] = JsProp.Value(list)
+                        }
+                        for (e in list.elems) {
+                            if (JsBuiltins.same(e, cb)) return@fn JsUndefined
+                        }
+                        list.elems.add(cb)
+                    }
+                }
+                JsUndefined
+            })
+            t.props["removeEventListener"] = JsProp.Value(JsBuiltins.fn("removeEventListener") { args, thiz ->
+                val target = thiz as? JsObj
+                if (target != null) {
+                    val lEntry = target.props["__listeners"]
+                    val map = (lEntry as? JsProp.Value)?.v as? JsObj
+                    if (map != null) {
+                        val type = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                        val cb = JsBuiltins.a1(args)
+                        val listEntry = map.props[type]
+                        val list = (listEntry as? JsProp.Value)?.v as? JsObj
+                        if (list != null) {
+                            var j = 0
+                            while (j < list.elems.size) {
+                                if (JsBuiltins.same(list.elems[j], cb)) {
+                                    list.elems.removeAt(j)
+                                    break
+                                }
+                                j++
+                            }
+                        }
+                    }
+                }
+                JsUndefined
+            })
+            t.props["dispatchEvent"] = JsProp.Value(JsBuiltins.fn("dispatchEvent") { args, thiz ->
+                val target = thiz as? JsObj
+                val ev = JsBuiltins.a0(args)
+                if (target == null || ev !is JsObj) return@fn JsBool(false)
+                ev.props["target"] = JsProp.Value(target)
+                ev.props["currentTarget"] = JsProp.Value(target)
+                val lEntry = target.props["__listeners"]
+                val map = (lEntry as? JsProp.Value)?.v as? JsObj
+                if (map != null) {
+                    val typeEntry = ev.props["type"]
+                    val typeV = (typeEntry as? JsProp.Value)?.v
+                    if (typeV != null) {
+                        val listEntry = map.props[JsRuntime.toStringJs(typeV)]
+                        val list = (listEntry as? JsProp.Value)?.v as? JsObj
+                        if (list != null) {
+                            val snapshot = ArrayList<JsValue>(list.elems)
+                            for (cb in snapshot) {
+                                callFunction(cb, target, listOf(ev))
+                            }
+                        }
+                    }
+                }
+                val cEntry = ev.props["cancelable"]
+                val cVal = (cEntry as? JsProp.Value)?.v
+                val can = cVal is JsBool && cVal.value
+                if (!can) return@fn JsBool(true)
+                val dEntry = ev.props["defaultPrevented"]
+                val dVal = (dEntry as? JsProp.Value)?.v
+                JsBool(!(dVal is JsBool && dVal.value))
+            })
+            t
+        }))
+    }
+
     // ---- Entrada del programa ----
 
     fun evaluate(source: String): JsEvalResult {
@@ -1022,6 +1281,7 @@ object JsInterpreter {
         genv.declare("Infinity", JsNum(Double.POSITIVE_INFINITY))
         genv.declare("Error", JsNative("Error"))
         JsBuiltins.install(genv)
+        installCallbackBuiltins(genv)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         try {

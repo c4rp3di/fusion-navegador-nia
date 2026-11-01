@@ -1142,4 +1142,511 @@ class JsInterpreterTest {
         assertEquals("\"SyntaxError\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("try { JSON.parse('{bad}'); } catch (e) { e.name; }")))
     }
 
+
+    // ---- Builtins v2 (T020): prototipos, Event/EventTarget ----
+
+    @Test
+    fun objHasOwnProperty() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {a: 1}; o.hasOwnProperty(\"a\");")))
+    }
+
+    @Test
+    fun objHasOwnPropertyFalse() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {a: 1}; o.hasOwnProperty(\"b\");")))
+    }
+
+    @Test
+    fun objHasOwnPropertyHeredado() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {a: 1}; o.hasOwnProperty(\"toString\");")))
+    }
+
+    @Test
+    fun objToString() {
+        assertEquals("\"[object Object]\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("({}).toString();")))
+    }
+
+    @Test
+    fun objToStringPropio() {
+        assertEquals("\"X\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {toString: function() { return \"X\"; }}; o.toString();")))
+    }
+
+    @Test
+    fun objInPrototipo() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"hasOwnProperty\" in {};")))
+    }
+
+    @Test
+    fun objHasOwnPropertyArray() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1]; a.hasOwnProperty(\"length\");")))
+    }
+
+    @Test
+    fun strCharAt() {
+        assertEquals("\"b\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".charAt(1);")))
+    }
+
+    @Test
+    fun strCharAtFuera() {
+        assertEquals("\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".charAt(9);")))
+    }
+
+    @Test
+    fun strCharCodeAt() {
+        assertEquals("97", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".charCodeAt(0);")))
+    }
+
+    @Test
+    fun strCharCodeAtFuera() {
+        assertEquals("NaN", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".charCodeAt(9);")))
+    }
+
+    @Test
+    fun strIndexOf() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"hello\".indexOf(\"l\");")))
+    }
+
+    @Test
+    fun strIndexOfDesde() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"aa\".indexOf(\"a\", 1);")))
+    }
+
+    @Test
+    fun strLastIndexOf() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abcabc\".lastIndexOf(\"c\");")))
+    }
+
+    @Test
+    fun strIncludes() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".includes(\"b\");")))
+    }
+
+    @Test
+    fun strIncludesFalse() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".includes(\"z\");")))
+    }
+
+    @Test
+    fun strStartsWith() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".startsWith(\"ab\");")))
+    }
+
+    @Test
+    fun strEndsWith() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".endsWith(\"bc\");")))
+    }
+
+    @Test
+    fun strSlice() {
+        assertEquals("\"cdef\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abcdef\".slice(2);")))
+    }
+
+    @Test
+    fun strSliceNegativo() {
+        assertEquals("\"ef\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abcdef\".slice(-2);")))
+    }
+
+    @Test
+    fun strSliceRango() {
+        assertEquals("\"bc\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abcdef\".slice(1, 3);")))
+    }
+
+    @Test
+    fun strSubstring() {
+        assertEquals("\"bc\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abcdef\".substring(1, 3);")))
+    }
+
+    @Test
+    fun strSubstringIntercambiado() {
+        assertEquals("\"bc\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abcdef\".substring(3, 1);")))
+    }
+
+    @Test
+    fun strToUpperCase() {
+        assertEquals("\"ABC\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"aBc\".toUpperCase();")))
+    }
+
+    @Test
+    fun strToLowerCase() {
+        assertEquals("\"abc\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"AbC\".toLowerCase();")))
+    }
+
+    @Test
+    fun strTrim() {
+        assertEquals("\"a\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"  a  \".trim();")))
+    }
+
+    @Test
+    fun strSplit() {
+        assertEquals("(arr \"a\" \"b\" \"c\")", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"a,b,c\".split(\",\");")))
+    }
+
+    @Test
+    fun strSplitVacio() {
+        assertEquals("(arr \" \")", JsInterpreter.dumpResult(JsInterpreter.evaluate("\" \".split(\",\");")))
+    }
+
+    @Test
+    fun strSplitSinSep() {
+        assertEquals("(arr \"abc\")", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"abc\".split();")))
+    }
+
+    @Test
+    fun strReplace() {
+        assertEquals("\"heLlo\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"hello\".replace(\"l\", \"L\");")))
+    }
+
+    @Test
+    fun strReplaceNoEncontrado() {
+        assertEquals("\"hi\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"hi\".replace(\"x\", \"y\");")))
+    }
+
+    @Test
+    fun strRepeat() {
+        assertEquals("\"ababab\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"ab\".repeat(3);")))
+    }
+
+    @Test
+    fun strRepeatCero() {
+        assertEquals("\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"ab\".repeat(0);")))
+    }
+
+    @Test
+    fun strPadStart() {
+        assertEquals("\"005\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"5\".padStart(3, \"0\");")))
+    }
+
+    @Test
+    fun strPadEnd() {
+        assertEquals("\"9..\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"9\".padEnd(3, \".\");")))
+    }
+
+    @Test
+    fun strConcat() {
+        assertEquals("\"hi!?\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("\"hi\".concat(\"!\", \"?\");")))
+    }
+
+    @Test
+    fun strFromCharCode() {
+        assertEquals("\"ab\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("String.fromCharCode(97, 98);")))
+    }
+
+    @Test
+    fun arrPush() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1, 2]; a.push(3, 4);")))
+    }
+
+    @Test
+    fun arrPushContenido() {
+        assertEquals("\"1,2,3,4\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1, 2]; a.push(3, 4); a.join(\",\");")))
+    }
+
+    @Test
+    fun arrPop() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1]; a.pop();")))
+    }
+
+    @Test
+    fun arrPopVacio() {
+        assertEquals("undefined", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = []; a.pop();")))
+    }
+
+    @Test
+    fun arrShift() {
+        assertEquals("\"2:1\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1, 2]; var r = a.shift(); a.join(\",\") + \":\" + r;")))
+    }
+
+    @Test
+    fun arrUnshift() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [2]; a.unshift(0, 1);")))
+    }
+
+    @Test
+    fun arrSlice() {
+        assertEquals("\"2,3\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3,4].slice(1, 3).join(\",\");")))
+    }
+
+    @Test
+    fun arrSliceNegativo() {
+        assertEquals("\"3,4\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3,4].slice(-2).join(\",\");")))
+    }
+
+    @Test
+    fun arrSliceCopia() {
+        assertEquals("\"2:3\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1,2]; var b = a.slice(); b.push(9); a.length + \":\" + b.length;")))
+    }
+
+    @Test
+    fun arrSplice() {
+        assertEquals("\"23145\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var c = [1,2,3,4,5]; var sp = c.splice(1, 2); sp.join(\"\") + c.join(\"\");")))
+    }
+
+    @Test
+    fun arrIndexOf() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3].indexOf(2);")))
+    }
+
+    @Test
+    fun arrIndexOfDesde() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3,2].indexOf(2, 2);")))
+    }
+
+    @Test
+    fun arrLastIndexOf() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3,2].lastIndexOf(2);")))
+    }
+
+    @Test
+    fun arrIncludes() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].includes(2);")))
+    }
+
+    @Test
+    fun arrIncludesFalse() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].includes(5);")))
+    }
+
+    @Test
+    fun arrJoin() {
+        assertEquals("\"1-2-3\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3].join(\"-\");")))
+    }
+
+    @Test
+    fun arrJoinVacio() {
+        assertEquals("\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[].join(\",\");")))
+    }
+
+    @Test
+    fun arrConcat() {
+        assertEquals("\"12345\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].concat([3], [4,5]).join(\"\");")))
+    }
+
+    @Test
+    fun arrReverse() {
+        assertEquals("\"321\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [1,2,3]; a.reverse(); a.join(\"\");")))
+    }
+
+    @Test
+    fun arrSort() {
+        assertEquals("\"10,2,33\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[10, 2, 33].sort().join(\",\");")))
+    }
+
+    @Test
+    fun arrSortNumerico() {
+        assertEquals("\"2,10,33\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[10, 2, 33].sort(function(a, b) { return a - b; }).join(\",\");")))
+    }
+
+    @Test
+    fun arrSortInPlace() {
+        assertEquals("\"123\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = [3,1,2]; a.sort(function(a, b) { return a - b; }); a.join(\"\");")))
+    }
+
+    @Test
+    fun arrForEach() {
+        assertEquals("\"123\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var s = \"\"; [1,2,3].forEach(function(v) { s += v; }); s;")))
+    }
+
+    @Test
+    fun arrMap() {
+        assertEquals("\"246\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3].map(function(v) { return v * 2; }).join(\"\");")))
+    }
+
+    @Test
+    fun arrFilter() {
+        assertEquals("\"24\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3,4].filter(function(v) { return v % 2 === 0; }).join(\"\");")))
+    }
+
+    @Test
+    fun arrFind() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3].find(function(v) { return v > 1; });")))
+    }
+
+    @Test
+    fun arrFindVacio() {
+        assertEquals("undefined", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].find(function(v) { return v > 9; });")))
+    }
+
+    @Test
+    fun arrFindIndex() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3].findIndex(function(v) { return v > 1; });")))
+    }
+
+    @Test
+    fun arrSome() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].some(function(v) { return v > 1; });")))
+    }
+
+    @Test
+    fun arrSomeFalse() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1].some(function(v) { return v > 9; });")))
+    }
+
+    @Test
+    fun arrEvery() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("[2,4].every(function(v) { return v % 2 === 0; });")))
+    }
+
+    @Test
+    fun arrEveryFalse() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("[2,5].every(function(v) { return v % 2 === 0; });")))
+    }
+
+    @Test
+    fun arrReduce() {
+        assertEquals("24", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2,3,4].reduce(function(a, b) { return a * b; });")))
+    }
+
+    @Test
+    fun arrReduceInicial() {
+        assertEquals("13", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].reduce(function(a, b) { return a + b; }, 10);")))
+    }
+
+    @Test
+    fun arrForEachThis() {
+        assertEquals("23", JsInterpreter.dumpResult(JsInterpreter.evaluate("var r = 0; var t = {n: 10}; [1, 2].forEach(function(v) { r = r + this.n + v; }, t); r;")))
+    }
+
+    @Test
+    fun arrToString() {
+        assertEquals("\"1,2\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1,2].toString();")))
+    }
+
+    @Test
+    fun arrIndexOfNaN() {
+        assertEquals("-1", JsInterpreter.dumpResult(JsInterpreter.evaluate("[1, NaN].indexOf(NaN);")))
+    }
+
+    @Test
+    fun numToFixed() {
+        assertEquals("\"3.14\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(3.14159).toFixed(2);")))
+    }
+
+    @Test
+    fun numToFixedRedondeo() {
+        assertEquals("\"2.67\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(2.675).toFixed(2);")))
+    }
+
+    @Test
+    fun numToFixedCero() {
+        assertEquals("\"-4\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(-3.7).toFixed(0);")))
+    }
+
+    @Test
+    fun numToFixedNaN() {
+        assertEquals("\"NaN\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(NaN).toFixed(2);")))
+    }
+
+    @Test
+    fun numToFixedInf() {
+        assertEquals("\"Infinity\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(Infinity).toFixed(2);")))
+    }
+
+    @Test
+    fun numToStringRadix() {
+        assertEquals("\"ff\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(255).toString(16);")))
+    }
+
+    @Test
+    fun numToString() {
+        assertEquals("\"5\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(5).toString();")))
+    }
+
+    @Test
+    fun numToStringRadix2() {
+        assertEquals("\"101\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(5).toString(2);")))
+    }
+
+    @Test
+    fun boolToString() {
+        assertEquals("\"true\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("(true).toString();")))
+    }
+
+    @Test
+    fun funCall() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {x: 1, m: function() { return this.x; }}; o.m.call({x: 9});")))
+    }
+
+    @Test
+    fun funApply() {
+        assertEquals("7", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {x: 1, m: function() { return this.x; }}; o.m.apply({x: 7}, []);")))
+    }
+
+    @Test
+    fun funBind() {
+        assertEquals("42", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f() { return this.v; } var g = f.bind({v: 42}); g();")))
+    }
+
+    @Test
+    fun funCallArgs() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f(a, b) { return a + b; } f.call(null, 1, 2);")))
+    }
+
+    @Test
+    fun funApplyArgs() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f(a, b) { return a + b; } f.apply(null, [1, 2]);")))
+    }
+
+    @Test
+    fun evType() {
+        assertEquals("\"click\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("new Event(\"click\", {bubbles: true}).type;")))
+    }
+
+    @Test
+    fun evBubbles() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("new Event(\"x\", {bubbles: true}).bubbles;")))
+    }
+
+    @Test
+    fun evBubblesDefault() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("new Event(\"x\").bubbles;")))
+    }
+
+    @Test
+    fun evCancelableDefault() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("new Event(\"x\").cancelable;")))
+    }
+
+    @Test
+    fun evDefaultPrevented() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var e = new Event(\"x\", {cancelable: true}); e.preventDefault(); e.defaultPrevented;")))
+    }
+
+    @Test
+    fun evDefaultPreventedNoCancelable() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("var e = new Event(\"x\"); e.preventDefault(); e.defaultPrevented;")))
+    }
+
+    @Test
+    fun etDispatchVacio() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); t.dispatchEvent(new Event(\"e\"));")))
+    }
+
+    @Test
+    fun etListenerOrden() {
+        assertEquals("\"12\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); var s = \"\"; t.addEventListener(\"e\", function() { s += \"1\"; }); t.addEventListener(\"e\", function() { s += \"2\"; }); t.dispatchEvent(new Event(\"e\")); s;")))
+    }
+
+    @Test
+    fun etListenerThis() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); var r; t.addEventListener(\"e\", function(ev) { r = (this === t); }); t.dispatchEvent(new Event(\"e\")); r;")))
+    }
+
+    @Test
+    fun etEvTarget() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); var r; t.addEventListener(\"e\", function(ev) { r = (ev.target === t) && (ev.currentTarget === t); }); t.dispatchEvent(new Event(\"e\")); r;")))
+    }
+
+    @Test
+    fun etRemoveListener() {
+        assertEquals("\"a\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); var s = \"a\"; function h() { s = \"b\"; } t.addEventListener(\"e\", h); t.removeEventListener(\"e\", h); t.dispatchEvent(new Event(\"e\")); s;")))
+    }
+
+    @Test
+    fun etDispatchCancel() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); t.addEventListener(\"e\", function(ev) { ev.preventDefault(); }); t.dispatchEvent(new Event(\"e\", {cancelable: true}));")))
+    }
+
+    @Test
+    fun etDuplicado() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); var n = 0; function h() { n = n + 1; } t.addEventListener(\"e\", h); t.addEventListener(\"e\", h); t.dispatchEvent(new Event(\"e\")); n;")))
+    }
 }
