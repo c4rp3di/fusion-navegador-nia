@@ -58,8 +58,7 @@ class JsLexerTest {
         assertEquals("eof", kindOf(t))
         assertEquals(0, t.start)
         assertEquals(0, t.end)
-        assertEquals(0, r.errors.
-size)
+        assertEquals(0, r.errors.size)
     }
 
     @Test
@@ -119,7 +118,6 @@ size)
         assertEquals("id:u00zz", kindOf(r2.tokens[0]) + ":" + valOf(r2.tokens[0]))
     }
 
-
     @Test
     fun numerosDecimales() {
         val r = lex("42 3.14 5. .5 1e3 2e+10 1_000")
@@ -170,8 +168,7 @@ size)
     }
 
     @Test
-    fun stringsSimplesYEscap
-es() {
+    fun stringsSimplesYEscapes() {
         assertEquals("hola", valOf(lex("'hola'").tokens[0]))
         assertEquals("x\ty", valOf(lex("\"x\\ty\"").tokens[0]))
         assertEquals("a'b", valOf(lex("'a\\'b'").tokens[0]))
@@ -229,8 +226,7 @@ es() {
         assertEquals(0, r.tokens[0].start)
         assertEquals(6, r.tokens[0].end)
         val s2 = "`a" + "\\" + "u0041b\\nb`"
-        assertEquals("aAb\n
-b", valOf(lex(s2).tokens[0]))
+        assertEquals("aAb\nb", valOf(lex(s2).tokens[0]))
         assertEquals("a\nb", valOf(lex("`a\r\nb`").tokens[0]))
     }
 
@@ -292,8 +288,7 @@ b", valOf(lex(s2).tokens[0]))
     @Test
     fun regexSinCerrar() {
         val r = lex("/ab")
-        asser
-tEquals("unterminated-regexp", errs("/ab"))
+        assertEquals("unterminated-regexp", errs("/ab"))
         assertEquals("regex:ab", kindOf(r.tokens[0]) + ":" + valOf(r.tokens[0]))
         assertEquals("unterminated-regexp", errs("/a\ncd/"))
     }
@@ -348,8 +343,7 @@ tEquals("unterminated-regexp", errs("/ab"))
         val r = lex(src)
         val seq = r.tokens.joinToString(",") { kindOf(it) }
         assertEquals(
-            "kw,id,punct,num,punct,kw,punct,id,punct,num,punct,punct,id,punct,tmpl
-Head,id,tmplTail,punct,punct,punct,eof",
+            "kw,id,punct,num,punct,kw,punct,id,punct,num,punct,punct,id,punct,tmplHead,id,tmplTail,punct,punct,punct,eof",
             seq
         )
         assertEquals(0, r.errors.size)
