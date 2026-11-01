@@ -94,7 +94,9 @@ jobs:
             engine-core/src/main/java/nia/engine/js/JsRuntime.kt \
             engine-core/src/main/java/nia/engine/js/JsInterpreter.kt \
             engine-core/src/main/java/nia/engine/js/JsBuiltins.kt \
+            engine-core/src/main/java/nia/engine/js/JsDomBindings.kt \
             engine-core/src/test/java/nia/engine/js/JsInterpreterTest.kt \
+            engine-core/src/test/java/nia/engine/js/JsDomBindingsTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/AndroidManifest.xml \

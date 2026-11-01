@@ -1,5 +1,7 @@
 package nia.engine.js
 
+import nia.engine.dom.DomDocument
+
 /**
  * Interprete ECMAScript v1 (T019): evalua el AST del parser v2.
  * Espejo validado del gemelo TS/JS del diseno (interp.js @ gemelo R0027).
@@ -365,7 +367,7 @@ object JsInterpreter {
 
     // ---- Llamadas ----
 
-    private fun callFunction(f: JsValue, thisArg: JsValue, args: List<JsValue>): JsValue {
+    internal fun callFunction(f: JsValue, thisArg: JsValue, args: List<JsValue>): JsValue {
         if (f is JsNative) {
             val c = f.call
             if (c != null) return c(args, thisArg)
@@ -1281,6 +1283,34 @@ object JsInterpreter {
         genv.declare("Error", JsNative("Error"))
         JsBuiltins.install(genv)
         installCallbackBuiltins(genv)
+        JsDomBindings.installConsole(genv)
+        var last: JsValue = JsUndefined
+        var thrown: JsValue? = null
+        try {
+            hoist(parse.program.statements, genv)
+            for (s in parse.program.statements) {
+                val c = runStatement(s, genv, emptyList())
+                if (c.type != CType.NORMAL) break
+                if (c.value != null) last = c.value
+            }
+        } catch (ex: Exception) {
+            if (ex is JsThrown) thrown = ex.value else throw ex
+        }
+        return JsEvalResult(last, thrown != null, thrown)
+    }
+
+    /** Evaluacion con bindings DOM (T022, RES-0017): instala document sobre doc. */
+    fun evaluateWithDom(source: String, doc: DomDocument): JsEvalResult {
+        val parse = JsParser.parse(source)
+        val genv = Env(null, true)
+        genv.declare("undefined", JsUndefined)
+        genv.declare("NaN", JsNum(Double.NaN))
+        genv.declare("Infinity", JsNum(Double.POSITIVE_INFINITY))
+        genv.declare("Error", JsNative("Error"))
+        JsBuiltins.install(genv)
+        installCallbackBuiltins(genv)
+        JsDomBindings.installConsole(genv)
+        JsDomBindings.install(genv, doc)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         try {
