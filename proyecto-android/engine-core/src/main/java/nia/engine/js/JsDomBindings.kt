@@ -183,6 +183,7 @@ object JsDomBindings {
                 when (n) {
                     is DomNode.Document -> for (c in n.children) go(c)
                     is DomNode.Element -> for (c in n.children) go(c)
+                    else -> {}
                 }
             }
             go(node)
