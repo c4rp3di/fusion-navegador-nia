@@ -8,7 +8,7 @@ package nia.engine.js
  */
 sealed class JsNode(val start: Int, val end: Int)
 
-class JsParseError(val code: String, start: Int, end: Int, val line: Int, val column: Int)
+class JsParseError(val code: String, val start: Int, val end: Int, val line: Int, val column: Int)
 
 class JsProgram(start: Int, end: Int, val statements: List<JsStmt>, val errors: List<JsParseError>) : JsNode(start, end)
 
@@ -248,7 +248,7 @@ object JsAstDump {
             sb.append(")").toString()
         }
         is JsExpr.RegExp -> "(re \"" + esc(e.body) + "\" " + (if (e.flags == "") "-" else e.flags) + ")"
-        is JsExpr.Bool -> "(bool " + (if (e.value) "true" : "false") + ")"
+        is JsExpr.Bool -> "(bool " + (if (e.value) "true" else "false") + ")"
         is JsExpr.Null -> "(null)"
         is JsExpr.This -> "(this)"
         is JsExpr.ArrayLit -> {

@@ -66,6 +66,11 @@ object JsParser {
             return t is JsToken.Keyword && t.value == v
         }
 
+        fun isIdentOf(v: String): Boolean {
+            val t = cur()
+            return t is JsToken.Identifier && t.value == v
+        }
+
         private fun pos(p: Int): Pair<Int, Int> {
             var line = 1
             var last = -1
@@ -199,7 +204,7 @@ object JsParser {
                     init = parseAssign()
                 }
                 val end = if (init == null) nameTok.end else init.end
-                declarators.add(Declarator(nameTok.start, end, nameTok.value, init))
+                declarators.add(Declarator(nameTok.start, end, t.value, init))
                 if (isP(",")) {
                     next()
                     continue
@@ -227,7 +232,7 @@ object JsParser {
                     def = parseAssign()
                 }
                 val end = if (def == null) nameTok.end else def.end
-                params.add(Param(nameTok.start, end, nameTok.value, def))
+                params.add(Param(nameTok.start, end, t.value, def))
                 if (isP(",")) {
                     next()
                     continue
@@ -249,7 +254,7 @@ object JsParser {
             val nameTok = next()
             val params = parseParams()
             val body = parseBlock()
-            return JsStmt.Function(kw.start, body.end, nameTok.value, params, body)
+            return JsStmt.Function(kw.start, body.end, t.value, params, body)
         }
 
         fun parseFunctionExpr(): JsExpr.FunctionExpr {
@@ -258,7 +263,7 @@ object JsParser {
             val t = cur()
             if (t is JsToken.Identifier) {
                 val nt = next()
-                name = nt.value
+                name = t.value
             }
             val params = parseParams()
             val body = parseBlock()
@@ -350,7 +355,7 @@ object JsParser {
                         isOf = c1 is JsToken.Identifier
                         next()
                         leftKind = kind
-                        leftName = nameTok.value
+                        leftName = d.value
                         right = parseExpr()
                         isForInOf = true
                     } else {
@@ -361,7 +366,7 @@ object JsParser {
                             init0 = parseAssign()
                         }
                         var end0 = if (init0 == null) nameTok.end else init0.end
-                        declarators.add(Declarator(nameTok.start, end0, nameTok.value, init0))
+                        declarators.add(Declarator(nameTok.start, end0, d.value, init0))
                         while (isP(",")) {
                             next()
                             val d2 = cur()
@@ -373,7 +378,7 @@ object JsParser {
                                 ini2 = parseAssign()
                             }
                             val end2 = if (ini2 == null) nt2.end else ini2.end
-                            declarators.add(Declarator(nt2.start, end2, nt2.value, ini2))
+                            declarators.add(Declarator(nt2.start, end2, d2.value, ini2))
                         }
                         val last = declarators[declarators.size - 1]
                         init = JsStmt.Var(kw.start, last.end, kind, declarators)
@@ -446,7 +451,7 @@ object JsParser {
                 val t = cur()
                 if (t !is JsToken.Identifier) throw abort("invalid-binding", t.start, t.end)
                 val nt = next()
-                catchParam = nt.value
+                catchParam = t.value
                 expectP(")")
                 catchBlock = parseBlock()
             }
@@ -614,10 +619,12 @@ object JsParser {
                 if (t is JsToken.Punctuator && t.value == ".") {
                     next()
                     val p = next()
-                    if (p !is JsToken.Identifier && p !is JsToken.Keyword) {
-                        throw abort("unexpected-token", p.start, p.end)
+                    val pname = when (p) {
+                        is JsToken.Identifier -> p.value
+                        is JsToken.Keyword -> p.value
+                        else -> throw abort("unexpected-token", p.start, p.end)
                     }
-                    e = JsExpr.Member(e.start, p.end, e, false, p.value, null)
+                    e = JsExpr.Member(e.start, p.end, e, false, pname, null)
                 } else if (t is JsToken.Punctuator && t.value == "[") {
                     next()
                     val idx = parseExpr()
@@ -727,7 +734,7 @@ object JsParser {
 
         fun parseTemplate(): JsExpr {
             val head = next()
-            val quasis = mutableListOf(head.value)
+            val quasis = mutableListOf((head as JsToken.TemplateHead).value)
             val exprs = mutableListOf<JsExpr>()
             while (true) {
                 exprs.add(parseAssign())
@@ -784,7 +791,7 @@ object JsParser {
                     var key: Key? = null
                     if (t is JsToken.Identifier || t is JsToken.Keyword) {
                         next()
-                        key = Key.IdentKey(t.start, t.end, t.value)
+                        key = Key.IdentKey(t.start, t.end, if (t is JsToken.Identifier) t.value else (t as JsToken.Keyword).value)
                     } else if (t is JsToken.StringLiteral) {
                         next()
                         key = Key.StringKey(t.start, t.end, t.value)
@@ -835,10 +842,12 @@ object JsParser {
                 if (t is JsToken.Punctuator && t.value == ".") {
                     next()
                     val p = next()
-                    if (p !is JsToken.Identifier && p !is JsToken.Keyword) {
-                        throw abort("unexpected-token", p.start, p.end)
+                    val pname = when (p) {
+                        is JsToken.Identifier -> p.value
+                        is JsToken.Keyword -> p.value
+                        else -> throw abort("unexpected-token", p.start, p.end)
                     }
-                    callee = JsExpr.Member(callee.start, p.end, callee, false, p.value, null)
+                    callee = JsExpr.Member(callee.start, p.end, callee, false, pname, null)
                 } else if (t is JsToken.Punctuator && t.value == "[") {
                     next()
                     val idx = parseExpr()
