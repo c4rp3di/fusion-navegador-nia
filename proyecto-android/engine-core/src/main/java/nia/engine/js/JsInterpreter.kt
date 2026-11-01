@@ -64,6 +64,7 @@ object JsInterpreter {
             is JsObj -> o.props
             is JsFun -> o.props
             is JsClass -> o.props
+            is JsNative -> o.props
             else -> null
         }
     }
@@ -261,6 +262,7 @@ object JsInterpreter {
             is JsNum -> "number"
             is JsStr -> "string"
             is JsRegExp -> "object"
+            is JsObj -> "object"
             else -> "function"
         }
     }
@@ -351,6 +353,8 @@ object JsInterpreter {
 
     private fun callFunction(f: JsValue, thisArg: JsValue, args: List<JsValue>): JsValue {
         if (f is JsNative) {
+            val c = f.call
+            if (c != null) return c(args, thisArg)
             val msg = if (args.isNotEmpty()) JsRuntime.toStringJs(args[0]) else ""
             return JsRuntime.makeErrorObj("Error", msg)
         }
@@ -1013,6 +1017,7 @@ object JsInterpreter {
         genv.declare("NaN", JsNum(Double.NaN))
         genv.declare("Infinity", JsNum(Double.POSITIVE_INFINITY))
         genv.declare("Error", JsNative("Error"))
+        JsBuiltins.install(genv)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         try {

@@ -58,7 +58,7 @@ class JsClass(
 ) : JsValue()
 
 /** Builtin nativo: solo el constructor Error en v1. */
-class JsNative(val name: String) : JsValue()
+class JsNative(val name: String, val call: ((List<JsValue>, JsValue) -> JsValue)? = null, val props: LinkedHashMap<String, JsProp> = LinkedHashMap()) : JsValue()
 
 /**
  * Valor lanzado. WritableStackTrace desactivado: los throws internos son

@@ -749,4 +749,397 @@ class JsInterpreterTest {
     fun asignacionValor() {
         assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate("var x = 5; x = x + 1;")))
     }
+
+    // ---- Builtins v1 (T020): espejo del oraculo ECMAScript ----
+
+    @Test
+    fun mathAbs() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.abs(-5);")))
+    }
+
+    @Test
+    fun mathAbsString() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.abs('-3');")))
+    }
+
+    @Test
+    fun mathCeil() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.ceil(4.2);")))
+    }
+
+    @Test
+    fun mathFloor() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.floor(4.8);")))
+    }
+
+    @Test
+    fun mathRound() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.round(4.5);")))
+    }
+
+    @Test
+    fun mathRoundNeg() {
+        assertEquals("-4", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.round(-4.5);")))
+    }
+
+    @Test
+    fun mathTrunc() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.trunc(4.9);")))
+    }
+
+    @Test
+    fun mathTruncNeg() {
+        assertEquals("-4", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.trunc(-4.9);")))
+    }
+
+    @Test
+    fun mathSign() {
+        assertEquals("-1", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.sign(-3);")))
+    }
+
+    @Test
+    fun mathSignCero() {
+        assertEquals("0", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.sign(0);")))
+    }
+
+    @Test
+    fun mathSqrt() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.sqrt(16);")))
+    }
+
+    @Test
+    fun mathPow() {
+        assertEquals("1024", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.pow(2, 10);")))
+    }
+
+    @Test
+    fun mathMin() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.min(3, 1, 2);")))
+    }
+
+    @Test
+    fun mathMax() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.max(3, 1, 2);")))
+    }
+
+    @Test
+    fun mathPi() {
+        assertEquals("3.141592653589793", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.PI;")))
+    }
+
+    @Test
+    fun mathE() {
+        assertEquals("2.718281828459045", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.E;")))
+    }
+
+    @Test
+    fun mathLog() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.log(Math.E);")))
+    }
+
+    @Test
+    fun mathLog2() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.log2(8);")))
+    }
+
+    @Test
+    fun mathLog10() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.log10(1000);")))
+    }
+
+    @Test
+    fun mathExp() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.exp(0);")))
+    }
+
+    @Test
+    fun mathRandomRango() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Math.random() >= 0 && Math.random() < 1;")))
+    }
+
+    @Test
+    fun numberIsInteger() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.isInteger(5);")))
+    }
+
+    @Test
+    fun numberIsIntegerFalso() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.isInteger(5.5);")))
+    }
+
+    @Test
+    fun numberIsFiniteInfinito() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.isFinite(1 / 0);")))
+    }
+
+    @Test
+    fun numberIsFiniteNum() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.isFinite(2.5);")))
+    }
+
+    @Test
+    fun numberIsNaN() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.isNaN(NaN);")))
+    }
+
+    @Test
+    fun numberIsNaNDivision() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.isNaN(0 / 0);")))
+    }
+
+    @Test
+    fun numberParseIntSufijo() {
+        assertEquals("42", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.parseInt('42px');")))
+    }
+
+    @Test
+    fun numberParseFloat() {
+        assertEquals("3.5", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.parseFloat('3.5x');")))
+    }
+
+    @Test
+    fun numberEpsilon() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.EPSILON > 0;")))
+    }
+
+    @Test
+    fun numberMaxSafe() {
+        assertEquals("9007199254740991", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number.MAX_SAFE_INTEGER;")))
+    }
+
+    @Test
+    fun parseIntSimple() {
+        assertEquals("42", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseInt('42');")))
+    }
+
+    @Test
+    fun parseIntHex() {
+        assertEquals("31", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseInt('0x1F');")))
+    }
+
+    @Test
+    fun parseIntRadix() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseInt('101', 2);")))
+    }
+
+    @Test
+    fun parseIntRadix8() {
+        assertEquals("7", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseInt('7', 8);")))
+    }
+
+    @Test
+    fun parseIntInvalido() {
+        assertEquals("NaN", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseInt('zz');")))
+    }
+
+    @Test
+    fun parseFloatExp() {
+        assertEquals("250", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseFloat('2.5e2');")))
+    }
+
+    @Test
+    fun parseFloatPunto() {
+        assertEquals("0.5", JsInterpreter.dumpResult(JsInterpreter.evaluate("parseFloat('.5');")))
+    }
+
+    @Test
+    fun isNaNString() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("isNaN('x');")))
+    }
+
+    @Test
+    fun isNaNNumero() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("isNaN('3');")))
+    }
+
+    @Test
+    fun isFiniteString() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("isFinite('3');")))
+    }
+
+    @Test
+    fun isFiniteInfinito() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("isFinite(1 / 0);")))
+    }
+
+    @Test
+    fun stringNumero() {
+        assertEquals("\"42\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("String(42);")))
+    }
+
+    @Test
+    fun stringBoolean() {
+        assertEquals("\"true\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("String(true);")))
+    }
+
+    @Test
+    fun stringNulo() {
+        assertEquals("\"null\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("String(null);")))
+    }
+
+    @Test
+    fun stringIndefinido() {
+        assertEquals("\"undefined\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("String(undefined);")))
+    }
+
+    @Test
+    fun stringArray() {
+        assertEquals("\"1,2\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("String([1, 2]);")))
+    }
+
+    @Test
+    fun numeroDeString() {
+        assertEquals("12", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number('12');")))
+    }
+
+    @Test
+    fun numeroVacio() {
+        assertEquals("0", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number('');")))
+    }
+
+    @Test
+    fun numeroInvalido() {
+        assertEquals("NaN", JsInterpreter.dumpResult(JsInterpreter.evaluate("Number('x');")))
+    }
+
+    @Test
+    fun booleanCero() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("Boolean(0);")))
+    }
+
+    @Test
+    fun booleanStringVacio() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("Boolean('');")))
+    }
+
+    @Test
+    fun booleanObjeto() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Boolean({});")))
+    }
+
+    @Test
+    fun objectKeys() {
+        assertEquals("(arr \"a\" \"b\")", JsInterpreter.dumpResult(JsInterpreter.evaluate("Object.keys({a: 1, b: 2});")))
+    }
+
+    @Test
+    fun objectKeysVacio() {
+        assertEquals("(arr)", JsInterpreter.dumpResult(JsInterpreter.evaluate("Object.keys({});")))
+    }
+
+    @Test
+    fun objectKeysArray() {
+        assertEquals("(arr \"0\" \"1\")", JsInterpreter.dumpResult(JsInterpreter.evaluate("Object.keys([10, 20]);")))
+    }
+
+    @Test
+    fun objectKeysAccesor() {
+        assertEquals("(arr \"a\")", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {get a() { return 1; }}; Object.keys(o);")))
+    }
+
+    @Test
+    fun arrayIsArray() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("Array.isArray([1]);")))
+    }
+
+    @Test
+    fun arrayIsArrayFalso() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("Array.isArray('no');")))
+    }
+
+    @Test
+    fun arrayIsArrayObjeto() {
+        assertEquals("false", JsInterpreter.dumpResult(JsInterpreter.evaluate("Array.isArray({});")))
+    }
+
+    @Test
+    fun jsonStrObjeto() {
+        assertEquals("\"{\\\"a\\\":1}\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify({a: 1});")))
+    }
+
+    @Test
+    fun jsonStrArray() {
+        assertEquals("\"[1,\\\"x\\\",null,true]\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify([1, 'x', null, true]);")))
+    }
+
+    @Test
+    fun jsonStrString() {
+        assertEquals("\"\\\"hola\\\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify('hola');")))
+    }
+
+    @Test
+    fun jsonStrNumero() {
+        assertEquals("\"42\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify(42);")))
+    }
+
+    @Test
+    fun jsonStrDecimal() {
+        assertEquals("\"0.5\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify(0.5);")))
+    }
+
+    @Test
+    fun jsonStrIndefinido() {
+        assertEquals("undefined", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify(undefined);")))
+    }
+
+    @Test
+    fun jsonStrFuncion() {
+        assertEquals("\"{}\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify({f: function () {}});")))
+    }
+
+    @Test
+    fun jsonStrOmiteIndefinido() {
+        assertEquals("\"{\\\"b\\\":1}\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify({a: undefined, b: 1});")))
+    }
+
+    @Test
+    fun jsonStrArrayIndefinido() {
+        assertEquals("\"[null]\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify([undefined]);")))
+    }
+
+    @Test
+    fun jsonStrAnidado() {
+        assertEquals("\"{\\\"n\\\":{\\\"x\\\":[1,{\\\"y\\\":null}]}}\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify({n: {x: [1, {y: null}]}});")))
+    }
+
+    @Test
+    fun jsonStrEscapes() {
+        assertEquals("\"{\\\"s\\\":\\\"a\\\\\\\"b\\\"}\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.stringify({s: 'a\"b'});")))
+    }
+
+    @Test
+    fun jsonParseObjeto() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.parse('{\"a\": 1}').a;")))
+    }
+
+    @Test
+    fun jsonParseArray() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.parse('[1, 2]')[1];")))
+    }
+
+    @Test
+    fun jsonParseString() {
+        assertEquals("\"x\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.parse('\"x\"');")))
+    }
+
+    @Test
+    fun jsonParseTrue() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.parse('true');")))
+    }
+
+    @Test
+    fun jsonParseNull() {
+        assertEquals("null", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.parse('null');")))
+    }
+
+    @Test
+    fun jsonParseAnidado() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("JSON.parse('{\"a\": {\"b\": [1, 2]}}').a.b.length;")))
+    }
+
+    @Test
+    fun jsonParseErrorName() {
+        assertEquals("\"SyntaxError\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("try { JSON.parse('{bad}'); } catch (e) { e.name; }")))
+    }
+
 }
