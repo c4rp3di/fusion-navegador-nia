@@ -1,5 +1,7 @@
 package nia.engine.js
 
+import kotlin.math.pow
+
 /**
  * Builtins JS v1 (T020): Math, Number, globales de conversion,
  * Object.keys, Array.isArray y JSON.parse/stringify (subconjunto).
@@ -399,7 +401,7 @@ object JsBuiltins {
         })
         put(math, "sqrt", fn("sqrt") { args, _ -> d(kotlin.math.sqrt(JsRuntime.toNumber(a0(args)))) })
         put(math, "pow", fn("pow") { args, _ ->
-            d(kotlin.math.pow(JsRuntime.toNumber(a0(args)), JsRuntime.toNumber(a1(args))))
+            d(JsRuntime.toNumber(a0(args)).pow(JsRuntime.toNumber(a1(args))))
         })
         put(math, "min", fn("min") { args, _ -> mathMinMax(args, true) })
         put(math, "max", fn("max") { args, _ -> mathMinMax(args, false) })
@@ -462,7 +464,7 @@ object JsBuiltins {
             if (args.size == 1 && args[0] is JsNum) {
                 val n = (args[0] as JsNum).value
                 if (n < 0 || n != kotlin.math.floor(n)) {
-                    return@JsNative JsRuntime.throwNative("RangeError", "Invalid array length")
+                    throw JsRuntime.throwNative("RangeError", "Invalid array length")
                 }
                 for (j in 0 until n.toInt()) a.elems.add(JsUndefined)
             } else {
