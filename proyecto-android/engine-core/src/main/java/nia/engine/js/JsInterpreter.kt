@@ -20,7 +20,7 @@ object JsInterpreter {
 
     private enum class CType { NORMAL, BREAK, CONTINUE, RETURN }
 
-    private class Completion(val type: CType, val value: JsValue, val label: String?)
+    private class Completion(val type: CType, val value: JsValue?, val label: String?)
 
     private fun rootEnv(e: Env): Env {
         var x: Env? = e
@@ -32,7 +32,7 @@ object JsInterpreter {
         return e
     }
 
-    private fun normal(): Completion = Completion(CType.NORMAL, JsUndefined, null)
+    private fun normal(): Completion = Completion(CType.NORMAL, null, null)
 
     private fun makeFun(
         name: String?, params: List<Param>, body: JsStmt.Block?, bodyExpr: JsExpr?,
@@ -380,7 +380,7 @@ object JsInterpreter {
         if (b == null) return JsUndefined
         hoist(b.statements, env)
         val c = runBlockStatements(b.statements, env, emptyList())
-        if (c.type == CType.RETURN) return c.value
+        if (c.type == CType.RETURN) return c.value ?: JsUndefined
         return JsUndefined
     }
 
@@ -473,11 +473,13 @@ object JsInterpreter {
     // ---- Sentencias ----
 
     private fun runBlockStatements(stmts: List<JsStmt>, env: Env, labels: List<String>): Completion {
+        var last: JsValue? = null
         for (s in stmts) {
             val c = runStatement(s, env, labels)
             if (c.type != CType.NORMAL) return c
+            if (c.value != null) last = c.value
         }
-        return normal()
+        return Completion(CType.NORMAL, last, null)
     }
 
     private fun runStatement(s: JsStmt, env: Env, labels: List<String>): Completion {
@@ -657,17 +659,19 @@ object JsInterpreter {
                 }
                 if (start == -1) start = defaultIx
                 if (start == -1) return normal()
+                var lastV: JsValue? = null
                 for (j in start until s.cases.size) {
                     for (st in s.cases[j].statements) {
                         val c = runStatement(st, senv, labels)
                         if (c.type == CType.BREAK) {
-                            if (c.label == null) return normal()
+                            if (c.label == null) return Completion(CType.NORMAL, lastV, null)
                             return c
                         }
                         if (c.type != CType.NORMAL) return c
+                        if (c.value != null) lastV = c.value
                     }
                 }
-                return normal()
+                return Completion(CType.NORMAL, lastV, null)
             }
             is JsStmt.ExprStmt -> return Completion(CType.NORMAL, evalExpr(s.expr, env), null)
             is JsStmt.Labeled -> {
@@ -1025,7 +1029,7 @@ object JsInterpreter {
             for (s in parse.program.statements) {
                 val c = runStatement(s, genv, emptyList())
                 if (c.type != CType.NORMAL) break
-                if (s is JsStmt.ExprStmt) last = c.value
+                if (c.value != null) last = c.value
             }
         } catch (ex: Exception) {
             if (ex is JsThrown) thrown = ex.value else throw ex
