@@ -99,7 +99,6 @@ object JsInterpreter {
                 if (six >= 0 && six < o.value.length) return JsStr(o.value[six].toString())
                 return JsUndefined
             }
-            return JsUndefined
         }
         if (o is JsFun && key == "prototype") return getOrCreatePrototype(o)
         if (o is JsObj && o.isArr) {
