@@ -1,8 +1,11 @@
 package nia.engine.js
 
+import nia.engine.css.CssCascade
+import nia.engine.css.CssComplexSelector
 import nia.engine.dom.DomDocument
 import nia.engine.dom.DomException
 import nia.engine.dom.DomHandle
+import nia.engine.html.DomNode
 
 /**
  * Bindings DOM + consola (T022 v1): puente entre el interprete ECMAScript
@@ -14,10 +17,13 @@ import nia.engine.dom.DomHandle
  * (primitivos con ToString, objetos/arrays con el dump canonico) para que
  * la consola sea observable y testable sin UI. Los DomException se
  * reportan a JS como TypeError con el codigo DOM como message.
- * Exclusiones v1: sin querySelector (necesita CssCascade), sin textContent
- * de Element, sin accessors sobre nodos (JsProp.Accessor exige JsFun del
- * AST), sin captura/burbujeo (T024) y document.body es una referencia
- * fija al body del parseo.
+ * T024 v1: captura/burbujeo por el arbol (addEventListener acepta un
+ * tercer argumento useCapture; dispatchEvent recorre los ancestros en
+ * captura de raiz a padre y burbujea de padre a raiz solo si ev.bubbles;
+ * stopPropagation corta el recorrido) y querySelector/querySelectorAll en
+ * document y nodos con los selectores de CssCascade. Exclusiones: sin
+ * textContent de Element, sin accessors sobre nodos, sin
+ * stopImmediatePropagation y document.body fijo al body del parseo.
  */
 object JsDomBindings {
 
@@ -58,6 +64,7 @@ object JsDomBindings {
 
         val byNode = HashMap<Int, JsObj>()
         val handles = HashMap<JsObj, DomHandle>()
+        val captureListeners = HashMap<Int, HashMap<String, MutableList<JsValue>>>()
 
         fun wrap(h: DomHandle): JsObj {
             val known = byNode[h.nodeId]
@@ -109,6 +116,47 @@ object JsDomBindings {
         fun childrenArray(h: DomHandle): JsObj {
             val arr = JsRuntime.newArr()
             for (k in childrenOrEmpty(h)) arr.elems.add(wrap(k))
+            return arr
+        }
+
+        /** Ancestros de h en orden padre -> raiz (excluye al propio nodo). */
+        fun ancestorsOf(h: DomHandle): List<DomHandle> {
+            val out = ArrayList<DomHandle>()
+            var cur: DomHandle? = domOp { doc.parentOf(h) }
+            while (true) {
+                val c: DomHandle = cur ?: break
+                out.add(c)
+                cur = domOp { doc.parentOf(c) }
+            }
+            return out
+        }
+
+        private fun selectorListOrThrow(sel: String): List<CssComplexSelector> {
+            val sels = CssCascade.parseSelectorList(sel)
+            if (sels == null) {
+                throw JsRuntime.throwNative("TypeError", "invalid-selector")
+            }
+            return sels
+        }
+
+        fun queryHandles(from: DomHandle, sel: String): List<DomHandle> {
+            val sels = selectorListOrThrow(sel)
+            val parents = CssCascade.parentMap(domOp { doc.nodeOf(doc.rootHandle()) })
+            val out = ArrayList<DomHandle>()
+            fun go(h: DomHandle) {
+                val node = domOp { doc.nodeOf(h) }
+                if (node is DomNode.Element && CssCascade.matchesAny(node, sels, parents)) {
+                    out.add(h)
+                }
+                for (k in childrenOrEmpty(h)) go(k)
+            }
+            go(from)
+            return out
+        }
+
+        fun queryArray(from: DomHandle, sel: String): JsObj {
+            val arr = JsRuntime.newArr()
+            for (h in queryHandles(from, sel)) arr.elems.add(wrap(h))
             return arr
         }
 
@@ -177,14 +225,49 @@ object JsDomBindings {
                 }
                 childrenArray(h)
             })
+            w.props["querySelector"] = JsProp.Value(JsBuiltins.fn("querySelector") { args, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "querySelector exige un nodo del documento")
+                }
+                val sel = strArg(JsBuiltins.a0(args))
+                val found = queryHandles(h, sel)
+                if (found.isEmpty()) return@fn JsNull
+                wrap(found[0])
+            })
+            w.props["querySelectorAll"] = JsProp.Value(JsBuiltins.fn("querySelectorAll") { args, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "querySelectorAll exige un nodo del documento")
+                }
+                val sel = strArg(JsBuiltins.a0(args))
+                queryArray(h, sel)
+            })
+
             w.props["addEventListener"] = JsProp.Value(JsBuiltins.fn("addEventListener") { args, thiz ->
                 val target = thiz as? JsObj
                 if (target != null) {
+                    val type = strArg(JsBuiltins.a0(args))
+                    val cb = JsBuiltins.a1(args)
+                    val capV = if (args.size > 2) args[2] else JsUndefined
+                    val useCap = capV is JsBool && capV.value
+                    val h = handleOf(target)
+                    if (useCap) {
+                        if (h != null) {
+                            val byType = captureListeners[h.nodeId] ?: HashMap<String, MutableList<JsValue>>()
+                            captureListeners[h.nodeId] = byType
+                            val cl = byType[type] ?: mutableListOf()
+                            byType[type] = cl
+                            for (e in cl) {
+                                if (JsBuiltins.same(e, cb)) return@fn JsUndefined
+                            }
+                            cl.add(cb)
+                        }
+                        return@fn JsUndefined
+                    }
                     val lEntry = target.props["__listeners"]
                     val map = (lEntry as? JsProp.Value)?.v as? JsObj
                     if (map != null) {
-                        val type = strArg(JsBuiltins.a0(args))
-                        val cb = JsBuiltins.a1(args)
                         val listEntry = map.props[type]
                         var list = (listEntry as? JsProp.Value)?.v as? JsObj
                         if (list == null) {
@@ -199,14 +282,15 @@ object JsDomBindings {
                 }
                 JsUndefined
             })
+
             w.props["removeEventListener"] = JsProp.Value(JsBuiltins.fn("removeEventListener") { args, thiz ->
                 val target = thiz as? JsObj
                 if (target != null) {
+                    val type = strArg(JsBuiltins.a0(args))
+                    val cb = JsBuiltins.a1(args)
                     val lEntry = target.props["__listeners"]
                     val map = (lEntry as? JsProp.Value)?.v as? JsObj
                     if (map != null) {
-                        val type = strArg(JsBuiltins.a0(args))
-                        val cb = JsBuiltins.a1(args)
                         val listEntry = map.props[type]
                         val list = (listEntry as? JsProp.Value)?.v as? JsObj
                         if (list != null) {
@@ -220,31 +304,92 @@ object JsDomBindings {
                             }
                         }
                     }
-                }
-                JsUndefined
-            })
-            w.props["dispatchEvent"] = JsProp.Value(JsBuiltins.fn("dispatchEvent") { args, thiz ->
-                val target = thiz as? JsObj
-                val ev = JsBuiltins.a0(args)
-                if (target == null || ev !is JsObj) return@fn JsBool(false)
-                ev.props["target"] = JsProp.Value(target)
-                ev.props["currentTarget"] = JsProp.Value(target)
-                val lEntry = target.props["__listeners"]
-                val map = (lEntry as? JsProp.Value)?.v as? JsObj
-                if (map != null) {
-                    val typeEntry = ev.props["type"]
-                    val typeV = (typeEntry as? JsProp.Value)?.v
-                    if (typeV != null) {
-                        val listEntry = map.props[strArg(typeV)]
-                        val list = (listEntry as? JsProp.Value)?.v as? JsObj
-                        if (list != null) {
-                            val snapshot = ArrayList<JsValue>(list.elems)
-                            for (cb in snapshot) {
-                                JsInterpreter.callFunction(cb, target, listOf(ev))
+                    val h = handleOf(target)
+                    if (h != null) {
+                        val byType = captureListeners[h.nodeId]
+                        if (byType != null) {
+                            val cl = byType[type]
+                            if (cl != null) {
+                                var j2 = 0
+                                while (j2 < cl.size) {
+                                    if (JsBuiltins.same(cl[j2], cb)) {
+                                        cl.removeAt(j2)
+                                        break
+                                    }
+                                    j2++
+                                }
                             }
                         }
                     }
                 }
+                JsUndefined
+            })
+
+            w.props["dispatchEvent"] = JsProp.Value(JsBuiltins.fn("dispatchEvent") { args, thiz ->
+                val target = thiz as? JsObj
+                val evV = JsBuiltins.a0(args)
+                if (target == null || evV !is JsObj) return@fn JsBool(false)
+                val ev = evV
+                ev.props["target"] = JsProp.Value(target)
+                val typeEntry = ev.props["type"]
+                val typeV = (typeEntry as? JsProp.Value)?.v
+                if (typeV == null) return@fn JsBool(false)
+                val type = strArg(typeV)
+                val targetH = handleOf(target)
+                if (targetH == null) return@fn JsBool(false)
+                val bEntry = ev.props["bubbles"]
+                val bVal = (bEntry as? JsProp.Value)?.v
+                val bubbles = bVal is JsBool && bVal.value
+                ev.props["stopPropagation"] = JsProp.Value(JsBuiltins.fn("stopPropagation") { _, _ ->
+                    ev.props["__stopped"] = JsProp.Value(JsBool(true))
+                    JsUndefined
+                })
+                fun stopped(): Boolean {
+                    val sEntry = ev.props["__stopped"]
+                    val sVal = (sEntry as? JsProp.Value)?.v
+                    return sVal is JsBool && sVal.value
+                }
+                fun fire(list: List<JsValue>, current: JsObj) {
+                    for (cb in list) {
+                        ev.props["currentTarget"] = JsProp.Value(current)
+                        JsInterpreter.callFunction(cb, current, listOf(ev))
+                    }
+                }
+                val chain = ancestorsOf(targetH)
+                for (i in chain.indices.reversed()) {
+                    if (stopped()) break
+                    val ancH = chain[i]
+                    val anc = wrap(ancH)
+                    val cl = captureListeners[ancH.nodeId]?.get(type)
+                    if (cl != null) fire(ArrayList(cl), anc)
+                }
+                if (!stopped()) {
+                    val lEntry = target.props["__listeners"]
+                    val map = (lEntry as? JsProp.Value)?.v as? JsObj
+                    if (map != null) {
+                        val listEntry = map.props[type]
+                        val list = (listEntry as? JsProp.Value)?.v as? JsObj
+                        if (list != null) {
+                            fire(ArrayList(list.elems), target)
+                        }
+                    }
+                }
+                if (bubbles && !stopped()) {
+                    for (ancH in chain) {
+                        if (stopped()) break
+                        val anc = wrap(ancH)
+                        val lEntry = anc.props["__listeners"]
+                        val map = (lEntry as? JsProp.Value)?.v as? JsObj
+                        if (map != null) {
+                            val listEntry = map.props[type]
+                            val list = (listEntry as? JsProp.Value)?.v as? JsObj
+                            if (list != null) {
+                                fire(ArrayList(list.elems), anc)
+                            }
+                        }
+                    }
+                }
+                ev.props["currentTarget"] = JsProp.Value(target)
                 val cEntry = ev.props["cancelable"]
                 val cVal = (cEntry as? JsProp.Value)?.v
                 val can = cVal is JsBool && cVal.value
@@ -264,6 +409,15 @@ object JsDomBindings {
             val id = JsRuntime.toStringJs(JsBuiltins.a0(args))
             val h = s.findById(doc.rootHandle(), id)
             s.wrapOrNull(h)
+        })
+        document.props["querySelector"] = JsProp.Value(JsBuiltins.fn("querySelector") { args, _ ->
+            val sel = JsRuntime.toStringJs(JsBuiltins.a0(args))
+            val found = s.queryHandles(doc.rootHandle(), sel)
+            if (found.isEmpty()) JsNull else s.wrap(found[0])
+        })
+        document.props["querySelectorAll"] = JsProp.Value(JsBuiltins.fn("querySelectorAll") { args, _ ->
+            val sel = JsRuntime.toStringJs(JsBuiltins.a0(args))
+            s.queryArray(doc.rootHandle(), sel)
         })
         document.props["createElement"] = JsProp.Value(JsBuiltins.fn("createElement") { args, _ ->
             val name = JsRuntime.toStringJs(JsBuiltins.a0(args))

@@ -1,5 +1,6 @@
 package nia.engine.js
 
+import nia.engine.css.CssCascade
 import nia.engine.dom.DomDocument
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,9 +11,11 @@ import kotlin.test.assertNotNull
  * document y console sobre un DomDocument real. Expectativas generadas
  * programaticamente desde la semantica del estandar DOM (getElementById,
  * mutaciones tipificadas, eventos con __listeners) y la consola formateada
- * (primitivos con ToString, objetos/arrays con el dump canonico); los tres
+ * (primitivos con ToString, objetos/arrays con el dump canonico); los
  * asserts finales verifican que las mutaciones de JS son visibles en el
- * documento Kotlin (revision incluida).
+ * documento Kotlin (revision incluida). T024 v1 anade captura/burbujeo
+ * por el arbol (fases captura/objetivo/burbuja con stopPropagation) y
+ * querySelector/querySelectorAll con los selectores de CssCascade.
  */
 class JsDomBindingsTest {
 
@@ -213,6 +216,132 @@ class JsDomBindingsTest {
     }
 
     @Test
+    fun domQuerySelectorId() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"saludo\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"#saludo\").getAttribute(\"id\");", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorTipo() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"saludo\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"p\").getAttribute(\"id\");", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorNull() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\".zzz\") === null;", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorHijo() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"saludo\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"body > p\").getAttribute(\"id\");", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorAtributo() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"saludo\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"[id]\").getAttribute(\"id\");", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorInvalido() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"invalid-selector\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("try { document.querySelector(\"p >\"); } catch (e) { e.message; }", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorAllLongitud() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelectorAll(\"p\").length;", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorAllComas() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelectorAll(\"p, div\").length;", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorAllNth() {
+        val doc = DomDocument.parse("<html><body><p>uno</p><p>dos</p><p>tres</p></body></html>")
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelectorAll(\"p:nth-child(2)\").length;", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorEnNodo() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"a\").querySelectorAll(\"p\").length;", doc)))
+    }
+
+    @Test
+    fun domQuerySelectorCombinadoresDesdeNodo() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"a\").querySelector(\"body p\") !== null;", doc)))
+    }
+
+    @Test
+    fun domBurbujeoOrden() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"pd\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", function() { o = o + \"d\"; }); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\", {bubbles: true})); o;", doc)))
+    }
+
+    @Test
+    fun domSinBurbujeo() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"p\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", function() { o = o + \"d\"; }); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
+    fun domCapturaOrden() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"dp\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", function() { o = o + \"d\"; }, true); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
+    fun domCapturaConBurbujeo() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"cpb\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", function() { o = o + \"c\"; }, true); d.addEventListener(\"e\", function() { o = o + \"b\"; }); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\", {bubbles: true})); o;", doc)))
+    }
+
+    @Test
+    fun domStopPropagation() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"p\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); p.addEventListener(\"e\", function(ev) { ev.stopPropagation(); o = o + \"p\"; }); d.addEventListener(\"e\", function() { o = o + \"d\"; }); p.dispatchEvent(new Event(\"e\", {bubbles: true})); o;", doc)))
+    }
+
+    @Test
+    fun domStopEnCaptura() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"B\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); document.body.addEventListener(\"e\", function(ev) { ev.stopPropagation(); o = o + \"B\"; }, true); d.addEventListener(\"e\", function() { o = o + \"d\"; }); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\", {bubbles: true})); o;", doc)))
+    }
+
+    @Test
+    fun domCurrentTargetPorFase() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"ab\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", function(ev) { o = o + ev.currentTarget.getAttribute(\"id\"); }, true); p.addEventListener(\"e\", function(ev) { o = o + ev.currentTarget.getAttribute(\"id\"); }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
+    fun domRemoveEventListenerCaptura() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"p\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); function h() { o = o + \"d\"; } d.addEventListener(\"e\", h, true); d.removeEventListener(\"e\", h); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
+    fun domCapturaNoDuplicada() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var n = 0; function h() { n = n + 1; } var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", h, true); d.addEventListener(\"e\", h, true); p.dispatchEvent(new Event(\"e\")); n;", doc)))
+    }
+
+    @Test
+    fun domBurbujaSoloConFlag() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        assertEquals("\"p\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var o = \"\"; var p = document.getElementById(\"b\"); var d = document.getElementById(\"a\"); d.addEventListener(\"e\", function() { o = o + \"x\"; }); p.addEventListener(\"e\", function() { o = o + \"p\"; }); p.dispatchEvent(new Event(\"e\")); o;", doc)))
+    }
+
+    @Test
     fun domMutacionAtributo() {
         val doc = DomDocument.parse("<html><body><p id=\"q\">viejo</p></body></html>")
         JsInterpreter.evaluateWithDom("var p = document.getElementById(\"q\"); p.setAttribute(\"class\", \"nuevo\");", doc)
@@ -235,5 +364,22 @@ class JsDomBindingsTest {
         val before = doc.snapshot().revision
         JsInterpreter.evaluateWithDom("var d = document.createElement(\"div\"); document.body.appendChild(d);", doc)
         assertEquals(before + 1L, doc.snapshot().revision)
+    }
+
+    @Test
+    fun domParentOfKotlin() {
+        val doc = DomDocument.parse("<html><body><div id=\"a\"><p id=\"b\">hola</p></div></body></html>")
+        val p = assertNotNull(doc.findFirst("p"))
+        val parent = assertNotNull(doc.parentOf(p))
+        assertEquals("a", doc.attributeOf(parent, "id"))
+    }
+
+    @Test
+    fun domQueryAllKotlin() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        val sels = assertNotNull(CssCascade.parseSelectorList("p, .zzz"))
+        val parents = CssCascade.parentMap(doc.nodeOf(doc.rootHandle()))
+        val p = assertNotNull(doc.findFirst("p"))
+        assertEquals(true, CssCascade.matchesAny(doc.nodeOf(p), sels, parents))
     }
 }

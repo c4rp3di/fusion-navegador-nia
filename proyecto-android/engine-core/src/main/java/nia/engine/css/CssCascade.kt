@@ -127,6 +127,128 @@ object CssCascade {
         else -> emptyList()
     }
 
+    /** Mapa hijo -> padre de todo el arbol, para combinadores en consultas. */
+    fun parentMap(root: DomNode): Map<DomNode, DomNode> = buildParents(root)
+
+    private fun buildParents(root: DomNode): HashMap<DomNode, DomNode> {
+        val parents = HashMap<DomNode, DomNode>()
+        fun go(node: DomNode) {
+            for (c in childrenOf(node)) {
+                parents[c] = node
+                go(c)
+            }
+        }
+        go(root)
+        return parents
+    }
+
+    internal fun elementChildrenOf(node: DomNode): List<DomNode.Element> {
+        val out = mutableListOf<DomNode.Element>()
+        for (c in childrenOf(node)) if (c is DomNode.Element) out.add(c)
+        return out
+    }
+
+    private fun matchNth(nth: CssNth, idx: Int): Boolean {
+        val pos = idx + 1
+        if (nth.a == 0) return pos == nth.b
+        val d = pos - nth.b
+        return d % nth.a == 0 && d / nth.a >= 0
+    }
+
+    internal fun matchCompound(compound: CssCompoundSelector, node: DomNode, parents: Map<DomNode, DomNode>): Boolean {
+        if (node !is DomNode.Element) return false
+        for (s in compound.simples) {
+            when (s) {
+                is CssSimpleSelector.Universal -> {
+                }
+                is CssSimpleSelector.Type -> if (node.name.lowercase() != s.name.lowercase()) return false
+                is CssSimpleSelector.Id -> if (node.attributes["id"] != s.value) return false
+                is CssSimpleSelector.Cls -> {
+                    val cls = node.attributes["class"] ?: return false
+                    if (!splitWs(cls).contains(s.value)) return false
+                }
+                is CssSimpleSelector.Attr -> {
+                    val actual = node.attributes[s.name]
+                    when (s.op) {
+                        "" -> if (actual == null) return false
+                        "=" -> if (actual != s.value) return false
+                        "~=" -> {
+                            if (actual == null) return false
+                            if (!splitWs(actual).contains(s.value)) return false
+                        }
+                    }
+                }
+                is CssSimpleSelector.Pseudo -> {
+                    val parent = parents[node] ?: return false
+                    val els = elementChildrenOf(parent)
+                    val idx = els.indexOf(node)
+                    if (idx < 0) return false
+                    when (s.name) {
+                        "first-child" -> if (idx != 0) return false
+                        "last-child" -> if (idx != els.size - 1) return false
+                        "only-child" -> if (els.size != 1) return false
+                        "nth-child" -> {
+                            val nth = s.nth ?: return false
+                            if (!matchNth(nth, idx)) return false
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    internal fun matchAt(selector: CssComplexSelector, idx: Int, node: DomNode, parents: Map<DomNode, DomNode>): Boolean {
+        if (!matchCompound(selector.compounds[idx], node, parents)) return false
+        if (idx == 0) return true
+        val comb = selector.combinators[idx - 1]
+        if (comb == "child") {
+            val p = parents[node] ?: return false
+            return matchAt(selector, idx - 1, p, parents)
+        }
+        if (comb == "adj") {
+            val parent = parents[node] ?: return false
+            val els = elementChildrenOf(parent)
+            val k = els.indexOf(node)
+            if (k <= 0) return false
+            return matchAt(selector, idx - 1, els[k - 1], parents)
+        }
+        if (comb == "gen") {
+            val parent = parents[node] ?: return false
+            val els = elementChildrenOf(parent)
+            val k = els.indexOf(node)
+            if (k <= 0) return false
+            for (j in 0 until k) {
+                if (matchAt(selector, idx - 1, els[j], parents)) return true
+            }
+            return false
+        }
+        var p = parents[node]
+        while (p != null) {
+            if (matchAt(selector, idx - 1, p, parents)) return true
+            p = parents[p]
+        }
+        return false
+    }
+
+    /**
+     * Parsea una lista de selectores separada por comas (T024). Devuelve
+     * null si el texto es invalido o vacio.
+     */
+    fun parseSelectorList(text: String): List<CssComplexSelector>? {
+        val sheet = CssStylesheet.parse(text.trim() + " { }")
+        if (sheet.errors.isNotEmpty()) return null
+        return sheet.rules.firstOrNull()?.selectors ?: emptyList()
+    }
+
+    /** True si node cumple cualquiera de los selectores (parents del arbol). */
+    fun matchesAny(node: DomNode, selectors: List<CssComplexSelector>, parents: Map<DomNode, DomNode>): Boolean {
+        for (cx in selectors) {
+            if (matchAt(cx, cx.compounds.size - 1, node, parents)) return true
+        }
+        return false
+    }
+
     private fun expandDecl(k: String, v: String): List<Pair<String, String>> {
         if (k == "margin" || k == "padding" || k == "border-width") {
             val parts = v.split(' ', '\t', '\n', '\r', '\u000C').filter { it.isNotEmpty() }
@@ -149,103 +271,7 @@ object CssCascade {
     }
 
     fun compute(root: DomNode, stylesheet: CssStylesheet): CssComputedStyle {
-        val parents = HashMap<DomNode, DomNode>()
-        fun buildParents(node: DomNode) {
-            for (c in childrenOf(node)) {
-                parents[c] = node
-                buildParents(c)
-            }
-        }
-        buildParents(root)
-
-        fun elementChildrenOf(node: DomNode): List<DomNode.Element> {
-            val out = mutableListOf<DomNode.Element>()
-            for (c in childrenOf(node)) if (c is DomNode.Element) out.add(c)
-            return out
-        }
-
-        fun matchNth(nth: CssNth, idx: Int): Boolean {
-            val pos = idx + 1
-            if (nth.a == 0) return pos == nth.b
-            val d = pos - nth.b
-            return d % nth.a == 0 && d / nth.a >= 0
-        }
-
-        fun matchCompound(compound: CssCompoundSelector, node: DomNode): Boolean {
-            if (node !is DomNode.Element) return false
-            for (s in compound.simples) {
-                when (s) {
-                    is CssSimpleSelector.Universal -> {
-                    }
-                    is CssSimpleSelector.Type -> if (node.name.lowercase() != s.name.lowercase()) return false
-                    is CssSimpleSelector.Id -> if (node.attributes["id"] != s.value) return false
-                    is CssSimpleSelector.Cls -> {
-                        val cls = node.attributes["class"] ?: return false
-                        if (!splitWs(cls).contains(s.value)) return false
-                    }
-                    is CssSimpleSelector.Attr -> {
-                        val actual = node.attributes[s.name]
-                        when (s.op) {
-                            "" -> if (actual == null) return false
-                            "=" -> if (actual != s.value) return false
-                            "~=" -> {
-                                if (actual == null) return false
-                                if (!splitWs(actual).contains(s.value)) return false
-                            }
-                        }
-                    }
-                    is CssSimpleSelector.Pseudo -> {
-                        val parent = parents[node] ?: return false
-                        val els = elementChildrenOf(parent)
-                        val idx = els.indexOf(node)
-                        if (idx < 0) return false
-                        when (s.name) {
-                            "first-child" -> if (idx != 0) return false
-                            "last-child" -> if (idx != els.size - 1) return false
-                            "only-child" -> if (els.size != 1) return false
-                            "nth-child" -> {
-                                val nth = s.nth ?: return false
-                                if (!matchNth(nth, idx)) return false
-                            }
-                        }
-                    }
-                }
-            }
-            return true
-        }
-
-        fun matchAt(selector: CssComplexSelector, idx: Int, node: DomNode): Boolean {
-            if (!matchCompound(selector.compounds[idx], node)) return false
-            if (idx == 0) return true
-            val comb = selector.combinators[idx - 1]
-            if (comb == "child") {
-                val p = parents[node] ?: return false
-                return matchAt(selector, idx - 1, p)
-            }
-            if (comb == "adj") {
-                val parent = parents[node] ?: return false
-                val els = elementChildrenOf(parent)
-                val k = els.indexOf(node)
-                if (k <= 0) return false
-                return matchAt(selector, idx - 1, els[k - 1])
-            }
-            if (comb == "gen") {
-                val parent = parents[node] ?: return false
-                val els = elementChildrenOf(parent)
-                val k = els.indexOf(node)
-                if (k <= 0) return false
-                for (j in 0 until k) {
-                    if (matchAt(selector, idx - 1, els[j])) return true
-                }
-                return false
-            }
-            var p = parents[node]
-            while (p != null) {
-                if (matchAt(selector, idx - 1, p)) return true
-                p = parents[p]
-            }
-            return false
-        }
+        val parents = buildParents(root)
 
         var rootFs: Double? = null
 
@@ -327,7 +353,7 @@ object CssCascade {
                 for (r in stylesheet.rules) {
                     var best: CssSpecificity? = null
                     for (cx in r.selectors) {
-                        if (matchAt(cx, cx.compounds.size - 1, node)) {
+                        if (matchAt(cx, cx.compounds.size - 1, node, parents)) {
                             val sp = specificityOf(cx)
                             if (best == null || sp > best) best = sp
                         }

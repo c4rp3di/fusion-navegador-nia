@@ -223,6 +223,16 @@ class DomDocument private constructor(val documentId: String, private val root: 
         return node.attributes[name]
     }
 
+    /** Handle del padre del nodo, o null si es la raiz o esta detached. */
+    fun parentOf(handle: DomHandle): DomHandle? {
+        fresh(handle)
+        val pid = parentIds[handle.nodeId] ?: return null
+        return DomHandle(documentId, generation, pid)
+    }
+
+    /** DomNode vivo detras de un handle, para consultas de solo lectura. */
+    fun nodeOf(handle: DomHandle): DomNode = fresh(handle)
+
     private fun isValidAttrName(name: String): Boolean {
         if (name.isEmpty()) return false
         for (c in name) {
