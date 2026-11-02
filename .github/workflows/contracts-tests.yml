@@ -105,6 +105,8 @@ jobs:
             engine-core/src/test/java/nia/engine/inspector/InspectorTest.kt \
             engine-core/src/main/java/nia/engine/modules/ModuleRegistry.kt \
             engine-core/src/test/java/nia/engine/modules/ModuleRegistryTest.kt \
+            engine-core/src/main/java/nia/engine/devtools/DevToolsModel.kt \
+            engine-core/src/test/java/nia/engine/devtools/DevToolsModelTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/AndroidManifest.xml \

@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0037)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0038)
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
@@ -48,6 +48,8 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 
 - **R0037 (T009 v1, RES-0024)**: paquete declarativo/instalación en `:engine-core` (`nia/engine/modules`, `ModuleRegistry.kt`): los módulos se declaran con un manifiesto de líneas `clave = valor` (`id`, `version`, `entry`, `permissions`) y el registro valida TODO antes de instalar — un paquete malicioso se rechaza con `INVALID_INPUT` (clave desconocida o repetida, `id` fuera de `[a-z0-9.-]` o mayor de 64 caracteres, versión no numérica, `entry` absoluta o con `..`, permiso fuera del conjunto permitido `storage.read`/`network.fetch` — las operaciones de pestaña `tab.*` no son declarables —, permiso vacío o repetido, manifiesto mayor de 4096 caracteres, id duplicado) y `UNSUPPORTED` para versiones futuras. Instalar con un broker adjunta un contexto cuyas operaciones concedidas son exactamente los permisos declarados (el módulo solo hace lo concedido) y `uninstall` cierra ese contexto (los requests posteriores caen en `DENIED`). `ModuleRegistryTest` (24 tests); `Capabilities` declara `engine.modules` en PASS; el workflow pasa de 56 a 58 fuentes. Limitaciones v1: sin firma/hash del paquete (el contenido llega en fases posteriores), sin versiones múltiples del mismo id y sin eventos del registro.
 
+- **R0038 (T017 v1, RES-0025)**: panel DevTools sin UI Android en `:engine-core` (`nia/engine/devtools`, `DevToolsModel.kt`): sobre el DOM real (T013) y la cascada real (T014), expone el árbol del documento con nodeIds en pre-orden, el estilo computado de cada elemento (valores resueltos: herencia, shorthands, em/rem/%) y la **causa visible** de cada propiedad — qué regla ganó (selector descrito, especificidad y orden; empate → la última), valor heredado del padre (con su nodeId) o valor por defecto —. `matchingSelectors` lista todos los selectores que matchean un elemento y `recordSelection` graba la selección como evento del inspector (T008) con redacción de secretos en la ingesta. `DevToolsModelTest` (27 tests); `Capabilities` declara `engine.devtools` en PASS; el workflow pasa de 58 a 60 fuentes. Limitaciones v1: sin UI Android (siguiente versión), re-análisis por consulta sin caché, sin edición de estilos ni live-highlight, y las limitaciones heredadas de la cascada v2 (sin orígenes múltiples ni !important).
+
 Incluye:
 
 - **T002** — Módulo `:contracts` (Kotlin JVM puro): ids tipados,
@@ -63,7 +65,7 @@ Incluye:
 ```
 settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
-engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + async/await y generators (T018 v5) + broker/renderer/IPC (T006) + config con migración/recovery (T007) + inspector con redacción de secretos (T008) + módulos declarativos (T009) + tests)
+engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + async/await y generators (T018 v5) + broker/renderer/IPC (T006) + config con migración/recovery (T007) + inspector con redacción de secretos (T008) + módulos declarativos (T009) + panel DevTools (T017) + tests)
 app/                aplicación Android mínima
 docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)
