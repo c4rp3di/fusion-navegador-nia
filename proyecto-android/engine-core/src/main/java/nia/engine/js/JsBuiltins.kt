@@ -2,6 +2,10 @@ package nia.engine.js
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.util.Calendar
+import java.util.TimeZone
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
 import kotlin.math.pow
 
 /**
@@ -11,7 +15,11 @@ import kotlin.math.pow
  * mas Event (v2). Expectativas generadas contra el oraculo ECMAScript
  * (JS nativo; Event/EventTarget por semantica del estandar DOM),
  * nunca transcritas a mano.
- * Exclusiones: console (T022), Date/Promise/RegExp.exec, fracciones en
+ * T023 v1 anade Date (epoch ms) y RegExp (exec/test sobre java.util.regex);
+ * Promise vive en el interprete (necesita callFunction) con la cola de
+ * microtasks del runtime.
+ * Exclusiones: console (T022), Date sin TZ configurables ni toString local,
+ * Promise sin all/race/finally, RegExp sin sticky/unicode, fracciones en
  * Number.prototype.toString(radix) y metodos menos comunes.
  */
 object JsBuiltins {
@@ -48,6 +56,9 @@ object JsBuiltins {
     val protoNum: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
     val protoBool: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
     val protoFun: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+    val protoDate: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+    val protoReg: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
+    val protoPromise: JsObj = JsObj(LinkedHashMap(), protoObj, false, ArrayList())
 
     private fun str(s: String): JsValue = JsStr(s)
 
@@ -564,7 +575,11 @@ object JsBuiltins {
         installProtoStr()
         installProtoNum()
         installProtoBool()
+        installProtoDate()
+        installProtoReg()
         genv.declare("Event", JsNative("Event", construct = { args -> makeEvent(args) }))
+        genv.declare("Date", makeDateCtor())
+        genv.declare("RegExp", makeRegExpCtor())
     }
 
     // ---- Object.prototype ----
@@ -881,5 +896,262 @@ object JsBuiltins {
         })
         e.props["stopPropagation"] = JsProp.Value(fn("stopPropagation") { _, _ -> JsUndefined })
         return e
+    }
+
+    // ---- Date (T023 v1): epoch ms interno, getters UTC y locales, ISO ----
+
+    private fun dateMsOf(o: JsValue): Double {
+        val d = o as? JsObj
+        if (d != null) {
+            val e = d.props["__ms"]
+            val v = (e as? JsProp.Value)?.v
+            if (v is JsNum) return v.value
+        }
+        throw JsRuntime.throwNative("TypeError", "Date method called on incompatible receiver")
+    }
+
+    private fun utcCal(ms: Double): Calendar {
+        val c = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        c.timeInMillis = ms.toLong()
+        return c
+    }
+
+    private fun localCal(ms: Double): Calendar {
+        val c = Calendar.getInstance()
+        c.timeInMillis = ms.toLong()
+        return c
+    }
+
+    private fun calField(c: Calendar, f: Int): JsValue = JsNum(c.get(f).toDouble())
+
+    private fun isoOf(ms: Double): String {
+        val c = utcCal(ms)
+        val y = c.get(Calendar.YEAR)
+        val y4 = if (y < 0) "-" + String.format(java.util.Locale.ROOT, "%06d", -y) else String.format(java.util.Locale.ROOT, "%04d", y)
+        return y4 + "-" +
+            String.format(java.util.Locale.ROOT, "%02d", c.get(Calendar.MONTH) + 1) + "-" +
+            String.format(java.util.Locale.ROOT, "%02d", c.get(Calendar.DAY_OF_MONTH)) + "T" +
+            String.format(java.util.Locale.ROOT, "%02d", c.get(Calendar.HOUR_OF_DAY)) + ":" +
+            String.format(java.util.Locale.ROOT, "%02d", c.get(Calendar.MINUTE)) + ":" +
+            String.format(java.util.Locale.ROOT, "%02d", c.get(Calendar.SECOND)) + "." +
+            String.format(java.util.Locale.ROOT, "%03d", c.get(Calendar.MILLISECOND)) + "Z"
+    }
+
+    private val isoPat: Pattern = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})(?:T(\\d{2}):(\\d{2})(?::(\\d{2}))?(?:\\.(\\d{1,3}))?(Z)?)?")
+
+    /** Date.parse v1: ISO 8601 (solo fecha o con hora; sin Z se asume UTC); NaN si no parsea. */
+    internal fun parseIsoDate(s: String): Double {
+        val m = isoPat.matcher(s.trim())
+        if (!m.matches()) return Double.NaN
+        val hhG = m.group(4)
+        val c = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        if (hhG == null) {
+            c.set(m.group(1).toInt(), m.group(2).toInt() - 1, m.group(3).toInt(), 0, 0, 0)
+            c.set(Calendar.MILLISECOND, 0)
+            return c.timeInMillis.toDouble()
+        }
+        val ssG = m.group(6)
+        val msG = m.group(7)
+        var mss = 0
+        if (msG != null) {
+            var t = msG
+            while (t.length < 3) t += "0"
+            mss = t.toInt()
+        }
+        c.set(m.group(1).toInt(), m.group(2).toInt() - 1, m.group(3).toInt(), hhG.toInt(), m.group(5).toInt(), if (ssG == null) 0 else ssG.toInt())
+        c.set(Calendar.MILLISECOND, mss)
+        return c.timeInMillis.toDouble()
+    }
+
+    private fun dateUtc(args: List<JsValue>): Double {
+        val yy = Math.floor(JsRuntime.toNumber(a0(args))).toInt()
+        val mo = if (args.size > 1) Math.floor(JsRuntime.toNumber(args[1])).toInt() else 0
+        val dd = if (args.size > 2) Math.floor(JsRuntime.toNumber(args[2])).toInt() else 1
+        val hh = if (args.size > 3) Math.floor(JsRuntime.toNumber(args[3])).toInt() else 0
+        val mi = if (args.size > 4) Math.floor(JsRuntime.toNumber(args[4])).toInt() else 0
+        val ss = if (args.size > 5) Math.floor(JsRuntime.toNumber(args[5])).toInt() else 0
+        val mss = if (args.size > 6) Math.floor(JsRuntime.toNumber(args[6])).toInt() else 0
+        val c = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        c.set(yy, mo, dd, hh, mi, ss)
+        c.set(Calendar.MILLISECOND, mss)
+        return c.timeInMillis.toDouble()
+    }
+
+    private fun makeDate(args: List<JsValue>): JsObj {
+        var ms = System.currentTimeMillis().toDouble()
+        if (args.isNotEmpty()) {
+            if (args.size == 1) {
+                val a = args[0]
+                if (a is JsNum) {
+                    ms = a.value
+                } else if (a is JsObj) {
+                    val e = a.props["__ms"]
+                    val v = (e as? JsProp.Value)?.v
+                    if (v is JsNum) ms = v.value else ms = parseIsoDate(strOf(a))
+                } else {
+                    ms = parseIsoDate(strOf(a))
+                }
+            } else {
+                val yy = Math.floor(JsRuntime.toNumber(args[0])).toInt()
+                val mo = Math.floor(JsRuntime.toNumber(args[1])).toInt()
+                val dd = if (args.size > 2) Math.floor(JsRuntime.toNumber(args[2])).toInt() else 1
+                val hh = if (args.size > 3) Math.floor(JsRuntime.toNumber(args[3])).toInt() else 0
+                val mi = if (args.size > 4) Math.floor(JsRuntime.toNumber(args[4])).toInt() else 0
+                val ss = if (args.size > 5) Math.floor(JsRuntime.toNumber(args[5])).toInt() else 0
+                val mss = if (args.size > 6) Math.floor(JsRuntime.toNumber(args[6])).toInt() else 0
+                val c = Calendar.getInstance()
+                c.set(yy, mo, dd, hh, mi, ss)
+                c.set(Calendar.MILLISECOND, mss)
+                ms = c.timeInMillis.toDouble()
+            }
+        }
+        val o = JsRuntime.newObj()
+        o.proto = protoDate
+        o.props["__ms"] = JsProp.Value(JsNum(ms))
+        return o
+    }
+
+    private fun makeDateCtor(): JsNative {
+        val d = JsNative(
+            "Date",
+            { _, _ -> JsStr(isoOf(System.currentTimeMillis().toDouble())) },
+            LinkedHashMap(),
+            { args -> makeDate(args) }
+        )
+        put(d, "now", fn("now") { _, _ -> JsNum(System.currentTimeMillis().toDouble()) })
+        put(d, "UTC", fn("UTC") { args, _ -> JsNum(dateUtc(args)) })
+        put(d, "parse", fn("parse") { args, _ -> JsNum(parseIsoDate(strOf(a0(args)))) })
+        return d
+    }
+
+    private fun installProtoDate() {
+        put(protoDate, "getTime", fn("getTime") { _, thiz -> JsNum(dateMsOf(thiz)) })
+        put(protoDate, "valueOf", fn("valueOf") { _, thiz -> JsNum(dateMsOf(thiz)) })
+        put(protoDate, "toISOString", fn("toISOString") { _, thiz -> JsStr(isoOf(dateMsOf(thiz))) })
+        put(protoDate, "getTimezoneOffset", fn("getTimezoneOffset") { _, thiz ->
+            JsNum(-(localCal(dateMsOf(thiz)).timeZone.getRawOffset() / 60000.0))
+        })
+        put(protoDate, "getFullYear", fn("getFullYear") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.YEAR) })
+        put(protoDate, "getMonth", fn("getMonth") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.MONTH) })
+        put(protoDate, "getDate", fn("getDate") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.DAY_OF_MONTH) })
+        put(protoDate, "getDay", fn("getDay") { _, thiz -> JsNum((localCal(dateMsOf(thiz)).get(Calendar.DAY_OF_WEEK) - 1).toDouble()) })
+        put(protoDate, "getHours", fn("getHours") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.HOUR_OF_DAY) })
+        put(protoDate, "getMinutes", fn("getMinutes") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.MINUTE) })
+        put(protoDate, "getSeconds", fn("getSeconds") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.SECOND) })
+        put(protoDate, "getMilliseconds", fn("getMilliseconds") { _, thiz -> calField(localCal(dateMsOf(thiz)), Calendar.MILLISECOND) })
+        put(protoDate, "getUTCFullYear", fn("getUTCFullYear") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.YEAR) })
+        put(protoDate, "getUTCMonth", fn("getUTCMonth") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.MONTH) })
+        put(protoDate, "getUTCDate", fn("getUTCDate") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.DAY_OF_MONTH) })
+        put(protoDate, "getUTCDay", fn("getUTCDay") { _, thiz -> JsNum((utcCal(dateMsOf(thiz)).get(Calendar.DAY_OF_WEEK) - 1).toDouble()) })
+        put(protoDate, "getUTCHours", fn("getUTCHours") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.HOUR_OF_DAY) })
+        put(protoDate, "getUTCMinutes", fn("getUTCMinutes") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.MINUTE) })
+        put(protoDate, "getUTCSeconds", fn("getUTCSeconds") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.SECOND) })
+        put(protoDate, "getUTCMilliseconds", fn("getUTCMilliseconds") { _, thiz -> calField(utcCal(dateMsOf(thiz)), Calendar.MILLISECOND) })
+    }
+
+    // ---- RegExp (T023 v1): exec/test con java.util.regex, flags i/m/g ----
+
+    private val reCache = HashMap<String, Pattern>()
+
+    private fun compileRegex(body: String, flags: String): Pattern {
+        val key = body + "|" + flags
+        val cached = reCache[key]
+        if (cached != null) return cached
+        var f = 0
+        var i = 0
+        while (i < flags.length) {
+            val ch = flags[i]
+            if (ch == 'i') {
+                f = f or Pattern.CASE_INSENSITIVE
+            } else if (ch == 'm') {
+                f = f or Pattern.MULTILINE
+            } else if (ch != 'g') {
+                throw JsRuntime.throwNative("SyntaxError", "Invalid flags supplied to RegExp '" + ch + "'")
+            }
+            i++
+        }
+        val p = try {
+            Pattern.compile(body, f)
+        } catch (ex: PatternSyntaxException) {
+            throw JsRuntime.throwNative("SyntaxError", "Invalid regular expression: /" + body + "/: " + ex.message)
+        }
+        reCache[key] = p
+        return p
+    }
+
+    private fun regNew(args: List<JsValue>): JsRegExp {
+        val a = a0(args)
+        var body = ""
+        var flags = ""
+        if (a is JsRegExp) {
+            body = a.body
+            flags = a.flags
+        } else if (a is JsStr) {
+            body = a.value
+        } else if (a !is JsUndefined) {
+            body = strOf(a)
+        }
+        val f = a1(args)
+        if (f is JsStr) {
+            flags = f.value
+        } else if (f !is JsUndefined) {
+            flags = strOf(f)
+        }
+        compileRegex(body, flags)
+        return JsRegExp(body, flags)
+    }
+
+    private fun regExec(re: JsRegExp, s: String): JsObj? {
+        val pat = compileRegex(re.body, re.flags)
+        val g = re.flags.contains('g')
+        var start = 0
+        if (g) {
+            start = re.lastIndex.toInt()
+            if (start < 0) start = 0
+            if (start > s.length) {
+                re.lastIndex = 0.0
+                return null
+            }
+        }
+        val m = pat.matcher(s)
+        if (!m.find(start)) {
+            if (g) re.lastIndex = 0.0
+            return null
+        }
+        if (g) re.lastIndex = m.end().toDouble()
+        val r = JsRuntime.newArr()
+        r.elems.add(JsStr(m.group()))
+        var gi = 1
+        while (gi <= m.groupCount()) {
+            val gv = m.group(gi)
+            if (gv == null) r.elems.add(JsUndefined) else r.elems.add(JsStr(gv))
+            gi++
+        }
+        r.props["index"] = JsProp.Value(JsNum(m.start().toDouble()))
+        r.props["input"] = JsProp.Value(JsStr(s))
+        return r
+    }
+
+    private fun makeRegExpCtor(): JsNative {
+        return JsNative("RegExp", { args, _ -> regNew(args) }, LinkedHashMap(), { args -> regNew(args) })
+    }
+
+    private fun installProtoReg() {
+        put(protoReg, "exec", fn("exec") { args, thiz ->
+            val re = thiz as? JsRegExp
+            if (re == null) {
+                throw JsRuntime.throwNative("TypeError", "RegExp.prototype.exec called on incompatible receiver")
+            }
+            val m = regExec(re, strOf(a0(args)))
+            if (m == null) return@fn JsNull
+            m
+        })
+        put(protoReg, "test", fn("test") { args, thiz ->
+            val re = thiz as? JsRegExp
+            if (re == null) {
+                throw JsRuntime.throwNative("TypeError", "RegExp.prototype.test called on incompatible receiver")
+            }
+            JsBool(regExec(re, strOf(a0(args))) != null)
+        })
     }
 }

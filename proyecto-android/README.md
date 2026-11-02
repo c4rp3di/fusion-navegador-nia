@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0033)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0034)
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
@@ -40,6 +40,8 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 
 - **R0033 (T018 v4, RES-0020)**: destructuring completo en el motor JS (`JsAst`/`JsParser`/`JsInterpreter`): nuevo nodo `JsPat` (ident con default, array con huecos y rest, objeto con claves computed y rest; miembro como destino solo en asignación) usado por `Declarator` y `Param`; patrones en declaraciones `var`/`let`/`const` (los `var` de patrón participan del hoisting), en asignación destructurante (`[a, b] = x;`, `({a} = o);` — el literal se valida y convierte a patrón al enlazar, y miembros como `o.x` son destinos válidos) y en parámetros de funciones, arrows y métodos, con defaults que solo aplican sobre `undefined` y rest de objeto que copia las propiedades restantes; destructurear `null`/`undefined` tipifica `TypeError`. Alcance v4 decidido: `async/await` y `generators` quedan para v5 tras T023. `JsParserTest` pasa de 114 a 132 y `JsInterpreterTest` de 327 a 363 tests (18 + 36 nuevos; expectativas del intérprete generadas con el oráculo ECMAScript). Limitaciones v4: sin patrones en `for-in`/`for-of` ni en el init del `for`, sin elision en asignación ni en literales, rest solo como último elemento.
 
+- **R0034 (T023 v1, RES-0021)**: intrínsecos por familias en el motor JS: `Date` (epoch ms interno: constructor con ms/ISO/componentes locales, getters UTC y locales, `toISOString`, `getTime`/`valueOf`, estáticos `Date.now`/`Date.UTC`/`Date.parse` ISO); `Promise` (constructor con executor `resolve`/`reject` síncrono, `Promise.resolve`/`reject`, `then`/`catch` encadenables que devuelven una nueva Promise, adopción de promises devueltas y errores de handler que rechazan la siguiente) con **cola de microtasks** en el runtime que el REPL vacía al final de cada evaluación (el completion value adopta el último valor no-undefined de microtask, con tope de 10.000); y `RegExp` (constructor y literal, flags `i`/`m`/`g` sobre `java.util.regex`, `exec` con grupos/índice/`input`/`lastIndex` en modo `g`, `test`, propiedades `source`/`flags`/`lastIndex`, `SyntaxError` tipificado en patrones o flags inválidos). `JsInterpreterTest` pasa de 363 a 409 tests (46 nuevos: 18 Date y 17 RegExp con expectativas del oráculo ECMAScript solo en casos independientes de la zona horaria, y 11 Promise por la semántica REPL de microtasks documentada). Limitaciones v1: sin `async/await` (T018 v5) ni generators, sin `Promise.all`/`race`/`finally`, `Date.parse` solo ISO (sin Z se asume UTC), sin `toString` de Date, `RegExp` sin sticky/unicode.
+
 Incluye:
 
 - **T002** — Módulo `:contracts` (Kotlin JVM puro): ids tipados,
@@ -55,7 +57,7 @@ Incluye:
 ```
 settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
-engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + tests)
+engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + tests)
 app/                aplicación Android mínima
 docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)

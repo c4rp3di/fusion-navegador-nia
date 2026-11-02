@@ -14,10 +14,11 @@ import nia.engine.dom.DomDocument
  * extends), new/instanceof/in/delete, optional chaining con cortocircuito,
  * coerciones completas y errores tipificados como objetos Error.
  * Exclusiones: builtins salvo Error, Object.prototype, super, TDZ, strict,
- * arguments, async/generators/modulos, regex exec. T018 v4 anade
- * destructuring completo (declaraciones, asignacion y parametros con
- * patrones anidados, defaults sobre undefined y rest; sin patrones en
- * for-in/of).
+ * arguments, async/generators/modulos. T018 v4 anade destructuring completo
+ * (declaraciones, asignacion y parametros con patrones anidados, defaults
+ * sobre undefined y rest; sin patrones en for-in/of). T023 v1 anade la cola
+ * de microtasks de Promise (drenada al final de cada evaluacion, con
+ * completion value REPL) y los miembros de RegExp sobre su JsRegExp.
  */
 class JsEvalResult(val value: JsValue, val thrown: Boolean, val thrownValue: JsValue?)
 
@@ -97,6 +98,14 @@ object JsInterpreter {
         if (JsRuntime.isNullish(o)) {
             throw JsRuntime.throwNative("TypeError", "Cannot read properties of " + JsRuntime.toStringJs(o))
         }
+        if (o is JsRegExp) {
+            if (key == "source") return JsStr(o.body)
+            if (key == "flags") return JsStr(o.flags)
+            if (key == "global") return JsBool(o.flags.contains('g'))
+            if (key == "ignoreCase") return JsBool(o.flags.contains('i'))
+            if (key == "multiline") return JsBool(o.flags.contains('m'))
+            if (key == "lastIndex") return JsNum(o.lastIndex)
+        }
         if (o is JsStr) {
             if (key == "length") return JsNum(o.value.length.toDouble())
             val six = indexKey(key)
@@ -145,6 +154,7 @@ object JsInterpreter {
             is JsBool -> JsBuiltins.protoBool
             is JsFun -> JsBuiltins.protoFun
             is JsNative -> JsBuiltins.protoFun
+            is JsRegExp -> JsBuiltins.protoReg
             else -> null
         }
     }
@@ -152,6 +162,10 @@ object JsInterpreter {
     fun setMember(o: JsValue, key: String, v: JsValue) {
         if (JsRuntime.isNullish(o)) {
             throw JsRuntime.throwNative("TypeError", "Cannot set properties of " + JsRuntime.toStringJs(o))
+        }
+        if (o is JsRegExp && key == "lastIndex") {
+            o.lastIndex = JsRuntime.toNumber(v)
+            return
         }
         if (o is JsObj && o.isArr) {
             if (key == "length") {
@@ -1490,6 +1504,163 @@ object JsInterpreter {
             })
             t
         }))
+        installPromise(genv)
+    }
+
+    // ---- Promise (T023 v1): constructor, then/catch y cola de microtasks ----
+
+    private class PReaction(val onF: JsValue?, val onR: JsValue?, val child: JsObj?)
+
+    private val promiseReactions = LinkedHashMap<JsObj, MutableList<PReaction>>()
+
+    private fun isPromise(v: JsValue): Boolean {
+        if (v !is JsObj) return false
+        val e = v.props["__promise"]
+        val pv = (e as? JsProp.Value)?.v
+        return pv is JsBool && pv.value
+    }
+
+    private fun makePromise(): JsObj {
+        val p = JsRuntime.newObj()
+        p.proto = JsBuiltins.protoPromise
+        p.props["__promise"] = JsProp.Value(JsBool(true))
+        p.props["__state"] = JsProp.Value(JsStr("pending"))
+        p.props["__value"] = JsProp.Value(JsUndefined)
+        return p
+    }
+
+    private fun promiseState(p: JsObj): String? {
+        val e = p.props["__state"]
+        val v = (e as? JsProp.Value)?.v
+        if (v is JsStr) return v.value
+        return null
+    }
+
+    private fun promiseValue(p: JsObj): JsValue {
+        val e = p.props["__value"]
+        val v = (e as? JsProp.Value)?.v
+        if (v == null) return JsUndefined
+        return v
+    }
+
+    private fun settlePromise(p: JsObj, ok: Boolean, v: JsValue) {
+        val st = promiseState(p)
+        if (st != null && st != "pending") return
+        p.props["__state"] = JsProp.Value(JsStr(if (ok) "fulfilled" else "rejected"))
+        p.props["__value"] = JsProp.Value(v)
+        flushReactions(p)
+    }
+
+    private fun addReaction(p: JsObj, r: PReaction) {
+        val rs = promiseReactions[p]
+        if (rs == null) promiseReactions[p] = mutableListOf(r) else rs.add(r)
+        val st = promiseState(p)
+        if (st != null && st != "pending") flushReactions(p)
+    }
+
+    private fun resolvePromiseValue(p: JsObj, v: JsValue) {
+        if (isPromise(v)) {
+            val inner = v as JsObj
+            addReaction(inner, PReaction(null, null, p))
+        } else {
+            settlePromise(p, true, v)
+        }
+    }
+
+    private fun flushReactions(p: JsObj) {
+        val rs = promiseReactions[p]
+        if (rs == null || rs.isEmpty()) return
+        val st = promiseState(p)
+        if (st == null) return
+        val ok = st != "rejected"
+        val value = promiseValue(p)
+        val snapshot = ArrayList(rs)
+        rs.clear()
+        for (r in snapshot) {
+            if (r.onF == null && r.onR == null) {
+                val ch0 = r.child
+                if (ch0 != null) settlePromise(ch0, ok, value)
+            } else {
+                val h = if (ok) r.onF else r.onR
+                val ch = r.child
+                JsRuntime.microtasks.addLast {
+                    var out: JsValue? = null
+                    if (h == null) {
+                        if (ch != null) settlePromise(ch, ok, value)
+                    } else {
+                        try {
+                            val rv = callFunction(h, JsUndefined, listOf(value))
+                            if (ch != null) resolvePromiseValue(ch, rv)
+                            if (rv !is JsUndefined) out = rv
+                        } catch (ex: Exception) {
+                            if (ex is JsThrown) {
+                                if (ch != null) settlePromise(ch, false, ex.value)
+                            } else throw ex
+                        }
+                    }
+                    out
+                }
+            }
+        }
+    }
+
+    private fun handlerOrNull(args: List<JsValue>, i: Int): JsValue? {
+        if (args.size <= i) return null
+        val v = args[i]
+        if (v is JsUndefined || v is JsNull) return null
+        return v
+    }
+
+    private fun installPromise(genv: Env) {
+        JsBuiltins.protoPromise.props["then"] = JsProp.Value(JsBuiltins.fn("then") { args, thiz ->
+            val p = thiz as? JsObj
+            if (p == null || !isPromise(p)) {
+                throw JsRuntime.throwNative("TypeError", "Promise.prototype.then called on a non-Promise")
+            }
+            val child = makePromise()
+            addReaction(p, PReaction(handlerOrNull(args, 0), handlerOrNull(args, 1), child))
+            child
+        })
+        JsBuiltins.protoPromise.props["catch"] = JsProp.Value(JsBuiltins.fn("catch") { args, thiz ->
+            val p = thiz as? JsObj
+            if (p == null || !isPromise(p)) {
+                throw JsRuntime.throwNative("TypeError", "Promise.prototype.catch called on a non-Promise")
+            }
+            val child = makePromise()
+            addReaction(p, PReaction(null, handlerOrNull(args, 0), child))
+            child
+        })
+        val ctor = JsNative("Promise", construct = { args ->
+            val p = makePromise()
+            val exec = JsBuiltins.a0(args)
+            val resFn = JsBuiltins.fn("resolve") { a, _ ->
+                resolvePromiseValue(p, JsBuiltins.a0(a))
+                JsUndefined
+            }
+            val rejFn = JsBuiltins.fn("reject") { a, _ ->
+                settlePromise(p, false, JsBuiltins.a0(a))
+                JsUndefined
+            }
+            try {
+                callFunction(exec, JsUndefined, listOf(resFn, rejFn))
+            } catch (ex: Exception) {
+                if (ex is JsThrown) settlePromise(p, false, ex.value) else throw ex
+            }
+            p
+        })
+        ctor.props["resolve"] = JsProp.Value(JsBuiltins.fn("resolve") { args, _ ->
+            val v = JsBuiltins.a0(args)
+            if (isPromise(v)) return@fn v
+            val p = makePromise()
+            settlePromise(p, true, v)
+            p
+        })
+        ctor.props["reject"] = JsProp.Value(JsBuiltins.fn("reject") { args, _ ->
+            val p = makePromise()
+            settlePromise(p, false, JsBuiltins.a0(args))
+            p
+        })
+        genv.declare("Promise", ctor)
     }
 
     // ---- Entrada del programa ----
@@ -1516,6 +1687,8 @@ object JsInterpreter {
         } catch (ex: Exception) {
             if (ex is JsThrown) thrown = ex.value else throw ex
         }
+        val mv = drainMicrotasks()
+        if (mv != null) last = mv
         return JsEvalResult(last, thrown != null, thrown)
     }
 
@@ -1543,7 +1716,33 @@ object JsInterpreter {
         } catch (ex: Exception) {
             if (ex is JsThrown) thrown = ex.value else throw ex
         }
+        val mv = drainMicrotasks()
+        if (mv != null) last = mv
         return JsEvalResult(last, thrown != null, thrown)
+    }
+
+    /**
+     * Drena la cola de microtasks (T023): cada microtask devuelve el valor del
+     * handler; el ultimo no-undefined se convierte en completion value del
+     * REPL. Tope de 10000 para bucles que encolan sin fin. Al final limpia
+     * la cola y las reacciones de Promise (aislamiento entre evaluaciones).
+     */
+    private fun drainMicrotasks(): JsValue? {
+        var res: JsValue? = null
+        var n = 0
+        while (JsRuntime.microtasks.isNotEmpty() && n < 10000) {
+            val f = JsRuntime.microtasks.removeFirst()
+            n++
+            try {
+                val v = f()
+                if (v != null && v !is JsUndefined) res = v
+            } catch (ex: Exception) {
+                if (ex !is JsThrown) throw ex
+            }
+        }
+        JsRuntime.microtasks.clear()
+        promiseReactions.clear()
+        return res
     }
 
     fun dumpResult(r: JsEvalResult): String {

@@ -20,7 +20,7 @@ class JsNum(val value: Double) : JsValue()
 
 class JsStr(val value: String) : JsValue()
 
-class JsRegExp(val body: String, val flags: String) : JsValue()
+class JsRegExp(val body: String, val flags: String, var lastIndex: Double = 0.0) : JsValue()
 
 /** Propiedad de objeto: valor directo o descriptor accessor. */
 sealed class JsProp {
@@ -134,6 +134,9 @@ object JsRuntime {
     fun throwNative(name: String, message: String): JsThrown {
         return JsThrown(makeErrorObj(name, message))
     }
+
+    /** Cola de microtasks (T023): la vacia el interprete al final de cada evaluacion. */
+    val microtasks: ArrayDeque<() -> JsValue?> = ArrayDeque()
 
     // ---- Conversiones ----
 

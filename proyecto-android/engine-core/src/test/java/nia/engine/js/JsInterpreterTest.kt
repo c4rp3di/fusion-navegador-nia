@@ -1830,4 +1830,234 @@ class JsInterpreterTest {
         assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = { m([a]) { return a; } }; o.m([9]);")))
     }
 
+    @Test
+    fun fechaEpoch() {
+        assertEquals("1234567890", JsInterpreter.dumpResult(JsInterpreter.evaluate("var d = new Date(1234567890); d.getTime();")))
+    }
+
+    @Test
+    fun fechaValueOf() {
+        assertEquals("0", JsInterpreter.dumpResult(JsInterpreter.evaluate("var d = new Date(0); d.valueOf();")))
+    }
+
+    @Test
+    fun fechaTipo() {
+        assertEquals("\"object\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var d = new Date(0); typeof d;")))
+    }
+
+    @Test
+    fun fechaUTCFecha() {
+        assertEquals("\"1970,0,2\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var d = new Date(86400000); d.getUTCFullYear() + ',' + d.getUTCMonth() + ',' + d.getUTCDate();")))
+    }
+
+    @Test
+    fun fechaUTCDia() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Date(0).getUTCDay();")))
+    }
+
+    @Test
+    fun fechaUTCHora() {
+        assertEquals("\"6,56,7\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var d = new Date(1234567890); d.getUTCHours() + ',' + d.getUTCMinutes() + ',' + d.getUTCSeconds();")))
+    }
+
+    @Test
+    fun fechaISO() {
+        assertEquals("\"1970-01-01T00:00:00.000Z\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Date(0).toISOString();")))
+    }
+
+    @Test
+    fun fechaISO2() {
+        assertEquals("\"1970-01-15T06:56:07.890Z\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Date(1234567890).toISOString();")))
+    }
+
+    @Test
+    fun fechaISONegativo() {
+        assertEquals("\"1969-12-31T23:59:59.999Z\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Date(-1).toISOString();")))
+    }
+
+    @Test
+    fun fechaUTCMillis() {
+        assertEquals("890", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Date(1234567890).getUTCMilliseconds();")))
+    }
+
+    @Test
+    fun fechaUtcStatic() {
+        assertEquals("1767312000000", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Date.UTC(2026, 0, 2);")))
+    }
+
+    @Test
+    fun fechaUtcCompuesto() {
+        assertEquals("\"2026-01-02T03:04:05.000Z\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Date(Date.UTC(2026, 0, 2, 3, 4, 5)).toISOString();")))
+    }
+
+    @Test
+    fun fechaParseDateOnly() {
+        assertEquals("1767312000000", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Date.parse('2026-01-02');")))
+    }
+
+    @Test
+    fun fechaParseZ() {
+        assertEquals("1767323045000", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Date.parse('2026-01-02T03:04:05Z');")))
+    }
+
+    @Test
+    fun fechaParseISO() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var d = new Date('2026-01-02T03:04:05Z'); d.getUTCHours();")))
+    }
+
+    @Test
+    fun fechaNow() {
+        assertEquals("\"number,true\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" (typeof Date.now()) + ',' + (Date.now() > 0);")))
+    }
+
+    @Test
+    fun fechaLlamada() {
+        assertEquals("\"string\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" typeof Date();")))
+    }
+
+    @Test
+    fun fechaInvalida() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate(" isNaN(new Date('no').getTime());")))
+    }
+
+    @Test
+    fun promResolveThen() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.resolve(2).then(function(v) { return v + 1; });")))
+    }
+
+    @Test
+    fun promConstructor() {
+        assertEquals("10", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new Promise(function(res) { res(10); }).then(function(v) { return v; });")))
+    }
+
+    @Test
+    fun promCadena() {
+        assertEquals("20", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.resolve(1).then(function(v) { return v + 1; }).then(function(v) { return v * 10; });")))
+    }
+
+    @Test
+    fun promCatch() {
+        assertEquals("\"x\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.reject(new Error('x')).catch(function(e) { return e.message; });")))
+    }
+
+    @Test
+    fun promThrowEnHandler() {
+        assertEquals("\"y!\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.resolve(1).then(function() { throw new Error('y'); }).catch(function(e) { return e.message + '!'; });")))
+    }
+
+    @Test
+    fun promAdopcion() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.resolve(1).then(function() { return Promise.resolve(9); }).then(function(v) { return v; });")))
+    }
+
+    @Test
+    fun promOrden() {
+        assertEquals("\"ab\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var r = ''; Promise.resolve().then(function() { r += 'a'; }).then(function() { r += 'b'; return r; });")))
+    }
+
+    @Test
+    fun promResolveExterno() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("var res; var p = new Promise(function(r) { res = r; }); res(5); p.then(function(v) { return v; });")))
+    }
+
+    @Test
+    fun promCatchRechazoValor() {
+        assertEquals("8", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.reject(7).catch(function(v) { return v + 1; });")))
+    }
+
+    @Test
+    fun promThenRechazoPasa() {
+        assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate(" Promise.reject(3).then(function(v) { return v + 100; }, function(v) { return v * 2; });")))
+    }
+
+    @Test
+    fun promTipo() {
+        assertEquals("\"object\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" typeof Promise.resolve(1);")))
+    }
+
+    @Test
+    fun reExecBasico() {
+        assertEquals("\"b\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var m = /a(b)c/.exec('xabc'); m[1];")))
+    }
+
+    @Test
+    fun reExecIndice() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate(" /bc/.exec('abcd').index;")))
+    }
+
+    @Test
+    fun reExecNulo() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate(" (/q/.exec('abc') === null);")))
+    }
+
+    @Test
+    fun reTest() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate(" (/a.c/.test('abc'));")))
+    }
+
+    @Test
+    fun reGrupos() {
+        assertEquals("\"12,34\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var m = /(\\d+)-(\\d+)/.exec('ab 12-34 cd'); m[1] + ',' + m[2];")))
+    }
+
+    @Test
+    fun reFlagsI() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate(" (/AB/i.test('ab'));")))
+    }
+
+    @Test
+    fun reGlobalSerie() {
+        assertEquals("\"ootrue\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var re = /o/g; var s = 'foo'; re.exec(s)[0] + re.exec(s)[0] + (re.exec(s) === null);")))
+    }
+
+    @Test
+    fun reLastIndex() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("var re = /a/g; re.exec('aa'); re.lastIndex;")))
+    }
+
+    @Test
+    fun reLastIndexSet() {
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("var re = /a/g; re.lastIndex = 1; re.exec('aa').index;")))
+    }
+
+    @Test
+    fun reConstructor() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate(" (new RegExp('a+', 'i').test('A'));")))
+    }
+
+    @Test
+    fun reConstructorFlags() {
+        assertEquals("\"g\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" new RegExp('b', 'g').flags;")))
+    }
+
+    @Test
+    fun reSource() {
+        assertEquals("\"ab\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" /ab/.source;")))
+    }
+
+    @Test
+    fun reInput() {
+        assertEquals("\"abc\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" /b/.exec('abc').input;")))
+    }
+
+    @Test
+    fun reGrupoOpcional() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("var m = /a(x)?b/.exec('ab'); (m[1] === undefined);")))
+    }
+
+    @Test
+    fun reInvalido() {
+        assertEquals("\"SyntaxError\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var m = ''; try { new RegExp('('); } catch (e) { m = e.name; } m;")))
+    }
+
+    @Test
+    fun reFlagsInvalida() {
+        assertEquals("\"SyntaxError\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var m = ''; try { new RegExp('a', 'q'); } catch (e) { m = e.name; } m;")))
+    }
+
+    @Test
+    fun reTipo() {
+        assertEquals("\"object\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" typeof /a/;")))
+    }
+
 }
