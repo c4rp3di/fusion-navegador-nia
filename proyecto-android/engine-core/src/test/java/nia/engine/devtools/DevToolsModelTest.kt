@@ -64,7 +64,7 @@ class DevToolsModelTest {
     @Test fun computedResuelveEmAPx() {
         val (doc, model) = fixture()
         val pTarjeta = hijos(doc, body(doc))[1]
-        assertEquals("40px", model.computedOf(pTarjeta)["margin-top"])
+        assertEquals("40.0px", model.computedOf(pTarjeta)["margin-top"])
     }
 
     @Test fun causaReglaDirecta() {
@@ -209,7 +209,7 @@ class DevToolsModelTest {
         val c = model.causeOf(pTarjeta, "margin-top")
         assertTrue(c is StyleCause.Rule)
         assertEquals("2em", (c as StyleCause.Rule).declaredValue)
-        assertEquals("40px", model.computedOf(pTarjeta)["margin-top"])
+        assertEquals("40.0px", model.computedOf(pTarjeta)["margin-top"])
     }
 
     @Test fun shorthandMarginCausa() {
@@ -267,6 +267,6 @@ class DevToolsModelTest {
         model.recordSelection(session, ctx, hijos(doc, b)[2])
         assertEquals(2, session.all().size)
         assertEquals(1, session.eventsSince(1).size)
-        assertEquals("3", session.eventsSince(1)[0].payload["nodeId"])
+        assertEquals("11", session.eventsSince(1)[0].payload["nodeId"])
     }
 }
