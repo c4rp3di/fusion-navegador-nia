@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0038)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0039)
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
@@ -50,6 +50,8 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 
 - **R0038 (T017 v1, RES-0025)**: panel DevTools sin UI Android en `:engine-core` (`nia/engine/devtools`, `DevToolsModel.kt`): sobre el DOM real (T013) y la cascada real (T014), expone el árbol del documento con nodeIds en pre-orden, el estilo computado de cada elemento (valores resueltos: herencia, shorthands, em/rem/%) y la **causa visible** de cada propiedad — qué regla ganó (selector descrito, especificidad y orden; empate → la última), valor heredado del padre (con su nodeId) o valor por defecto —. `matchingSelectors` lista todos los selectores que matchean un elemento y `recordSelection` graba la selección como evento del inspector (T008) con redacción de secretos en la ingesta. `DevToolsModelTest` (27 tests); `Capabilities` declara `engine.devtools` en PASS; el workflow pasa de 58 a 60 fuentes. Limitaciones v1: sin UI Android (siguiente versión), re-análisis por consulta sin caché, sin edición de estilos ni live-highlight, y las limitaciones heredadas de la cascada v2 (sin orígenes múltiples ni !important).
 
+- **R0039 (T011 v1, RES-0026)**: fetch/TLS/cancelación en `:engine-core` (`nia/engine/net`, `Fetch.kt`): `FetchManager` dueño del ciclo de vida de la petición y **agnóstico del transporte** — `FetchTransport` inyectable devuelve `TransportResult.Success/Failure(TLS_INVALID/DNS/NETWORK)`; la pila real llega con el adaptador Android en una fase posterior. Validación previa sin llamar al transporte (método fuera de GET/HEAD/POST/PUT/DELETE/OPTIONS → `INVALID_INPUT`; esquema no http/https → `UNSUPPORTED`). **TLS inválido controlado** → `ErrorCode.TLS`, no reintentable, mensaje seguro que nunca repite la URL. Fallos DNS/red → `NETWORK` (reintentable). **Cancelación cooperativa** con los contratos de T002: `CancellationToken`/`CancelReason` — deadline comprobado con reloj inyectable antes del transporte y cancelación explícita observada después; ambas → `CANCELLED` y la respuesta se descarta aunque el transporte la devuelva. **Respuestas stale controladas** por generación: `invalidate()` incrementa la generación (navegación) y una respuesta de generación anterior → `STALE_HANDLE`; si hay cancelación y stale a la vez, gana la cancelación. `FetchManagerTest` (22 tests); `Capabilities` declara `engine.fetch` en PASS; el workflow pasa de 60 a 62 fuentes. Limitaciones v1: transporte síncrono, sin redirección/descompresión/pool de conexiones, sin cookies/CORS/cache (T026) y sin cableado por broker (codec de payloads `NETWORK_FETCH` en la v2).
+
 Incluye:
 
 - **T002** — Módulo `:contracts` (Kotlin JVM puro): ids tipados,
@@ -65,7 +67,7 @@ Incluye:
 ```
 settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
-engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + async/await y generators (T018 v5) + broker/renderer/IPC (T006) + config con migración/recovery (T007) + inspector con redacción de secretos (T008) + módulos declarativos (T009) + panel DevTools (T017) + tests)
+engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + async/await y generators (T018 v5) + broker/renderer/IPC (T006) + config con migración/recovery (T007) + inspector con redacción de secretos (T008) + módulos declarativos (T009) + panel DevTools (T017) + fetch/TLS/cancelación (T011) + tests)
 app/                aplicación Android mínima
 docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)
