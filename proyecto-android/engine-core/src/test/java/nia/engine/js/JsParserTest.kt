@@ -541,18 +541,18 @@ class JsParserTest {
     }
 
     @Test
-    fun errorDestructuringExcluido() {
+    fun patronVarObjeto() {
         val r = parse("var {a} = o;")
-        assertEquals("(program)", JsAstDump.program(r.program))
-        assertEquals("invalid-binding@4-5:1:5;unexpected-token@6-7:1:7;unexpected-token@8-9:1:9", JsAstDump.parseErrors(r.program))
+        assertEquals("(program (var (declp (pobj (pe (key a) (pid a))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
         assertEquals("", JsAstDump.lexErrors(r.lexErrors))
     }
 
     @Test
-    fun errorObjetoDefaultExcluido() {
+    fun objetoShorthandDefault() {
         val r = parse("({a = 1});")
-        assertEquals("(program)", JsAstDump.program(r.program))
-        assertEquals("unexpected-token@1-4:1:2;unexpected-token@7-8:1:8;unexpected-token@8-9:1:9", JsAstDump.parseErrors(r.program))
+        assertEquals("(program (expr (paren (obj (kv (key a) (asg = (id a) (num 1)))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
         assertEquals("", JsAstDump.lexErrors(r.lexErrors))
     }
 
