@@ -47,9 +47,9 @@ object SecretRedactor {
         "x-api-key", "x-auth-token"
     )
 
-    private val BEARER = Regex("(?i)(bearer[ \t]+)[^\s]+")
-    private val SECRET_PARAMS = Regex("(?i)((?:token|passwd|password|secret|api[-_]?key)[ \t]*=)[^&\s]*")
-    private val USERINFO = Regex("://[^/@\s]+@")
+    private val BEARER = Regex("(?i)(bearer[ \t]+)[^\\s]+")
+    private val SECRET_PARAMS = Regex("(?i)((?:token|passwd|password|secret|api[-_]?key)[ \t]*=)[^&\\s]*")
+    private val USERINFO = Regex("://[^/@\\s]+@")
 
     fun redactText(text: String): String {
         var out = BEARER.replace(text) { m -> m.groupValues[1] + REDACTED }
