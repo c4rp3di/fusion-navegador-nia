@@ -24,9 +24,27 @@ import java.util.concurrent.LinkedBlockingQueue
  * con handoff estricto (en cada momento solo un hilo ejecuta JS; suspender
  * es bloquearse en su inbox; quien lanza o reanuda espera su senal de
  * parada) y el drenaje reanuda los awaits asentados y al final aborta los
- * runners colgados.
+ * runners colgados. T021 anade las cuotas de ejecucion: toda evaluacion
+ * corre con una sesion JsQuotas (safepoint por sentencia/expresion contra el
+ * tope de pasos, newObj/newArr contra el tope de heap), el abort NO es
+ * JsThrown (invisible al try/catch de JS, siempre llega al punto de entrada),
+ * interrupt() pide el corte desde otro hilo (flag volatile) y el drenaje de
+ * microtasks corre dentro de la sesion.
  */
-class JsEvalResult(val value: JsValue, val thrown: Boolean, val thrownValue: JsValue?)
+/**
+ * Resultado de una evaluacion: completion value del REPL, throw sin capturar
+ * y, desde T021, el motivo de abort cuando la evaluacion fue interrumpida
+ * por cuotas o por interrupcion externa (interrupted).
+ */
+class JsEvalResult(
+    val value: JsValue,
+    val thrown: Boolean,
+    val thrownValue: JsValue?,
+    val abortReason: JsAbortReason? = null
+) {
+    /** Cierto si la evaluacion aborto por cuotas o interrupcion (T021). */
+    val interrupted: Boolean get() = abortReason != null
+}
 
 object JsInterpreter {
 
@@ -732,6 +750,7 @@ object JsInterpreter {
     }
 
     private fun runStatement(s: JsStmt, env: Env, labels: List<String>): Completion {
+        JsQuotas.tick()
         when (s) {
             is JsStmt.Empty -> return normal()
             is JsStmt.Block -> {
@@ -972,6 +991,7 @@ object JsInterpreter {
     }
 
     private fun evalExpr(e: JsExpr, env: Env): JsValue {
+        JsQuotas.tick()
         when (e) {
             is JsExpr.Ident -> return env.get(e.name)
             is JsExpr.Number -> return JsNum(e.value)
@@ -1703,7 +1723,10 @@ object JsInterpreter {
 
     // ---- Entrada del programa ----
 
-    fun evaluate(source: String): JsEvalResult {
+    fun evaluate(source: String): JsEvalResult = evaluate(source, JsLimits())
+
+    /** Evaluacion con cuotas explicitas (T021): sesion de JsQuotas de begin a end. */
+    fun evaluate(source: String, limits: JsLimits): JsEvalResult {
         val parse = JsParser.parse(source)
         val genv = Env(null, true)
         genv.declare("undefined", JsUndefined)
@@ -1715,6 +1738,8 @@ object JsInterpreter {
         JsDomBindings.installConsole(genv)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
+        var aborted: JsAbortReason? = null
+        JsQuotas.begin(limits)
         try {
             hoist(parse.program.statements, genv)
             for (s in parse.program.statements) {
@@ -1722,16 +1747,31 @@ object JsInterpreter {
                 if (c.type != CType.NORMAL) break
                 if (c.value != null) last = c.value
             }
+        } catch (ex: JsAbort) {
+            aborted = ex.reason
         } catch (ex: Exception) {
             if (ex is JsThrown) thrown = ex.value else throw ex
         }
-        val mv = drainMicrotasks()
-        if (mv != null) last = mv
-        return JsEvalResult(last, thrown != null, thrown)
+        if (aborted == null) {
+            try {
+                val mv = drainMicrotasks()
+                if (mv != null) last = mv
+            } catch (ex: JsAbort) {
+                aborted = ex.reason
+            }
+        } else {
+            cleanupRunners()
+        }
+        JsQuotas.end()
+        return JsEvalResult(last, thrown != null, thrown, aborted)
     }
 
     /** Evaluacion con bindings DOM (T022, RES-0017): instala document sobre doc. */
-    fun evaluateWithDom(source: String, doc: DomDocument): JsEvalResult {
+    fun evaluateWithDom(source: String, doc: DomDocument): JsEvalResult =
+        evaluateWithDom(source, doc, JsLimits())
+
+    /** Evaluacion con bindings DOM y cuotas explicitas (T021). */
+    fun evaluateWithDom(source: String, doc: DomDocument, limits: JsLimits): JsEvalResult {
         val parse = JsParser.parse(source)
         val genv = Env(null, true)
         genv.declare("undefined", JsUndefined)
@@ -1744,6 +1784,8 @@ object JsInterpreter {
         JsDomBindings.install(genv, doc)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
+        var aborted: JsAbortReason? = null
+        JsQuotas.begin(limits)
         try {
             hoist(parse.program.statements, genv)
             for (s in parse.program.statements) {
@@ -1751,12 +1793,32 @@ object JsInterpreter {
                 if (c.type != CType.NORMAL) break
                 if (c.value != null) last = c.value
             }
+        } catch (ex: JsAbort) {
+            aborted = ex.reason
         } catch (ex: Exception) {
             if (ex is JsThrown) thrown = ex.value else throw ex
         }
-        val mv = drainMicrotasks()
-        if (mv != null) last = mv
-        return JsEvalResult(last, thrown != null, thrown)
+        if (aborted == null) {
+            try {
+                val mv = drainMicrotasks()
+                if (mv != null) last = mv
+            } catch (ex: JsAbort) {
+                aborted = ex.reason
+            }
+        } else {
+            cleanupRunners()
+        }
+        JsQuotas.end()
+        return JsEvalResult(last, thrown != null, thrown, aborted)
+    }
+
+    /**
+     * Pide la interrupcion de la evaluacion en curso (T021): conmuta el flag
+     * volatile de la sesion de cuotas y el hilo que ejecuta JS aborta en el
+     * siguiente safepoint con JsAbortReason.INTERRUPTED.
+     */
+    fun interrupt() {
+        JsQuotas.interrupt()
     }
 
 
@@ -1780,6 +1842,7 @@ object JsInterpreter {
         class Yield(val v: JsValue) : OutMsg()
         class Done(val v: JsValue) : OutMsg()
         class ThrowErr(val v: JsValue) : OutMsg()
+        class Aborted(val reason: JsAbortReason) : OutMsg()
     }
 
     private class Runner {
@@ -1817,6 +1880,9 @@ object JsInterpreter {
             } catch (e: JsThrown) {
                 r.finished = true
                 r.out.put(OutMsg.ThrowErr(e.value))
+            } catch (e: JsAbort) {
+                r.finished = true
+                r.out.put(OutMsg.Aborted(e.reason))
             } catch (e: Throwable) {
                 r.finished = true
                 r.out.put(OutMsg.ThrowErr(JsRuntime.makeErrorObj("Error", "internal runner error")))
@@ -1834,6 +1900,7 @@ object JsInterpreter {
         val p = makePromise()
         val r = startRunner { runFunBody(f, thisArg, args) }
         val s = r.out.take()
+        if (s is OutMsg.Aborted) throw JsAbort(s.reason)
         if (s is OutMsg.Done) settlePromise(p, true, s.v)
         if (s is OutMsg.ThrowErr) settlePromise(p, false, s.v)
         // Pausa real: la promise p la asentara el microtask del awaiter cuando el Runner termine.
@@ -1865,6 +1932,10 @@ object JsInterpreter {
             r.inbox.put(InMsg.NEXT)
         }
         val s = r.out.take()
+        if (s is OutMsg.Aborted) {
+            st.done = true
+            throw JsAbort(s.reason)
+        }
         if (s is OutMsg.Yield) return genResult(s.v, false)
         if (s is OutMsg.Done) {
             st.done = true
@@ -1971,17 +2042,31 @@ object JsInterpreter {
      */
     private fun drainMicrotasks(): JsValue? {
         var res: JsValue? = null
-        var n = 0
-        while (JsRuntime.microtasks.isNotEmpty() && n < 10000) {
-            val f = JsRuntime.microtasks.removeFirst()
-            n++
-            try {
-                val v = f()
-                if (v != null && v !is JsUndefined) res = v
-            } catch (ex: Exception) {
-                if (ex !is JsThrown) throw ex
+        try {
+            var n = 0
+            while (JsRuntime.microtasks.isNotEmpty() && n < 10000) {
+                val f = JsRuntime.microtasks.removeFirst()
+                n++
+                try {
+                    val v = f()
+                    if (v != null && v !is JsUndefined) res = v
+                } catch (ex: Exception) {
+                    if (ex !is JsThrown) throw ex
+                }
             }
+        } finally {
+            cleanupRunners()
         }
+        return res
+    }
+
+    /**
+     * Corte de sesion: aborta los runners vivos y limpia los registros
+     * compartidos (aislamiento entre evaluaciones). Con cuotas (T021) es
+     * tambien el camino de limpieza del abort: un JsAbort nunca deja
+     * runners ni colas vivas detras de si.
+     */
+    private fun cleanupRunners() {
         for (r in ArrayList(activeRunners)) {
             if (!r.finished) {
                 r.inbox.put(InMsg.ABORT)
@@ -1999,10 +2084,15 @@ object JsInterpreter {
         promiseReactions.clear()
         awaiters.clear()
         genStates.clear()
-        return res
     }
 
     fun dumpResult(r: JsEvalResult): String {
+        val reason = r.abortReason
+        if (reason != null) {
+            if (reason == JsAbortReason.INTERRUPTED) return "interrupted"
+            if (reason == JsAbortReason.STEP_QUOTA) return "interrupted step-quota"
+            return "interrupted heap-quota"
+        }
         if (r.thrown) {
             val tv = r.thrownValue
             if (tv != null) return "uncaught " + JsRuntime.dumpValue(tv)

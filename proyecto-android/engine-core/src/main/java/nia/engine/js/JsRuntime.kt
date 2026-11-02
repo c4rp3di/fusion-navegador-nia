@@ -122,9 +122,17 @@ object JsRuntime {
     var objProto: JsObj? = null
     var arrProto: JsObj? = null
 
-    fun newObj(): JsObj = JsObj(LinkedHashMap(), objProto, false, ArrayList())
+    /** Creacion de objeto con cuota de heap (T021): una asignacion por objeto. */
+    fun newObj(): JsObj {
+        JsQuotas.alloc()
+        return JsObj(LinkedHashMap(), objProto, false, ArrayList())
+    }
 
-    fun newArr(): JsObj = JsObj(LinkedHashMap(), arrProto, true, ArrayList())
+    /** Creacion de array con cuota de heap (T021): una asignacion por array. */
+    fun newArr(): JsObj {
+        JsQuotas.alloc()
+        return JsObj(LinkedHashMap(), arrProto, true, ArrayList())
+    }
 
     fun makeErrorObj(name: String, message: String): JsObj {
         val o = newObj()
