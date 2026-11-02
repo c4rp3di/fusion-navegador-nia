@@ -20,7 +20,9 @@ class FetchManagerTest {
     }
 
     private class FakeTransport : FetchTransport {
-        var hook: (FetchRequest, CancellationToken) -> TransportResult = { _, _ -> okResp() }
+        var hook: (FetchRequest, CancellationToken) -> TransportResult = { _, _ ->
+            TransportResult.Success(FetchResponse(200, emptyMap(), ByteArray(0)))
+        }
         val requests = mutableListOf<FetchRequest>()
         val tokens = mutableListOf<CancellationToken>()
         override fun fetch(request: FetchRequest, token: CancellationToken): TransportResult {
