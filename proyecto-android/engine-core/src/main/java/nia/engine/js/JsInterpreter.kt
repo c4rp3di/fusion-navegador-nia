@@ -1577,7 +1577,12 @@ object JsInterpreter {
                 val msg = if (ok) InMsg.Resume(v) else InMsg.Rej(v)
                 JsRuntime.microtasks.addLast {
                     r.inbox.put(msg)
-                    r.out.take()
+                    val m2 = r.out.take()
+                    val ap = r.asyncPromise
+                    if (ap != null) {
+                        if (m2 is OutMsg.Done) settlePromise(ap, true, m2.v)
+                        if (m2 is OutMsg.ThrowErr) settlePromise(ap, false, m2.v)
+                    }
                     null
                 }
             }
@@ -1782,6 +1787,7 @@ object JsInterpreter {
         val out = LinkedBlockingQueue<OutMsg>()
         var thread: Thread? = null
         var finished = false
+        var asyncPromise: JsObj? = null
     }
 
     private class GenState(val f: JsFun, val thisArg: JsValue, val args: List<JsValue>) {
@@ -1830,6 +1836,8 @@ object JsInterpreter {
         val s = r.out.take()
         if (s is OutMsg.Done) settlePromise(p, true, s.v)
         if (s is OutMsg.ThrowErr) settlePromise(p, false, s.v)
+        // Pausa real: la promise p la asentara el microtask del awaiter cuando el Runner termine.
+        if (s is OutMsg.Paused) r.asyncPromise = p
         return p
     }
 
