@@ -400,7 +400,7 @@ class HtmlTreeBuilderTest {
 
     @Test
     fun tablaDosHermanas() {
-        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\"))))) \"texto\" (table (tbody (tr (td \"b\"))))))", arbol("<table><tr><td>a</td></tr></table>texto<table><tr><td>b</td></tr></table>"))
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\")))) \"texto\" (table (tbody (tr (td \"b\")))))))", arbol("<table><tr><td>a</td></tr></table>texto<table><tr><td>b</td></tr></table>"))
         assertEquals(0, errores("<table><tr><td>a</td></tr></table>texto<table><tr><td>b</td></tr></table>"))
     }
 
