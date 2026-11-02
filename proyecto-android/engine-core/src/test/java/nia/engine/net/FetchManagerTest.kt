@@ -179,7 +179,8 @@ class FetchManagerTest {
         }
         valor(m.fetch(m.newRequest("GET", "https://a.example/"), source.token))
         assertEquals(1, t.tokens.size)
-        assertTrue(t.tokens[0] === source.token)
+        source.cancel(CancelReason.Explicit)
+        assertTrue(t.tokens[0].isCancelled)
     }
 
     @Test fun respuestaStaleDescartada() {
