@@ -80,15 +80,24 @@ class HttpTransport(
         }
     }
 
-    /** Cabeceras de respuesta: las repetidas se unen con coma HTTP. */
+    /**
+     * Cabeceras de respuesta: los nombres se normalizan a minusculas
+     * en la frontera del transporte. HTTP/1.1 los declara
+     * case-insensitive (RFC 7230) y cada servidor capitaliza a su
+     * manera (el HttpServer del JDK envia X-nia cuando el handler
+     * agrego X-Nia: su Headers.normalize solo respeta mayuscula en
+     * el primer caracter). Los valores se respetan tal cual y las
+     * repetidas se unen con coma HTTP.
+     */
     private fun responseHeaders(connection: HttpURLConnection): Map<String, String> {
         val headers = LinkedHashMap<String, String>()
         var index = 1
         while (true) {
             val key = connection.getHeaderFieldKey(index) ?: break
             val value = connection.getHeaderField(index) ?: ""
-            val prev = headers[key]
-            headers[key] = if (prev == null) value else prev + ", " + value
+            val name = key.lowercase()
+            val prev = headers[name]
+            headers[name] = if (prev == null) value else prev + ", " + value
             index += 1
         }
         return headers

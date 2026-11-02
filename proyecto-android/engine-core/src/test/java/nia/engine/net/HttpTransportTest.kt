@@ -21,6 +21,10 @@ import nia.contracts.Outcome
  * T011 v2 (R0043): el transporte real contra un servidor HTTP local del
  * JDK (127.0.0.1, puerto libre). CI ejecuta estos tests en la JVM; el
  * mismo HttpTransport corre en el dispositivo con permiso INTERNET.
+ *
+ * Las cabeceras de respuesta se asertan con nombres en minusculas: el
+ * transporte las normaliza porque HTTP/1.1 es case-insensitive (RFC
+ * 7230) y cada servidor capitaliza los nombres a su manera.
  */
 class HttpTransportTest {
 
@@ -62,7 +66,7 @@ class HttpTransportTest {
             val request = FetchRequest(1, "GET", url, mapOf("X-Prueba" to "1"), null)
             val response = success(transport.fetch(request, CancellationTokenSource().token))
             assertEquals(200, response.status)
-            assertEquals("hola", response.headers["X-Nia"])
+            assertEquals("hola", response.headers["x-nia"])
             assertEquals("hola", String(response.body, Charsets.UTF_8))
         })
     }
@@ -78,7 +82,7 @@ class HttpTransportTest {
             val request = FetchRequest(2, "POST", url, mapOf("Content-Type" to "text/plain"), body)
             val response = success(transport.fetch(request, CancellationTokenSource().token))
             assertEquals(200, response.status)
-            assertEquals("POST", response.headers["X-Metodo"])
+            assertEquals("POST", response.headers["x-metodo"])
             assertEquals("cuerpo-post", String(response.body, Charsets.UTF_8))
         })
     }
@@ -92,7 +96,7 @@ class HttpTransportTest {
             val transport = HttpTransport()
             val request = FetchRequest(3, "GET", url, emptyMap(), null)
             val response = success(transport.fetch(request, CancellationTokenSource().token))
-            assertEquals("a, b", response.headers["X-Rep"])
+            assertEquals("a, b", response.headers["x-rep"])
         })
     }
 
@@ -110,7 +114,7 @@ class HttpTransportTest {
             val request = FetchRequest(4, "GET", url + "salto", emptyMap(), null)
             val response = success(transport.fetch(request, CancellationTokenSource().token))
             assertEquals(301, response.status)
-            assertEquals("/destino", response.headers["Location"])
+            assertEquals("/destino", response.headers["location"])
         })
     }
 
