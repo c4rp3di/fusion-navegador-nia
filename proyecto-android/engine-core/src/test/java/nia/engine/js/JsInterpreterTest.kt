@@ -2060,4 +2060,134 @@ class JsInterpreterTest {
         assertEquals("\"object\"", JsInterpreter.dumpResult(JsInterpreter.evaluate(" typeof /a/;")))
     }
 
+
+    @Test
+    fun asyncTipo() {
+        assertEquals("\"object\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var f = async function(){}; typeof f();")))
+    }
+
+    @Test
+    fun asyncRetorna() {
+        assertEquals("7", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ return 7; } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncAwaitValor() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ return await 9; } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncAwaitCumplida() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ return await Promise.resolve(3); } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncAwaitPendiente() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("var p = Promise.resolve(1).then(function(v){ return v + 1; }); async function f(){ return await p; } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncCadena() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ var a = await Promise.resolve(2); var b = await Promise.resolve(3); return a + b; } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncThrowRechaza() {
+        assertEquals("\"e1\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ throw new Error('e1'); } f().catch(function(e){ return e.message; });")))
+    }
+
+    @Test
+    fun asyncAwaitRechazo() {
+        assertEquals("\"caught\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ try { await Promise.reject(new Error('e2')); return 'no'; } catch (e) { return 'caught'; } } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncAwaitRechazoSinCatch() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ return await Promise.reject(4); } f().catch(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncAwaitEnExpresion() {
+        assertEquals("15", JsInterpreter.dumpResult(JsInterpreter.evaluate("async function f(){ return 10 + await Promise.resolve(5); } f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncExpresion() {
+        assertEquals("8", JsInterpreter.dumpResult(JsInterpreter.evaluate("var f = async function(){ return 8; }; f().then(function(v){ return v; });")))
+    }
+
+    @Test
+    fun asyncArrow() {
+        assertEquals("8", JsInterpreter.dumpResult(JsInterpreter.evaluate("var h = async (v) => v * 2; h(4).then(function(r){ return r; });")))
+    }
+
+    @Test
+    fun asyncArrowSingle() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("var h = async v => v + 1; h(4).then(function(r){ return r; });")))
+    }
+
+    @Test
+    fun asyncResolveExterno() {
+        assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate("var res; var q = new Promise(function(r){ res = r; }); async function f(){ return await q; } f().then(function(v){ return v + 1; }); res(5);")))
+    }
+
+    @Test
+    fun genBasico() {
+        assertEquals("\"1,2\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1; yield 2; } var it = g(); it.next().value + ',' + it.next().value;")))
+    }
+
+    @Test
+    fun genDone() {
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1; } var it = g(); it.next(); var r = it.next(); r.value === undefined && r.done;")))
+    }
+
+    @Test
+    fun genForOf() {
+        assertEquals("\"abc\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 'a'; yield 'b'; yield 'c'; } var r = ''; for (var c of g()) r += c; r;")))
+    }
+
+    @Test
+    fun genYieldExpresion() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1 + 2; } g().next().value;")))
+    }
+
+    @Test
+    fun genDelegacion() {
+        assertEquals("\"1,x,y,2\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* i(){ yield 'x'; yield 'y'; } function* g(){ yield 1; yield* i(); yield 2; } var r = []; for (var v of g()) r.push(v); r.join(',');")))
+    }
+
+    @Test
+    fun genForOfSuma() {
+        assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1; yield 2; yield 3; } var s = 0; for (var v of g()) s += v; s;")))
+    }
+
+    @Test
+    fun genTipo() {
+        assertEquals("\"object\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1; } typeof g();")))
+    }
+
+    @Test
+    fun genNextSinStart() {
+        assertEquals("\"1,true\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1; } var it = g(); var a = it.next().value; var b = it.next().done; a + ',' + b;")))
+    }
+
+    @Test
+    fun genExpresion() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("var g = function*(){ yield 5; }; g().next().value;")))
+    }
+
+    @Test
+    fun genReturn() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ yield 1; return 9; } var it = g(); it.next(); it.next().value;")))
+    }
+
+    @Test
+    fun genYieldEnBucle() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(){ var i = 0; while (i < 3) { yield i; i++; } } var s = 0; for (var v of g()) s += v; s;")))
+    }
+
+    @Test
+    fun genParametros() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("function* g(a, b){ yield a + b; } g(2, 3).next().value;")))
+    }
 }

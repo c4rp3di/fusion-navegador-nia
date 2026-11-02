@@ -1,7 +1,7 @@
 package nia.engine.js
 
 /**
- * AST del parser ECMAScript (T018 v4). Cada nodo cubre el rango de fuente
+ * AST del parser ECMAScript (T018 v5). Cada nodo cubre el rango de fuente
  * [start, end). El programa acumula los errores de parseo tipificados con
  * linea/columna 1-based (la recuperacion es a nivel de sentencia); los
  * errores lexicos viajan aparte en JsParseResult tal como los emite el lexer.
@@ -22,7 +22,7 @@ sealed class JsStmt(start: Int, end: Int) : JsNode(start, end) {
 
     class Var(start: Int, end: Int, val kind: String, val declarators: List<Declarator>) : JsStmt(start, end)
 
-    class Function(start: Int, end: Int, val name: String, val params: List<Param>, val body: Block) : JsStmt(start, end)
+    class Function(start: Int, end: Int, val name: String, val params: List<Param>, val body: Block, val async: Boolean = false, val gen: Boolean = false) : JsStmt(start, end)
 
     class Return(start: Int, end: Int, val value: JsExpr?) : JsStmt(start, end)
 
@@ -123,11 +123,17 @@ sealed class JsExpr(start: Int, end: Int) : JsNode(start, end) {
 
     class Seq(start: Int, end: Int, val exprs: List<JsExpr>) : JsExpr(start, end)
 
-    class FunctionExpr(start: Int, end: Int, val name: String?, val params: List<Param>, val body: JsStmt.Block) : JsExpr(start, end)
+    class FunctionExpr(start: Int, end: Int, val name: String?, val params: List<Param>, val body: JsStmt.Block, val async: Boolean = false, val gen: Boolean = false) : JsExpr(start, end)
 
-    class Arrow(start: Int, end: Int, val params: List<Param>, val bodyExpr: JsExpr?, val bodyBlock: JsStmt.Block?) : JsExpr(start, end)
+    class Arrow(start: Int, end: Int, val params: List<Param>, val bodyExpr: JsExpr?, val bodyBlock: JsStmt.Block?, val async: Boolean = false) : JsExpr(start, end)
 
     class ClassExpr(start: Int, end: Int, val name: String?, val superClass: JsExpr?, val members: List<ClassMember>) : JsExpr(start, end)
+
+    /** Await de una promesa (T018 v5): solo valido dentro de funciones async. */
+    class Await(start: Int, end: Int, val arg: JsExpr) : JsExpr(start, end)
+
+    /** Yield con argumento opcional y delegacion con '*' (T018 v5): solo dentro de generators. */
+    class Yield(start: Int, end: Int, val arg: JsExpr?, val star: Boolean) : JsExpr(start, end)
 }
 
 sealed class Prop(start: Int, end: Int) : JsNode(start, end) {
@@ -264,7 +270,11 @@ object JsAstDump {
             }
             sb.append(")").toString()
         }
-        is JsStmt.Function -> "(fun " + s.name + " " + params(s.params) + " " + statement(s.body) + ")"
+        is JsStmt.Function -> {
+            var r = if (s.async) "(async fun" else "(fun"
+            if (s.gen) r += "*"
+            r + " " + s.name + " " + params(s.params) + " " + statement(s.body) + ")"
+        }
         is JsStmt.Return -> if (s.value == null) "(return)" else "(return " + expression(s.value) + ")"
         is JsStmt.If -> {
             var r = "(if " + expression(s.test) + " " + statement(s.thenBranch)
@@ -377,11 +387,23 @@ object JsAstDump {
             sb.append(")").toString()
         }
         is JsExpr.FunctionExpr -> {
-            var r = "(funx"
+            var r = if (e.async) "(async funx" else "(funx"
+            if (e.gen) r += "*"
             if (e.name != null) r += " " + e.name
             r + " " + params(e.params) + " " + statement(e.body) + ")"
         }
-        is JsExpr.Arrow -> "(arrow " + params(e.params) + " " + (if (e.bodyExpr != null) expression(e.bodyExpr) else statement(e.bodyBlock!!)) + ")"
+        is JsExpr.Arrow -> (if (e.async) "(async arrow " else "(arrow ") + params(e.params) + " " + (if (e.bodyExpr != null) expression(e.bodyExpr) else statement(e.bodyBlock!!)) + ")"
+        is JsExpr.Await -> "(await " + expression(e.arg) + ")"
+        is JsExpr.Yield -> {
+            val a = e.arg
+            if (a == null) {
+                if (e.star) "(yield*)" else "(yield)"
+            } else if (e.star) {
+                "(yield* " + expression(a) + ")"
+            } else {
+                "(yield " + expression(a) + ")"
+            }
+        }
         is JsExpr.ClassExpr -> {
             var r = "(classx"
             if (e.name != null) r += " " + e.name

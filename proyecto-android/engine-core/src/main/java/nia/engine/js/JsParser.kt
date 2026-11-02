@@ -12,8 +12,14 @@ package nia.engine.js
  * chaining '?.' y spread en call args.
  * T018 v4: destructuring (declaraciones var/let/const, asignacion y
  * parametros) con patrones anidados, defaults y rest.
- * Exclusiones v4: async/await, generators, patrones en for-in/of,
- * modulos, class fields, with, ASI (los puntos y coma son obligatorios).
+ * T018 v5: async/await y generators. async function (declaracion, con
+ * exclusion tipificada de async generators), async function como expresion
+ * y async arrows (parametro unico o parentesis con backtracking); function*
+ * con yield (con o sin argumento) y yield*; await y yield como unarios de
+ * expresion (solo validos en su contexto de ejecucion). Exclusiones v5:
+ * metodos async/generator en clases y object literals (error de parseo
+ * natural), yield con valor de next(), patrones en for-in/of, modulos,
+ * class fields, with, ASI (los puntos y coma son obligatorios).
  */
 object JsParser {
 
@@ -188,6 +194,13 @@ object JsParser {
             }
             if (t is JsToken.Identifier && t.value == "let" && letDeclFollows()) {
                 return parseVarStatement("let")
+            }
+            if (t is JsToken.Identifier && t.value == "async") {
+                val p1 = peek(1)
+                if (p1 is JsToken.Keyword && p1.value == "function") {
+                    next()
+                    return parseFunctionStmt(true)
+                }
             }
             return parseExprStatement()
         }
@@ -395,18 +408,30 @@ object JsParser {
             return params
         }
 
-        fun parseFunctionStmt(): JsStmt.Function {
+        fun parseFunctionStmt(async: Boolean = false): JsStmt.Function {
             val kw = next()
+            var gen = false
+            if (isP("*")) {
+                next()
+                gen = true
+            }
+            if (async && gen) throw abort("unsupported-statement", kw.start, kw.end)
             val t = cur()
             if (t !is JsToken.Identifier) throw abort("invalid-binding", t.start, t.end)
             val nameTok = next()
             val params = parseParams()
             val body = parseBlock()
-            return JsStmt.Function(kw.start, body.end, t.value, params, body)
+            return JsStmt.Function(kw.start, body.end, t.value, params, body, async, gen)
         }
 
-        fun parseFunctionExpr(): JsExpr.FunctionExpr {
+        fun parseFunctionExpr(async: Boolean = false): JsExpr.FunctionExpr {
             val kw = next()
+            var gen = false
+            if (isP("*")) {
+                next()
+                gen = true
+            }
+            if (async && gen) throw abort("unsupported-statement", kw.start, kw.end)
             var name: String? = null
             val t = cur()
             if (t is JsToken.Identifier) {
@@ -415,7 +440,7 @@ object JsParser {
             }
             val params = parseParams()
             val body = parseBlock()
-            return JsExpr.FunctionExpr(kw.start, body.end, name, params, body)
+            return JsExpr.FunctionExpr(kw.start, body.end, name, params, body, async, gen)
         }
 
         fun parseReturn(): JsStmt.Return {
@@ -791,13 +816,13 @@ object JsParser {
             return finishArrow(t.start, params)
         }
 
-        fun finishArrow(start: Int, params: List<Param>): JsExpr.Arrow {
+        fun finishArrow(start: Int, params: List<Param>, async: Boolean = false): JsExpr.Arrow {
             if (isP("{")) {
                 val body = parseBlock()
-                return JsExpr.Arrow(start, body.end, params, null, body)
+                return JsExpr.Arrow(start, body.end, params, null, body, async)
             }
             val e = parseAssign()
-            return JsExpr.Arrow(start, e.end, params, e, null)
+            return JsExpr.Arrow(start, e.end, params, e, null, async)
         }
 
         fun parseAssign(noIn: Boolean = false): JsExpr {
@@ -882,6 +907,25 @@ object JsParser {
                 next()
                 val operand = parseUnary()
                 return JsExpr.Unary(t.start, operand.end, t.value, operand)
+            }
+            if (t is JsToken.Keyword && t.value == "await") {
+                next()
+                val operand = parseUnary()
+                return JsExpr.Await(t.start, operand.end, operand)
+            }
+            if (t is JsToken.Keyword && t.value == "yield") {
+                next()
+                var star = false
+                if (isP("*")) {
+                    next()
+                    star = true
+                }
+                var arg: JsExpr? = null
+                val nt = cur()
+                val noArg = nt is JsToken.Eof || (nt is JsToken.Punctuator && (nt.value == ";" || nt.value == ")" || nt.value == "]" || nt.value == "}" || nt.value == "," || nt.value == ":"))
+                if (!noArg) arg = parseAssign()
+                val end = if (arg != null) arg.end else t.end
+                return JsExpr.Yield(t.start, end, arg, star)
             }
             if (t is JsToken.Punctuator && (t.value == "++" || t.value == "--")) {
                 next()
@@ -978,6 +1022,34 @@ object JsParser {
             val t = cur()
             when (t) {
                 is JsToken.Identifier -> {
+                    if (t.value == "async") {
+                        val p1 = peek(1)
+                        if (p1 is JsToken.Keyword && p1.value == "function") {
+                            next()
+                            return parseFunctionExpr(true)
+                        }
+                        if (p1 is JsToken.Identifier && peek(2) is JsToken.Punctuator && (peek(2) as JsToken.Punctuator).value == "=>") {
+                            next()
+                            next()
+                            next()
+                            val ps = listOf(Param(p1.start, p1.end, p1.value, null))
+                            return finishArrow(t.start, ps, true)
+                        }
+                        if (p1 is JsToken.Punctuator && p1.value == "(") {
+                            val save = i
+                            next()
+                            try {
+                                val ps = parseParams()
+                                val p3 = cur()
+                                if (p3 is JsToken.Punctuator && p3.value == "=>") {
+                                    next()
+                                    return finishArrow(t.start, ps, true)
+                                }
+                            } catch (e: ParseAbort) {
+                            }
+                            i = save
+                        }
+                    }
                     next()
                     return JsExpr.Ident(t.start, t.end, t.value)
                 }

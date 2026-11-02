@@ -1068,4 +1068,108 @@ class JsParserTest {
         assertEquals("", JsAstDump.lexErrors(r.lexErrors))
     }
 
+    @Test
+    fun asyncFuncion() {
+        val r = parse("async function f(){}")
+        assertEquals("(program (async fun f (params) (block)))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncFuncionParams() {
+        val r = parse("async function f(a){}")
+        assertEquals("(program (async fun f (params (p a)) (block)))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun genFuncion() {
+        val r = parse("function* g(){}")
+        assertEquals("(program (fun* g (params) (block)))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun genFuncionExpr() {
+        val r = parse("var g = function*(){};")
+        assertEquals("(program (var (decl g (funx* (params) (block)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncFuncionExpr() {
+        val r = parse("var f = async function(){};")
+        assertEquals("(program (var (decl f (async funx (params) (block)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncAwaitDump() {
+        val r = parse("async function f(){ await x; }")
+        assertEquals("(program (async fun f (params) (block (expr (await (id x))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun genYieldDump() {
+        val r = parse("function* g(){ yield 1; }")
+        assertEquals("(program (fun* g (params) (block (expr (yield (num 1))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun genYieldSinValorDump() {
+        val r = parse("function* g(){ yield; }")
+        assertEquals("(program (fun* g (params) (block (expr (yield)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun genYieldStarDump() {
+        val r = parse("function* g(){ yield* i; }")
+        assertEquals("(program (fun* g (params) (block (expr (yield* (id i))))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncArrowSingle() {
+        val r = parse("var h = async v => v;")
+        assertEquals("(program (var (decl h (async arrow (params (p v)) (id v)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncArrowParentesis() {
+        val r = parse("var h = async (a, b) => a;")
+        assertEquals("(program (var (decl h (async arrow (params (p a) (p b)) (id a)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncLlamadaNoArrow() {
+        val r = parse("var f = async(1);")
+        assertEquals("(program (var (decl f (call (id async) (num 1)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun asyncIdentNormal() {
+        val r = parse("var async = 1;")
+        assertEquals("(program (var (decl async (num 1))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
 }

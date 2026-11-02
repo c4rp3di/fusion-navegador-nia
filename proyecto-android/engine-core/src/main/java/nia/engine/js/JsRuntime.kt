@@ -44,7 +44,9 @@ class JsFun(
     val bodyExpr: JsExpr?,
     val env: Env,
     val isArrow: Boolean,
-    val props: LinkedHashMap<String, JsProp>
+    val props: LinkedHashMap<String, JsProp>,
+    val async: Boolean = false,
+    val gen: Boolean = false
 ) : JsValue()
 
 /** Clase: prototipo de instancia, constructor, miembro static y entorno. */

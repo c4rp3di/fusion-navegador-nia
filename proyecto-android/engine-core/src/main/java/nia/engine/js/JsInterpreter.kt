@@ -1,6 +1,7 @@
 package nia.engine.js
 
 import nia.engine.dom.DomDocument
+import java.util.concurrent.LinkedBlockingQueue
 
 /**
  * Interprete ECMAScript v1 (T019): evalua el AST del parser v2.
@@ -14,11 +15,16 @@ import nia.engine.dom.DomDocument
  * extends), new/instanceof/in/delete, optional chaining con cortocircuito,
  * coerciones completas y errores tipificados como objetos Error.
  * Exclusiones: builtins salvo Error, Object.prototype, super, TDZ, strict,
- * arguments, async/generators/modulos. T018 v4 anade destructuring completo
+ * arguments, modulos. T018 v4 anade destructuring completo
  * (declaraciones, asignacion y parametros con patrones anidados, defaults
  * sobre undefined y rest; sin patrones en for-in/of). T023 v1 anade la cola
  * de microtasks de Promise (drenada al final de cada evaluacion, con
  * completion value REPL) y los miembros de RegExp sobre su JsRegExp.
+ * T018 v5 anade async/await y generators sobre runners reanudables: hilos
+ * con handoff estricto (en cada momento solo un hilo ejecuta JS; suspender
+ * es bloquearse en su inbox; quien lanza o reanuda espera su senal de
+ * parada) y el drenaje reanuda los awaits asentados y al final aborta los
+ * runners colgados.
  */
 class JsEvalResult(val value: JsValue, val thrown: Boolean, val thrownValue: JsValue?)
 
@@ -42,8 +48,8 @@ object JsInterpreter {
 
     private fun makeFun(
         name: String?, params: List<Param>, body: JsStmt.Block?, bodyExpr: JsExpr?,
-        env: Env, isArrow: Boolean
-    ): JsFun = JsFun(name, params, body, bodyExpr, env, isArrow, LinkedHashMap())
+        env: Env, isArrow: Boolean, async: Boolean = false, gen: Boolean = false
+    ): JsFun = JsFun(name, params, body, bodyExpr, env, isArrow, LinkedHashMap(), async, gen)
 
     private fun getOrCreatePrototype(f: JsFun): JsObj {
         var entry = f.props["prototype"]
@@ -397,6 +403,12 @@ object JsInterpreter {
         if (f !is JsFun) {
             throw JsRuntime.throwNative("TypeError", JsRuntime.toStringJs(f) + " is not a function")
         }
+        if (f.gen) return makeGenerator(f, thisArg, args)
+        if (f.async) return startAsync(f, thisArg, args)
+        return runFunBody(f, thisArg, args)
+    }
+
+    private fun runFunBody(f: JsFun, thisArg: JsValue, args: List<JsValue>): JsValue {
         val env = Env(f.env, true)
         if (!f.isArrow) {
             env.declare("this", thisArg)
@@ -451,7 +463,7 @@ object JsInterpreter {
                     }
                 }
             }
-            is JsStmt.Function -> env.declareFnVar(s.name, makeFun(s.name, s.params, s.body, null, env, false))
+            is JsStmt.Function -> env.declareFnVar(s.name, makeFun(s.name, s.params, s.body, null, env, false, s.async, s.gen))
             is JsStmt.Block -> hoist(s.statements, env)
             is JsStmt.If -> {
                 hoistStmt(s.thenBranch, env)
@@ -742,7 +754,7 @@ object JsInterpreter {
                 return normal()
             }
             is JsStmt.Function -> {
-                env.declareFnVar(s.name, makeFun(s.name, s.params, s.body, null, env, false))
+                env.declareFnVar(s.name, makeFun(s.name, s.params, s.body, null, env, false, s.async, s.gen))
                 return normal()
             }
             is JsStmt.Return -> {
@@ -824,6 +836,14 @@ object JsInterpreter {
                         for (el in right.elems) items.add(el)
                     } else if (right is JsStr) {
                         for (c in right.value) items.add(JsStr(c.toString()))
+                    } else if (right is JsObj && genStates.containsKey(right)) {
+                        while (true) {
+                            val nx = genNext(right)
+                            val dn = nx.props["done"]
+                            if (dn is JsProp.Value && dn.v is JsBool && dn.v.value) break
+                            val vv = nx.props["value"]
+                            items.add(if (vv is JsProp.Value) vv.v else JsUndefined)
+                        }
                     } else {
                         throw JsRuntime.throwNative("TypeError", "Value is not iterable")
                     }
@@ -1258,8 +1278,10 @@ object JsInterpreter {
                 for (x in e.exprs) last = evalExpr(x, env)
                 return last
             }
-            is JsExpr.FunctionExpr -> return makeFun(e.name, e.params, e.body, null, env, false)
-            is JsExpr.Arrow -> return makeFun(null, e.params, e.bodyBlock, e.bodyExpr, env, true)
+            is JsExpr.FunctionExpr -> return makeFun(e.name, e.params, e.body, null, env, false, e.async, e.gen)
+            is JsExpr.Arrow -> return makeFun(null, e.params, e.bodyBlock, e.bodyExpr, env, true, e.async)
+            is JsExpr.Await -> return doAwait(evalExpr(e.arg, env))
+            is JsExpr.Yield -> return doYield(e, env)
             is JsExpr.ClassExpr -> return makeClassValue(e.name, e.superClass, e.members, env)
         }
     }
@@ -1549,6 +1571,17 @@ object JsInterpreter {
         p.props["__state"] = JsProp.Value(JsStr(if (ok) "fulfilled" else "rejected"))
         p.props["__value"] = JsProp.Value(v)
         flushReactions(p)
+        val aws = awaiters.remove(p)
+        if (aws != null) {
+            for (r in aws) {
+                val msg = if (ok) InMsg.Resume(v) else InMsg.Rej(v)
+                JsRuntime.microtasks.addLast {
+                    r.inbox.put(msg)
+                    r.out.take()
+                    null
+                }
+            }
+        }
     }
 
     private fun addReaction(p: JsObj, r: PReaction) {
@@ -1721,11 +1754,212 @@ object JsInterpreter {
         return JsEvalResult(last, thrown != null, thrown)
     }
 
+
+    // ---- Runners reanudables (T018 v5): async/await y generators ----
+    // Handoff estricto: en cada momento SOLO un hilo ejecuta JS. Un Runner
+    // corre en su propio hilo (la pila del hilo ES la maquina de estados:
+    // suspender es bloquearse en su inbox) y quien lo lanza o reanuda espera
+    // su senal de parada (Paused/Yield/Done/ThrowErr) antes de continuar.
+
+    private class AbortRunner : RuntimeException()
+
+    private sealed class InMsg {
+        object NEXT : InMsg()
+        object ABORT : InMsg()
+        class Resume(val v: JsValue) : InMsg()
+        class Rej(val v: JsValue) : InMsg()
+    }
+
+    private sealed class OutMsg {
+        object Paused : OutMsg()
+        class Yield(val v: JsValue) : OutMsg()
+        class Done(val v: JsValue) : OutMsg()
+        class ThrowErr(val v: JsValue) : OutMsg()
+    }
+
+    private class Runner {
+        val inbox = LinkedBlockingQueue<InMsg>()
+        val out = LinkedBlockingQueue<OutMsg>()
+        var thread: Thread? = null
+        var finished = false
+    }
+
+    private class GenState(val f: JsFun, val thisArg: JsValue, val args: List<JsValue>) {
+        var runner: Runner? = null
+        var done = false
+    }
+
+    private val currentRunner = ThreadLocal<Runner?>()
+
+    private val activeRunners = ArrayList<Runner>()
+
+    private val awaiters = LinkedHashMap<JsObj, MutableList<Runner>>()
+
+    private val genStates = LinkedHashMap<JsObj, GenState>()
+
+    private fun startRunner(body: () -> JsValue): Runner {
+        val r = Runner()
+        activeRunners.add(r)
+        val t = Thread {
+            currentRunner.set(r)
+            try {
+                val v = body()
+                r.finished = true
+                r.out.put(OutMsg.Done(v))
+            } catch (e: AbortRunner) {
+                r.finished = true
+            } catch (e: JsThrown) {
+                r.finished = true
+                r.out.put(OutMsg.ThrowErr(e.value))
+            } catch (e: Throwable) {
+                r.finished = true
+                r.out.put(OutMsg.ThrowErr(JsRuntime.makeErrorObj("Error", "internal runner error")))
+            } finally {
+                currentRunner.set(null)
+            }
+        }
+        r.thread = t
+        t.isDaemon = true
+        t.start()
+        return r
+    }
+
+    private fun startAsync(f: JsFun, thisArg: JsValue, args: List<JsValue>): JsObj {
+        val p = makePromise()
+        val r = startRunner { runFunBody(f, thisArg, args) }
+        val s = r.out.take()
+        if (s is OutMsg.Done) settlePromise(p, true, s.v)
+        if (s is OutMsg.ThrowErr) settlePromise(p, false, s.v)
+        return p
+    }
+
+    private fun makeGenerator(f: JsFun, thisArg: JsValue, args: List<JsValue>): JsObj {
+        val g = JsRuntime.newObj()
+        genStates[g] = GenState(f, thisArg, args)
+        g.props["next"] = JsProp.Value(JsBuiltins.fn("next") { _, thiz ->
+            val go = thiz as? JsObj
+            if (go == null || !genStates.containsKey(go)) {
+                throw JsRuntime.throwNative("TypeError", "Generator next called on incompatible receiver")
+            }
+            genNext(go)
+        })
+        return g
+    }
+
+    private fun genNext(g: JsObj): JsObj {
+        val st = genStates[g]
+        if (st == null || st.done) return genResult(JsUndefined, true)
+        var r = st.runner
+        if (r == null) {
+            r = startRunner { runFunBody(st.f, st.thisArg, st.args) }
+            st.runner = r
+        } else {
+            r.inbox.put(InMsg.NEXT)
+        }
+        val s = r.out.take()
+        if (s is OutMsg.Yield) return genResult(s.v, false)
+        if (s is OutMsg.Done) {
+            st.done = true
+            return genResult(s.v, true)
+        }
+        if (s is OutMsg.ThrowErr) {
+            st.done = true
+            throw JsThrown(s.v)
+        }
+        st.done = true
+        return genResult(JsUndefined, true)
+    }
+
+    private fun genResult(v: JsValue, done: Boolean): JsObj {
+        val o = JsRuntime.newObj()
+        o.props["value"] = JsProp.Value(v)
+        o.props["done"] = JsProp.Value(JsBool(done))
+        return o
+    }
+
+    private fun doAwait(v: JsValue): JsValue {
+        if (v !is JsObj || !isPromise(v)) return v
+        val st = promiseState(v)
+        if (st == "fulfilled") return promiseValue(v)
+        if (st == "rejected") throw JsThrown(promiseValue(v))
+        val r = currentRunner.get()
+        if (r == null) {
+            throw JsRuntime.throwNative("TypeError", "await is only valid inside async functions")
+        }
+        val list = awaiters[v]
+        if (list == null) awaiters[v] = mutableListOf(r) else list.add(r)
+        r.out.put(OutMsg.Paused)
+        val m = r.inbox.take()
+        return when (m) {
+            is InMsg.Resume -> m.v
+            is InMsg.Rej -> throw JsThrown(m.v)
+            is InMsg.NEXT -> JsUndefined
+            is InMsg.ABORT -> throw AbortRunner()
+        }
+    }
+
+    private fun doYield(e: JsExpr.Yield, env: Env): JsValue {
+        val r = currentRunner.get()
+        if (r == null) {
+            throw JsRuntime.throwNative("TypeError", "yield is only valid inside generator functions")
+        }
+        if (e.star) {
+            val a = e.arg
+            if (a == null) return JsUndefined
+            return delegateYield(r, evalExpr(a, env))
+        }
+        val a = e.arg
+        val v = if (a == null) JsUndefined else evalExpr(a, env)
+        return suspendYield(r, v)
+    }
+
+    private fun suspendYield(r: Runner, v: JsValue): JsValue {
+        r.out.put(OutMsg.Yield(v))
+        val m = r.inbox.take()
+        if (m is InMsg.ABORT) throw AbortRunner()
+        return JsUndefined
+    }
+
+    private fun delegateYield(r: Runner, src: JsValue): JsValue {
+        var last: JsValue = JsUndefined
+        if (src is JsObj && genStates.containsKey(src)) {
+            while (true) {
+                val nx = genNext(src)
+                val dn = nx.props["done"]
+                if (dn is JsProp.Value && dn.v is JsBool && dn.v.value) {
+                    val vv = nx.props["value"]
+                    if (vv is JsProp.Value) last = vv.v
+                    break
+                }
+                val vv = nx.props["value"]
+                if (vv is JsProp.Value) suspendYield(r, vv.v)
+            }
+            return last
+        }
+        if (src is JsObj && src.isArr) {
+            for (el in src.elems) {
+                last = el
+                suspendYield(r, el)
+            }
+            return last
+        }
+        if (src is JsStr) {
+            for (c in src.value) {
+                last = JsStr(c.toString())
+                suspendYield(r, last)
+            }
+            return last
+        }
+        throw JsRuntime.throwNative("TypeError", "yield* argument is not iterable")
+    }
+
     /**
-     * Drena la cola de microtasks (T023): cada microtask devuelve el valor del
-     * handler; el ultimo no-undefined se convierte en completion value del
-     * REPL. Tope de 10000 para bucles que encolan sin fin. Al final limpia
-     * la cola y las reacciones de Promise (aislamiento entre evaluaciones).
+     * Drena la cola de microtasks (T023 + T018 v5): cada microtask devuelve el
+     * valor del handler; el ultimo no-undefined se convierte en completion
+     * value del REPL. Tope de 10000 para bucles que encolan sin fin. Al final
+     * aborta los runners vivos (awaits de promises que nadie cumplira,
+     * generadores sin consumir), limpia la cola, las reacciones y los
+     * registros de runners (aislamiento entre evaluaciones).
      */
     private fun drainMicrotasks(): JsValue? {
         var res: JsValue? = null
@@ -1740,8 +1974,23 @@ object JsInterpreter {
                 if (ex !is JsThrown) throw ex
             }
         }
+        for (r in ArrayList(activeRunners)) {
+            if (!r.finished) {
+                r.inbox.put(InMsg.ABORT)
+                val t = r.thread
+                if (t != null) {
+                    try {
+                        t.join(50)
+                    } catch (e: InterruptedException) {
+                    }
+                }
+            }
+        }
+        activeRunners.clear()
         JsRuntime.microtasks.clear()
         promiseReactions.clear()
+        awaiters.clear()
+        genStates.clear()
         return res
     }
 
