@@ -103,6 +103,8 @@ jobs:
             engine-core/src/test/java/nia/engine/config/NiaConfigTest.kt \
             engine-core/src/main/java/nia/engine/inspector/Inspector.kt \
             engine-core/src/test/java/nia/engine/inspector/InspectorTest.kt \
+            engine-core/src/main/java/nia/engine/modules/ModuleRegistry.kt \
+            engine-core/src/test/java/nia/engine/modules/ModuleRegistryTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/AndroidManifest.xml \
