@@ -267,6 +267,6 @@ class DevToolsModelTest {
         model.recordSelection(session, ctx, hijos(doc, b)[2])
         assertEquals(2, session.all().size)
         assertEquals(1, session.eventsSince(1).size)
-        assertEquals(3, session.eventsSince(1)[0].payload["nodeId"])
+        assertEquals("3", session.eventsSince(1)[0].payload["nodeId"])
     }
 }
