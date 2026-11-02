@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0032)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0033)
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
@@ -38,6 +38,8 @@ Actions diagnosticados en las revisiones R0005–R0007 del plan maestro (NIA-MAE
 - **R0031 (T024 v1, RES-0018)**: eventos por el árbol y consultas de selectores en `:engine-core`: `addEventListener` acepta un tercer argumento `useCapture` (registro de captura por nodo, sin duplicados por lista) y `dispatchEvent` recorre la cadena de ancestros — captura de la raíz al padre del objetivo, fase objetivo (listeners del propio nodo) y burbujeo del padre a la raíz solo si `ev.bubbles` — con `this` del listener = `currentTarget` de cada fase y `stopPropagation` cortando el recorrido; `querySelector`/`querySelectorAll` en `document` y nodos con lista de selectores por comas del motor de `CssCascade` (tipos, universal, clases, ids, atributos, combinadores descendente/hijo/hermanos `+`/`~` y pseudo-clases estáticas), que expone `parseSelectorList`/`matchesAny`/`parentMap` (el matching pasa de funciones locales de `compute` a funciones de objeto reutilizables); `DomDocument` gana `parentOf` y `nodeOf`. `JsDomBindingsTest` pasa de 37 a 60 tests (23 nuevos: 11 de consultas, 10 de propagación y 2 asserts Kotlin). Limitaciones v1: sin `stopImmediatePropagation`, los listeners de captura del propio objetivo no se invocan en la fase objetivo y las pseudo-clases dinámicas siguen fuera del parser.
 - **R0032 (T024 v2, RES-0019)**: `textContent` y control fino de eventos en `:engine-core`: `textContent` sobre nodos como accessor real (`JsProp.Accessor` con `JsFun` generados por el propio parser) — lectura concatena los textos de todos los descendientes y escritura reemplaza los hijos por un único nodo de texto (en nodos de texto, fija su `data`) —; `stopImmediatePropagation` corta los listeners restantes del nodo actual y las fases posteriores (implica `stopPropagation`); los listeners de captura registrados en el propio objetivo se invocan en la fase objetivo, antes que los de burbuja (simplificación documentada frente al orden global de registro del estándar). `JsDomBindingsTest` pasa de 60 a 71 tests (11 nuevos: 6 de textContent, 4 de stopImmediate/captura en objetivo y 1 assert Kotlin).
 
+- **R0033 (T018 v4, RES-0020)**: destructuring completo en el motor JS (`JsAst`/`JsParser`/`JsInterpreter`): nuevo nodo `JsPat` (ident con default, array con huecos y rest, objeto con claves computed y rest; miembro como destino solo en asignación) usado por `Declarator` y `Param`; patrones en declaraciones `var`/`let`/`const` (los `var` de patrón participan del hoisting), en asignación destructurante (`[a, b] = x;`, `({a} = o);` — el literal se valida y convierte a patrón al enlazar, y miembros como `o.x` son destinos válidos) y en parámetros de funciones, arrows y métodos, con defaults que solo aplican sobre `undefined` y rest de objeto que copia las propiedades restantes; destructurear `null`/`undefined` tipifica `TypeError`. Alcance v4 decidido: `async/await` y `generators` quedan para v5 tras T023. `JsParserTest` pasa de 114 a 132 y `JsInterpreterTest` de 327 a 363 tests (18 + 36 nuevos; expectativas del intérprete generadas con el oráculo ECMAScript). Limitaciones v4: sin patrones en `for-in`/`for-of` ni en el init del `for`, sin elision en asignación ni en literales, rest solo como último elemento.
+
 Incluye:
 
 - **T002** — Módulo `:contracts` (Kotlin JVM puro): ids tipados,
@@ -53,7 +55,7 @@ Incluye:
 ```
 settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
-engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + tests)
+engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + tests)
 app/                aplicación Android mínima
 docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)

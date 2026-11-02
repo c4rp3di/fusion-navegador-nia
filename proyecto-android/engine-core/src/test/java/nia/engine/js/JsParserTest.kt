@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Tests del parser ECMAScript v2 (T018 v3). Espejo 1:1 del gemelo TS/JS
+ * Tests del parser ECMAScript v2 (T018 v4). Espejo 1:1 del gemelo TS/JS
  * validado: mismas fuentes, mismas expectativas (generadas desde las
  * salidas del gemelo, nunca transcritas a mano).
  */
@@ -923,4 +923,149 @@ class JsParserTest {
         assertEquals("", JsAstDump.parseErrors(r.program))
         assertEquals("", JsAstDump.lexErrors(r.lexErrors))
     }
+
+    @Test
+    fun patronVarArray() {
+        val r = parse("var [a, b] = x;")
+        assertEquals("(program (var (declp (parr (pid a) (pid b)) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronLetArray() {
+        val r = parse("let [a, b] = x;")
+        assertEquals("(program (let (declp (parr (pid a) (pid b)) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronConstObjeto() {
+        val r = parse("const {a, b} = o;")
+        assertEquals("(program (const (declp (pobj (pe (key a) (pid a)) (pe (key b) (pid b))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronHueco() {
+        val r = parse("var [a, , b] = x;")
+        assertEquals("(program (var (declp (parr (pid a) - (pid b)) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronRest() {
+        val r = parse("var [a, ...r] = x;")
+        assertEquals("(program (var (declp (parr (pid a) (rest (pid r))) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronDefault() {
+        val r = parse("var {a = 1} = o;")
+        assertEquals("(program (var (declp (pobj (pe (key a) (pid a (num 1)))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronAnidado() {
+        val r = parse("var [a, [b]] = x;")
+        assertEquals("(program (var (declp (parr (pid a) (parr (pid b))) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronRenombrar() {
+        val r = parse("var {a: x} = o;")
+        assertEquals("(program (var (declp (pobj (pe (key a) (pid x))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronComputed() {
+        val r = parse("var {[k]: v} = o;")
+        assertEquals("(program (var (declp (pobj (pe (keyc (id k)) (pid v))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronStringKey() {
+        val r = parse("var {'s': x} = o;")
+        assertEquals("(program (var (declp (pobj (pe (keystr \"s\") (pid x))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronObjRest() {
+        val r = parse("var {a, ...r} = o;")
+        assertEquals("(program (var (declp (pobj (pe (key a) (pid a)) (rest (pid r))) (id o))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronDefaultArray() {
+        val r = parse("var [a = 1] = x;")
+        assertEquals("(program (var (declp (parr (pid a (num 1))) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronVarDoble() {
+        val r = parse("var [a] = x, b = 2;")
+        assertEquals("(program (var (declp (parr (pid a)) (id x)) (decl b (num 2))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronAsignacion() {
+        val r = parse("[a, b] = x;")
+        assertEquals("(program (expr (asg = (arr (id a) (id b)) (id x))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronAsignacionObjeto() {
+        val r = parse("({a} = o);")
+        assertEquals("(program (expr (paren (asg = (obj (short a)) (id o)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronShorthandDefault() {
+        val r = parse("({a = 1} = o);")
+        assertEquals("(program (expr (paren (asg = (obj (kv (key a) (asg = (id a) (num 1)))) (id o)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronParametros() {
+        val r = parse("function f([a], {b}) {}")
+        assertEquals("(program (fun f (params (pp (parr (pid a))) (pp (pobj (pe (key b) (pid b))))) (block)))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
+    @Test
+    fun patronArrow() {
+        val r = parse("var f = ([a]) => a;")
+        assertEquals("(program (var (decl f (arrow (params (pp (parr (pid a)))) (id a)))))", JsAstDump.program(r.program))
+        assertEquals("", JsAstDump.parseErrors(r.program))
+        assertEquals("", JsAstDump.lexErrors(r.lexErrors))
+    }
+
 }

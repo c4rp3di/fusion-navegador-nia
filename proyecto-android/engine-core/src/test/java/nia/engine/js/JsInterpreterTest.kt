@@ -1649,4 +1649,185 @@ class JsInterpreterTest {
     fun etDuplicado() {
         assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluate("var t = new EventTarget(); var n = 0; function h() { n = n + 1; } t.addEventListener(\"e\", h); t.addEventListener(\"e\", h); t.dispatchEvent(new Event(\"e\")); n;")))
     }
+
+    @Test
+    fun declArrayBasico() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a, b] = [1, 2]; a + b;")))
+    }
+
+    @Test
+    fun declArrayHueco() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a, , b] = [1, 2, 3]; a + b;")))
+    }
+
+    @Test
+    fun declArrayRest() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a, ...r] = [1, 2, 3]; r[1];")))
+    }
+
+    @Test
+    fun declArrayRestCadena() {
+        assertEquals("\"ab,c\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a, ...r] = 'abc'; a + r;")))
+    }
+
+    @Test
+    fun declObjBasico() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a, b} = {a: 1, b: 2}; a + b;")))
+    }
+
+    @Test
+    fun declObjRenombra() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a: x} = {a: 5}; x;")))
+    }
+
+    @Test
+    fun declObjStringKey() {
+        assertEquals("7", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {'s': x} = {s: 7}; x;")))
+    }
+
+    @Test
+    fun declObjDefault() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a = 3} = {}; a;")))
+    }
+
+    @Test
+    fun declObjDefaultPresente() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a = 3} = {a: 9}; a;")))
+    }
+
+    @Test
+    fun declArrayDefault() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a = 9] = []; a;")))
+    }
+
+    @Test
+    fun declArrayDefaultCero() {
+        assertEquals("0", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a = 9] = [0]; a;")))
+    }
+
+    @Test
+    fun declAnidado() {
+        assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a, [b, c]] = [1, [2, 3]]; a + b + c;")))
+    }
+
+    @Test
+    fun declObjAnidado() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a: {b}} = {a: {b: 4}}; b;")))
+    }
+
+    @Test
+    fun declMixto() {
+        assertEquals("17", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a: [x, y]} = {a: [8, 9]}; x + y;")))
+    }
+
+    @Test
+    fun declComputed() {
+        assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate("var k = 'q'; var {[k]: v} = {q: 6}; v;")))
+    }
+
+    @Test
+    fun declObjRest() {
+        assertEquals("\"true 5\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var {a, ...r} = {a: 1, b: 2, c: 3}; (r.a === undefined) + ' ' + (r.b + r.c);")))
+    }
+
+    @Test
+    fun declCadena() {
+        assertEquals("\"hi\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a, b] = 'hi'; a + b;")))
+    }
+
+    @Test
+    fun declDefaultsSecuenciales() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("var [a = 1, b = a + 1] = []; b;")))
+    }
+
+    @Test
+    fun declLetPatron() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("let [a, b] = [1, 2]; a + b;")))
+    }
+
+    @Test
+    fun declNullishError() {
+        assertEquals("\"Cannot destructure null\"", JsInterpreter.dumpResult(JsInterpreter.evaluate("var m = ''; try { var [x] = null; } catch (e) { m = e.message; } m;")))
+    }
+
+    @Test
+    fun asignaArray() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a, b; [a, b] = [1, 2]; a + b;")))
+    }
+
+    @Test
+    fun asignaSwap() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a = 1, b = 2; [a, b] = [b, a]; a;")))
+    }
+
+    @Test
+    fun asignaMiembro() {
+        assertEquals("5", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {}; [o.x] = [5]; o.x;")))
+    }
+
+    @Test
+    fun asignaObjetoParen() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a; ({a} = {a: 2}); a;")))
+    }
+
+    @Test
+    fun asignaObjetoDefault() {
+        assertEquals("7", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a; ({a = 7} = {}); a;")))
+    }
+
+    @Test
+    fun asignaObjetoMiembro() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = {}; ({x: o.y} = {x: 3}); o.y;")))
+    }
+
+    @Test
+    fun asignaAnidado() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a, b; [a, [b]] = [1, [2]]; a + b;")))
+    }
+
+    @Test
+    fun asignaRest() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a, r; [a, ...r] = [1, 2, 3]; r.length;")))
+    }
+
+    @Test
+    fun asignaValorExpr() {
+        assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("var a; [a] = [1 + 1]; a;")))
+    }
+
+    @Test
+    fun paramArray() {
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f([a, b]) { return a + b; } f([1, 2]);")))
+    }
+
+    @Test
+    fun paramObjeto() {
+        assertEquals("6", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f({x, y}) { return x * y; } f({x: 2, y: 3});")))
+    }
+
+    @Test
+    fun paramDefaultPatron() {
+        assertEquals("7", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f([a] = [7]) { return a; } f();")))
+    }
+
+    @Test
+    fun paramDefaultDentro() {
+        assertEquals("4", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f({x = 4}) { return x; } f({});")))
+    }
+
+    @Test
+    fun paramArrow() {
+        assertEquals("10", JsInterpreter.dumpResult(JsInterpreter.evaluate("var f = ([a, b]) => a + b; f([4, 6]);")))
+    }
+
+    @Test
+    fun paramAnidado() {
+        assertEquals("12", JsInterpreter.dumpResult(JsInterpreter.evaluate("function f([{n}]) { return n; } f([{n: 12}]);")))
+    }
+
+    @Test
+    fun paramMetodo() {
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluate("var o = { m([a]) { return a; } }; o.m([9]);")))
+    }
+
 }

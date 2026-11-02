@@ -13,8 +13,11 @@ import nia.engine.dom.DomDocument
  * delega en el super con los argumentos, metodos, get/set, computed, static,
  * extends), new/instanceof/in/delete, optional chaining con cortocircuito,
  * coerciones completas y errores tipificados como objetos Error.
- * Exclusiones v1: builtins salvo Error, Object.prototype, super, TDZ, strict,
- * arguments, destructuring/async/generators/modulos, regex exec.
+ * Exclusiones: builtins salvo Error, Object.prototype, super, TDZ, strict,
+ * arguments, async/generators/modulos, regex exec. T018 v4 anade
+ * destructuring completo (declaraciones, asignacion y parametros con
+ * patrones anidados, defaults sobre undefined y rest; sin patrones en
+ * for-in/of).
  */
 class JsEvalResult(val value: JsValue, val thrown: Boolean, val thrownValue: JsValue?)
 
@@ -389,7 +392,7 @@ object JsInterpreter {
             val p = f.params[j]
             var v: JsValue = if (j < args.size) args[j] else JsUndefined
             if (v is JsUndefined && p.def != null) v = evalExpr(p.def, env)
-            env.declare(p.name, v)
+            if (p.pat != null) bindDecl(p.pat, v, "let", env) else env.declare(p.name, v)
         }
         if (f.isArrow && f.bodyExpr != null) return evalExpr(f.bodyExpr, env)
         val b = f.body
@@ -429,7 +432,9 @@ object JsInterpreter {
         when (s) {
             is JsStmt.Var -> {
                 if (s.kind == "var") {
-                    for (d in s.declarators) env.declareFnVar(d.name, JsUndefined)
+                    for (d in s.declarators) {
+                        if (d.pat != null) hoistPat(d.pat, env) else env.declareFnVar(d.name, JsUndefined)
+                    }
                 }
             }
             is JsStmt.Function -> env.declareFnVar(s.name, makeFun(s.name, s.params, s.body, null, env, false))
@@ -461,6 +466,23 @@ object JsInterpreter {
         }
     }
 
+    private fun hoistPat(p: JsPat, env: Env) {
+        when (p) {
+            is JsPat.PIdent -> env.declareFnVar(p.name, JsUndefined)
+            is JsPat.PMember -> {}
+            is JsPat.PArray -> {
+                for (el in p.elems) if (el != null) hoistPat(el, env)
+                val r = p.rest
+                if (r != null) hoistPat(r, env)
+            }
+            is JsPat.PObject -> {
+                for (en in p.entries) hoistPat(en.pat, env)
+                val r = p.rest
+                if (r != null) hoistPat(r, env)
+            }
+        }
+    }
+
     // ---- Asignacion ----
 
     private fun assignToIdent(name: String, v: JsValue, env: Env) {
@@ -484,6 +506,191 @@ object JsInterpreter {
             return
         }
         throw JsRuntime.throwNative("TypeError", "Invalid assignment target")
+    }
+
+    // ---- Destructuring (T018 v4) ----
+
+    private fun patNullishGuard(v: JsValue) {
+        if (JsRuntime.isNullish(v)) {
+            throw JsRuntime.throwNative("TypeError", "Cannot destructure " + JsRuntime.toStringJs(v))
+        }
+    }
+
+    private fun patLen(v: JsValue): Int {
+        if (v is JsObj && v.isArr) return v.elems.size
+        if (v is JsStr) return v.value.length
+        val l = getMember(v, "length")
+        val n = JsRuntime.toNumber(l)
+        if (n.isNaN() || n < 0.0) return 0
+        return n.toInt()
+    }
+
+    private fun patGet(v: JsValue, i: Int): JsValue {
+        if (v is JsStr) {
+            if (i >= 0 && i < v.value.length) return JsStr(v.value[i].toString())
+            return JsUndefined
+        }
+        return getMember(v, i.toString())
+    }
+
+    private fun patFromExpr(e: JsExpr): JsPat? {
+        when (e) {
+            is JsExpr.Ident -> return JsPat.PIdent(e.start, e.end, e.name, null)
+            is JsExpr.Member -> return JsPat.PMember(e.start, e.end, e, null)
+            is JsExpr.Paren -> return patFromExpr(e.expr)
+            is JsExpr.Assign -> {
+                if (e.op != "=") return null
+                val t = patFromExpr(e.target)
+                if (t !is JsPat.PIdent) return null
+                return JsPat.PIdent(t.start, e.end, t.name, e.value)
+            }
+            is JsExpr.ArrayLit -> {
+                val elems = mutableListOf<JsPat?>()
+                var rest: JsPat? = null
+                for (it in e.items) {
+                    if (it is JsExpr.Spread) {
+                        rest = patFromExpr(it.expr)
+                        if (rest == null) return null
+                    } else {
+                        val p = patFromExpr(it)
+                        if (p == null) return null
+                        elems.add(p)
+                    }
+                }
+                return JsPat.PArray(e.start, e.end, elems, rest)
+            }
+            is JsExpr.ObjectLit -> {
+                val entries = mutableListOf<PEntry>()
+                var rest: JsPat? = null
+                for (pr in e.props) {
+                    when (pr) {
+                        is Prop.Shorthand -> entries.add(PEntry(pr.start, pr.end, Key.IdentKey(pr.start, pr.end, pr.name), JsPat.PIdent(pr.start, pr.end, pr.name, null)))
+                        is Prop.KeyValue -> {
+                            val tp = patFromExpr(pr.value)
+                            if (tp == null) return null
+                            entries.add(PEntry(pr.start, pr.end, pr.key, tp))
+                        }
+                        is Prop.SpreadProp -> {
+                            rest = patFromExpr(pr.expr)
+                            if (rest == null) return null
+                        }
+                        else -> return null
+                    }
+                }
+                return JsPat.PObject(e.start, e.end, entries, rest)
+            }
+            else -> return null
+        }
+    }
+
+    private fun bindDecl(p: JsPat, v: JsValue, kind: String, env: Env) {
+        when (p) {
+            is JsPat.PIdent -> {
+                var pv = v
+                if (pv is JsUndefined && p.def != null) pv = evalExpr(p.def, env)
+                if (kind == "var") {
+                    if (!env.setExisting(p.name, pv)) env.declareFnVar(p.name, pv)
+                } else {
+                    env.declare(p.name, pv)
+                }
+            }
+            is JsPat.PMember -> {
+                var pv = v
+                if (pv is JsUndefined && p.def != null) pv = evalExpr(p.def, env)
+                assignToTarget(p.target, env, pv)
+            }
+            is JsPat.PArray -> {
+                patNullishGuard(v)
+                var idx = 0
+                for (el in p.elems) {
+                    if (el != null) bindDecl(el, patGet(v, idx), kind, env)
+                    idx++
+                }
+                val r = p.rest
+                if (r != null) {
+                    val n = patLen(v)
+                    val arr = JsRuntime.newArr()
+                    while (idx < n) {
+                        arr.elems.add(patGet(v, idx))
+                        idx++
+                    }
+                    bindDecl(r, arr, kind, env)
+                }
+            }
+            is JsPat.PObject -> {
+                patNullishGuard(v)
+                val taken = HashSet<String>()
+                for (en in p.entries) {
+                    val k = keyString(en.key, env)
+                    taken.add(k)
+                    bindDecl(en.pat, getMember(v, k), kind, env)
+                }
+                val r = p.rest
+                if (r != null) {
+                    val obj = JsRuntime.newObj()
+                    val props = propsOf(v)
+                    if (props != null) {
+                        for (kk in props.keys) {
+                            if (!taken.contains(kk)) obj.props[kk] = JsProp.Value(getMember(v, kk))
+                        }
+                    }
+                    bindDecl(r, obj, kind, env)
+                }
+            }
+        }
+    }
+
+    private fun assignPattern(p: JsPat, env: Env, v: JsValue) {
+        when (p) {
+            is JsPat.PIdent -> {
+                var pv = v
+                if (pv is JsUndefined && p.def != null) pv = evalExpr(p.def, env)
+                assignToIdent(p.name, pv, env)
+            }
+            is JsPat.PMember -> {
+                var pv = v
+                if (pv is JsUndefined && p.def != null) pv = evalExpr(p.def, env)
+                assignToTarget(p.target, env, pv)
+            }
+            is JsPat.PArray -> {
+                patNullishGuard(v)
+                var idx = 0
+                for (el in p.elems) {
+                    if (el != null) assignPattern(el, env, patGet(v, idx))
+                    idx++
+                }
+                val r = p.rest
+                if (r != null) {
+                    val n = patLen(v)
+                    val arr = JsRuntime.newArr()
+                    while (idx < n) {
+                        arr.elems.add(patGet(v, idx))
+                        idx++
+                    }
+                    assignPattern(r, env, arr)
+                }
+            }
+            is JsPat.PObject -> {
+                patNullishGuard(v)
+                val taken = HashSet<String>()
+                for (en in p.entries) {
+                    val k = keyString(en.key, env)
+                    taken.add(k)
+                    assignPattern(en.pat, env, getMember(v, k))
+                }
+                val r = p.rest
+                if (r != null) {
+                    val obj = JsRuntime.newObj()
+                    val props = propsOf(v)
+                    if (props != null) {
+                        for (kk in props.keys) {
+                            if (!taken.contains(kk)) obj.props[kk] = JsProp.Value(getMember(v, kk))
+                        }
+                    }
+                    assignPattern(r, env, obj)
+                }
+            }
+        }
     }
 
     // ---- Sentencias ----
@@ -510,7 +717,9 @@ object JsInterpreter {
                 for (d in s.declarators) {
                     var v: JsValue = JsUndefined
                     if (d.init != null) v = evalExpr(d.init, env)
-                    if (s.kind == "var") {
+                    if (d.pat != null) {
+                        bindDecl(d.pat, v, s.kind, env)
+                    } else if (s.kind == "var") {
                         if (!env.setExisting(d.name, v)) env.declareFnVar(d.name, v)
                     } else {
                         env.declare(d.name, v)
@@ -917,6 +1126,17 @@ object JsInterpreter {
             }
             is JsExpr.Assign -> {
                 if (e.op == "=") {
+                    val tl = e.target
+                    val inner = if (tl is JsExpr.Paren) tl.expr else tl
+                    if (inner is JsExpr.ArrayLit || inner is JsExpr.ObjectLit) {
+                        val dv = evalExpr(e.value, env)
+                        val pat = patFromExpr(inner)
+                        if (pat == null) {
+                            throw JsRuntime.throwNative("TypeError", "Invalid destructuring target")
+                        }
+                        assignPattern(pat, env, dv)
+                        return dv
+                    }
                     val v = evalExpr(e.value, env)
                     assignToTarget(e.target, env, v)
                     return v

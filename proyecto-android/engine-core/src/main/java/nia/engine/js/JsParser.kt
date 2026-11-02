@@ -1,7 +1,7 @@
 package nia.engine.js
 
 /**
- * Parser ECMAScript v2 (T018 v3). Recursive descent con precedencias sobre el
+ * Parser ECMAScript v2 (T018 v4). Recursive descent con precedencias sobre el
  * token stream del lexer v2. AST con spans [start, end), errores tipificados
  * con linea/columna 1-based y recuperacion a nivel de sentencia (skip hasta
  * ';' o '}', con avance garantizado). Espejo del gemelo TS/JS validado.
@@ -10,7 +10,9 @@ package nia.engine.js
  * constructor/metodos/static/get/set/computed keys), labels (etiqueta +
  * break/continue con label), getters/setters en object literal, optional
  * chaining '?.' y spread en call args.
- * Exclusiones v2: async/await, generators, destructuring (todas las formas),
+ * T018 v4: destructuring (declaraciones var/let/const, asignacion y
+ * parametros) con patrones anidados, defaults y rest.
+ * Exclusiones v4: async/await, generators, patrones en for-in/of,
  * modulos, class fields, with, ASI (los puntos y coma son obligatorios).
  */
 object JsParser {
@@ -140,6 +142,13 @@ object JsParser {
             }
         }
 
+        private fun letDeclFollows(): Boolean {
+            val p1 = peek(1)
+            if (p1 is JsToken.Identifier) return true
+            if (p1 is JsToken.Punctuator && (p1.value == "[" || p1.value == "{")) return true
+            return false
+        }
+
         fun parseStatement(): JsStmt {
             val t = cur()
             if (t is JsToken.Punctuator) {
@@ -177,7 +186,7 @@ object JsParser {
                 val body = parseStatement()
                 return JsStmt.Labeled(t.start, body.end, t.value, body)
             }
-            if (t is JsToken.Identifier && t.value == "let" && peek(1) is JsToken.Identifier) {
+            if (t is JsToken.Identifier && t.value == "let" && letDeclFollows()) {
                 return parseVarStatement("let")
             }
             return parseExprStatement()
@@ -210,6 +219,18 @@ object JsParser {
             val declarators = mutableListOf<Declarator>()
             while (true) {
                 val t = cur()
+                if (isP("[") || isP("{")) {
+                    val pat = parsePattern()
+                    if (!isP("=")) throw abort("invalid-destructure", t.start, cur().end)
+                    next()
+                    val init = parseAssign()
+                    declarators.add(Declarator(pat.start, init.end, "", init, pat))
+                    if (isP(",")) {
+                        next()
+                        continue
+                    }
+                    break
+                }
                 if (t !is JsToken.Identifier) throw abort("invalid-binding", t.start, t.end)
                 val nameTok = next()
                 var init: JsExpr? = null
@@ -230,6 +251,104 @@ object JsParser {
             return JsStmt.Var(kw.start, end, kind, declarators)
         }
 
+        // ---- Destructuring (T018 v4) ----
+
+        fun parsePattern(): JsPat {
+            val t = cur()
+            if (isP("[")) {
+                val open = next()
+                val elems = mutableListOf<JsPat?>()
+                var rest: JsPat? = null
+                while (!isP("]")) {
+                    if (isP(",")) {
+                        next()
+                        elems.add(null)
+                        continue
+                    }
+                    if (isP("...")) {
+                        next()
+                        rest = parsePatternTarget()
+                        if (isP(",")) next()
+                        break
+                    }
+                    elems.add(parsePatternElem())
+                    if (isP(",")) {
+                        next()
+                        continue
+                    }
+                    break
+                }
+                val t2 = cur()
+                if (!(t2 is JsToken.Punctuator && t2.value == "]")) {
+                    throw abort(if (t2 is JsToken.Eof) "unexpected-eof" else "unexpected-token", open.start, t2.start)
+                }
+                val close = next()
+                return JsPat.PArray(open.start, close.end, elems, rest)
+            }
+            if (isP("{")) {
+                val open = next()
+                val entries = mutableListOf<PEntry>()
+                var rest: JsPat? = null
+                while (!isP("}")) {
+                    if (isP("...")) {
+                        next()
+                        rest = parsePatternTarget()
+                        if (isP(",")) next()
+                        break
+                    }
+                    val key = parseKeyToken()
+                    if (isP(":")) {
+                        next()
+                        val pat = parsePatternElem()
+                        entries.add(PEntry(key.start, pat.end, key, pat))
+                    } else {
+                        if (key !is Key.IdentKey) throw abort("unexpected-token", cur().start, cur().end)
+                        var def: JsExpr? = null
+                        var end = key.end
+                        if (isP("=")) {
+                            next()
+                            def = parseAssign()
+                            end = def.end
+                        }
+                        entries.add(PEntry(key.start, end, key, JsPat.PIdent(key.start, end, key.name, def)))
+                    }
+                    if (isP(",")) {
+                        next()
+                        continue
+                    }
+                    break
+                }
+                val t2 = cur()
+                if (!(t2 is JsToken.Punctuator && t2.value == "}")) {
+                    throw abort(if (t2 is JsToken.Eof) "unexpected-eof" else "unexpected-token", open.start, t2.start)
+                }
+                val close = next()
+                return JsPat.PObject(open.start, close.end, entries, rest)
+            }
+            throw abort(if (t is JsToken.Eof) "unexpected-eof" else "unexpected-token", t.start, t.end)
+        }
+
+        fun parsePatternTarget(): JsPat {
+            val t = cur()
+            if (t is JsToken.Identifier) {
+                next()
+                return JsPat.PIdent(t.start, t.end, t.value, null)
+            }
+            if (isP("[") || isP("{")) return parsePattern()
+            throw abort("invalid-binding", t.start, t.end)
+        }
+
+        fun parsePatternElem(): JsPat {
+            val pat = parsePatternTarget()
+            if (isP("=")) {
+                next()
+                val def = parseAssign()
+                if (pat !is JsPat.PIdent) throw abort("invalid-destructure", pat.start, def.end)
+                return JsPat.PIdent(pat.start, def.end, pat.name, def)
+            }
+            return pat
+        }
+
         fun parseParams(): List<Param> {
             val open = next()
             if (!(open is JsToken.Punctuator && open.value == "(")) {
@@ -238,6 +357,21 @@ object JsParser {
             val params = mutableListOf<Param>()
             while (!isP(")")) {
                 val t = cur()
+                if (isP("[") || isP("{")) {
+                    val pat = parsePattern()
+                    var def: JsExpr? = null
+                    if (isP("=")) {
+                        next()
+                        def = parseAssign()
+                    }
+                    val end = if (def == null) pat.end else def.end
+                    params.add(Param(pat.start, end, "", def, pat))
+                    if (isP(",")) {
+                        next()
+                        continue
+                    }
+                    break
+                }
                 if (t !is JsToken.Identifier) throw abort("invalid-binding", t.start, t.end)
                 val nameTok = next()
                 var def: JsExpr? = null
@@ -687,7 +821,8 @@ object JsParser {
             val left = parseCond(noIn)
             val t2 = cur()
             if (t2 is JsToken.Punctuator && t2.value in ASSIGN_OPS) {
-                if (!isAssignTarget(left)) throw abort("invalid-assignment-target", t2.start, t2.end)
+                val destructure = t2.value == "=" && (left is JsExpr.ArrayLit || left is JsExpr.ObjectLit)
+                if (!destructure && !isAssignTarget(left)) throw abort("invalid-assignment-target", t2.start, t2.end)
                 next()
                 val right = parseAssign(noIn)
                 return JsExpr.Assign(left.start, right.end, t2.value, left, right)
@@ -999,7 +1134,14 @@ object JsParser {
                         props.add(Prop.Method(k.start, body.end, k, params, body))
                     } else {
                         if (k !is Key.IdentKey) throw abort("unexpected-token", cur().start, cur().end)
-                        props.add(Prop.Shorthand(k.start, k.end, k.name))
+                        if (isP("=")) {
+                            next()
+                            val def = parseAssign()
+                            val tgt = JsExpr.Ident(k.start, k.end, k.name)
+                            props.add(Prop.KeyValue(k.start, def.end, k, JsExpr.Assign(k.start, def.end, "=", tgt, def)))
+                        } else {
+                            props.add(Prop.Shorthand(k.start, k.end, k.name))
+                        }
                     }
                 }
                 if (isP(",")) {

@@ -1,7 +1,7 @@
 package nia.engine.js
 
 /**
- * AST del parser ECMAScript (T018 v3 v2). Cada nodo cubre el rango de fuente
+ * AST del parser ECMAScript (T018 v4). Cada nodo cubre el rango de fuente
  * [start, end). El programa acumula los errores de parseo tipificados con
  * linea/columna 1-based (la recuperacion es a nivel de sentencia); los
  * errores lexicos viajan aparte en JsParseResult tal como los emite el lexer.
@@ -53,9 +53,23 @@ sealed class JsStmt(start: Int, end: Int) : JsNode(start, end) {
     class ClassStmt(start: Int, end: Int, val name: String?, val superClass: JsExpr?, val members: List<ClassMember>) : JsStmt(start, end)
 }
 
-class Declarator(start: Int, end: Int, val name: String, val init: JsExpr?) : JsNode(start, end)
+class Declarator(start: Int, end: Int, val name: String, val init: JsExpr?, val pat: JsPat? = null) : JsNode(start, end)
 
-class Param(start: Int, end: Int, val name: String, val def: JsExpr?) : JsNode(start, end)
+class Param(start: Int, end: Int, val name: String, val def: JsExpr?, val pat: JsPat? = null) : JsNode(start, end)
+
+/** Patron de destructuring (T018 v4): ident/miembro con default, array u objeto. */
+sealed class JsPat(start: Int, end: Int) : JsNode(start, end) {
+
+    class PIdent(start: Int, end: Int, val name: String, val def: JsExpr?) : JsPat(start, end)
+
+    class PMember(start: Int, end: Int, val target: JsExpr, val def: JsExpr?) : JsPat(start, end)
+
+    class PArray(start: Int, end: Int, val elems: List<JsPat?>, val rest: JsPat?) : JsPat(start, end)
+
+    class PObject(start: Int, end: Int, val entries: List<PEntry>, val rest: JsPat?) : JsPat(start, end)
+}
+
+class PEntry(start: Int, end: Int, val key: Key, val pat: JsPat) : JsNode(start, end)
 
 class SwitchCase(start: Int, end: Int, val test: JsExpr?, val statements: List<JsStmt>) : JsNode(start, end)
 
@@ -176,11 +190,42 @@ object JsAstDump {
     private fun params(list: List<Param>): String {
         val sb = StringBuilder("(params")
         for (p in list) {
+            if (p.pat != null) {
+                sb.append(" (pp ").append(pattern(p.pat))
+                if (p.def != null) sb.append(" ").append(expression(p.def))
+                sb.append(")")
+                continue
+            }
             sb.append(" (p ").append(p.name)
             if (p.def != null) sb.append(" ").append(expression(p.def))
             sb.append(")")
         }
         return sb.append(")").toString()
+    }
+
+    private fun pattern(p: JsPat): String = when (p) {
+        is JsPat.PIdent -> {
+            var r = "(pid " + p.name
+            if (p.def != null) r += " " + expression(p.def)
+            r + ")"
+        }
+        is JsPat.PMember -> {
+            var r = "(pmem " + expression(p.target)
+            if (p.def != null) r += " " + expression(p.def)
+            r + ")"
+        }
+        is JsPat.PArray -> {
+            val sb = StringBuilder("(parr")
+            for (el in p.elems) sb.append(" ").append(if (el == null) "-" else pattern(el))
+            if (p.rest != null) sb.append(" (rest ").append(pattern(p.rest)).append(")")
+            sb.append(")").toString()
+        }
+        is JsPat.PObject -> {
+            val sb = StringBuilder("(pobj")
+            for (en in p.entries) sb.append(" (pe ").append(key(en.key)).append(" ").append(pattern(en.pat)).append(")")
+            if (p.rest != null) sb.append(" (rest ").append(pattern(p.rest)).append(")")
+            sb.append(")").toString()
+        }
     }
 
     private fun key(k: Key): String = when (k) {
@@ -207,6 +252,12 @@ object JsAstDump {
         is JsStmt.Var -> {
             val sb = StringBuilder("(" + s.kind)
             for (d in s.declarators) {
+                if (d.pat != null) {
+                    sb.append(" (declp ").append(pattern(d.pat))
+                    if (d.init != null) sb.append(" ").append(expression(d.init))
+                    sb.append(")")
+                    continue
+                }
                 sb.append(" (decl ").append(d.name)
                 if (d.init != null) sb.append(" ").append(expression(d.init))
                 sb.append(")")
