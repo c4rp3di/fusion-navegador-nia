@@ -130,6 +130,7 @@ jobs:
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/java/app/nia/navegador/DevToolsActivity.kt \
+            app/src/main/java/app/nia/navegador/FetchDemoActivity.kt \
             app/src/main/AndroidManifest.xml \
             app/build.gradle \
             contracts/build.gradle \
