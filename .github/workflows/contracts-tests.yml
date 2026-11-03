@@ -127,6 +127,10 @@ jobs:
             engine-core/src/test/java/nia/engine/net/CookieJarTest.kt \
             engine-core/src/test/java/nia/engine/net/CorsTest.kt \
             engine-core/src/test/java/nia/engine/net/RedirectPolicyTest.kt \
+            engine-core/src/main/java/nia/engine/storage/Storage.kt \
+            engine-core/src/main/java/nia/engine/storage/IndexedDb.kt \
+            engine-core/src/test/java/nia/engine/storage/StorageTest.kt \
+            engine-core/src/test/java/nia/engine/storage/IndexedDbTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/java/app/nia/navegador/DevToolsActivity.kt \
