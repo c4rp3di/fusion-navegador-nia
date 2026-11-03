@@ -214,7 +214,7 @@ class DebugSession(
         }
     }
 
-    private val lineStarts: IntArray = computeLineStarts(source)
+    private val lineStarts: IntArray = JsDebugger.computeLineStarts(source)
     private val breakpoints = HashSet<Int>()
     private val inbox = LinkedBlockingQueue<DebugCmd>()
 
