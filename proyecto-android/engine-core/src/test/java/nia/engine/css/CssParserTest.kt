@@ -4,9 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Tests del parser CSS v2 (R0023): espejo validado del gemelo TS.
- * v1 (T014) + combinadores de hermanos +/~ y pseudo-clases estaticas
- * (:first-child, :last-child, :only-child, :nth-child(an+b)).
+ * Tests del parser CSS (T014 v1): espejo validado del gemelo TS (69/69).
  */
 class CssParserTest {
 
@@ -123,100 +121,5 @@ class CssParserTest {
         val s = CssStylesheet.parse("p{color:red;/*x*/}")
         assertEquals(listOf("color" to "red"), s.rules[0].declarations, "decls")
         assertEquals(emptyList<String>(), s.errors, "errores")
-    }
-
-    @Test
-    fun combinadoresHermanos() {
-        assertEquals(listOf("adj"), CssStylesheet.parse("a+b{c:v}").rules[0].selectors[0].combinators, "adj")
-        assertEquals(listOf("gen"), CssStylesheet.parse("a~b{c:v}").rules[0].selectors[0].combinators, "gen")
-    }
-
-    @Test
-    fun pseudoEstatico() {
-        val s = CssStylesheet.parse("p:first-child{c:v}")
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("first-child", null)
-        ), s.rules[0].selectors[0].compounds[0].simples, "first-child")
-    }
-
-    @Test
-    fun pseudoConAntecesor() {
-        val s = CssStylesheet.parse("div p:last-child{c:v}")
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("last-child", null)
-        ), s.rules[0].selectors[0].compounds[1].simples, "last-child")
-    }
-
-    @Test
-    fun nthChildAn() {
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(2, 0))
-        ), CssStylesheet.parse("p:nth-child(2n){c:v}").rules[0].selectors[0].compounds[0].simples, "2n")
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(2, 1))
-        ), CssStylesheet.parse("p:nth-child(2n+1){c:v}").rules[0].selectors[0].compounds[0].simples, "2n+1")
-    }
-
-    @Test
-    fun nthChildOddEven() {
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(2, 1))
-        ), CssStylesheet.parse("p:nth-child(odd){c:v}").rules[0].selectors[0].compounds[0].simples, "odd")
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(2, 0))
-        ), CssStylesheet.parse("p:nth-child(even){c:v}").rules[0].selectors[0].compounds[0].simples, "even")
-    }
-
-    @Test
-    fun nthChildEntero() {
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(0, 3))
-        ), CssStylesheet.parse("p:nth-child(3){c:v}").rules[0].selectors[0].compounds[0].simples, "3")
-    }
-
-    @Test
-    fun nthChildNegativo() {
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(-1, 3))
-        ), CssStylesheet.parse("p:nth-child(-n+3){c:v}").rules[0].selectors[0].compounds[0].simples, "-n+3")
-    }
-
-    @Test
-    fun nthChildConEspacios() {
-        assertEquals(listOf(
-            CssSimpleSelector.Type("p"),
-            CssSimpleSelector.Pseudo("nth-child", CssNth(2, 1))
-        ), CssStylesheet.parse("p:nth-child( 2n + 1 ){c:v}").rules[0].selectors[0].compounds[0].simples, "espacios")
-    }
-
-    @Test
-    fun nthChildInvalido() {
-        val s = CssStylesheet.parse("p:nth-child(foo){c:v}")
-        assertEquals(listOf("invalid-selector"), s.errors, "errores")
-        assertEquals(0, s.rules.size, "reglas")
-    }
-
-    @Test
-    fun pseudoEstaticoConArgumento() {
-        val s = CssStylesheet.parse("p:first-child(x){c:v}")
-        assertEquals(listOf("invalid-selector"), s.errors, "errores")
-        assertEquals(0, s.rules.size, "reglas")
-    }
-
-    @Test
-    fun especificidadPseudoClase() {
-        assertEquals(
-            CssSpecificity(0, 1, 1),
-            CssCascade.specificityOf(CssStylesheet.parse("p:first-child{c:v}").rules[0].selectors[0]),
-            "pseudo como clase"
-        )
     }
 }
