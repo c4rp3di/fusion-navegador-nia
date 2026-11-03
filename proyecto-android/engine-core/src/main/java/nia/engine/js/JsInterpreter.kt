@@ -1895,6 +1895,38 @@ object JsInterpreter {
         JsQuotas.end()
     }
 
+    // ---- Workers (T034 v1, RES-0039) ----
+
+    /**
+     * Abre la sesion del MOTOR para los workers (T034): como el loop de T025
+     * (runners vivos entre pumps y cuotas activas) pero SIN crear el genv,
+     * porque cada worker crea el suyo con makeWorkerGlobal. La sesion es
+     * unica por motor: las cuotas (T021) son del motor y quedan compartidas
+     * entre los workers (limitacion documentada de la v1).
+     */
+    internal fun beginWorkerSession(limits: JsLimits) {
+        keepAliveRunners = true
+        JsQuotas.begin(limits)
+    }
+
+    /**
+     * Global nuevo para un worker (T034): el mismo equipamiento del loop de
+     * T025 (builtins, callbacks, consola) SIN la API de timers; cada worker
+     * instala la suya sobre su reloj virtual propio.
+     */
+    internal fun makeWorkerGlobal(): Env {
+        val genv = Env(null, true)
+        genv.declare("undefined", JsUndefined)
+        genv.declare("NaN", JsNum(Double.NaN))
+        genv.declare("Infinity", JsNum(Double.POSITIVE_INFINITY))
+        genv.declare("Error", JsNative("Error"))
+        JsBuiltins.install(genv)
+        installCallbackBuiltins(genv)
+        JsDomBindings.installConsole(genv)
+        return genv
+    }
+
+
     // ---- Fetch JS (T027 v1, RES-0033) ----
 
     /** Promise nueva para un builtin nativo (fetch); el builtin la asienta. */
