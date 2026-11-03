@@ -217,9 +217,10 @@ class JsDebuggerTest {
     }
 
     // ---- T028 v2 (R0064, RES-0037): sesion con reanudacion real ----
-    // Cada test libera SIEMPRE la sesion en finally: una sesion pausada
-    // que sobrevive al test deja el hook montado y las colas/runners
-    // globales del interprete vivas, contaminando a los demas tests.
+    // Cada test libera SIEMPRE la sesion en finally y ESPERA su
+    // terminacion: el hilo de debug termina de forma asincrona tras
+    // stop() y su cleanup (desmontaje del hook global, JsQuotas.end,
+    // cleanupRunners) pisaria el estado del test siguiente.
 
     private fun esperaPausa(s: DebugSession, after: Long, ms: Long = 5000L): DebugSnapshot {
         val p = s.awaitPause(ms, after)
@@ -232,6 +233,15 @@ class JsDebuggerTest {
         val r = s.result
         if (r == null) throw AssertionError("sin resultado")
         return r
+    }
+
+    /** Libera la sesion y ESPERA su terminacion: el hilo de debug termina
+     * de forma asincrona tras stop() y su cleanup (desmontaje del hook
+     * global, JsQuotas.end, cleanupRunners) pisaria el estado del test
+     * siguiente mientras ya evalua. */
+    private fun liberar(s: DebugSession, ms: Long = 5000L) {
+        s.stop()
+        if (!s.awaitDone(ms)) throw AssertionError("la sesion no termino tras stop")
     }
 
     @Test
@@ -249,7 +259,7 @@ class JsDebuggerTest {
             assertFalse(r.interrupted)
             assertEquals("\"41\"", JsInterpreter.dumpResult(r))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -267,7 +277,7 @@ class JsDebuggerTest {
             done(s)
             assertEquals(DebugState.FINISHED, s.state)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -283,7 +293,7 @@ class JsDebuggerTest {
             assertTrue(r.interrupted)
             assertEquals(JsAbortReason.INTERRUPTED, r.abortReason)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -301,7 +311,7 @@ class JsDebuggerTest {
             assertEquals(3, esperaPausa(s, n).line)
             n = n + 1L
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -319,7 +329,7 @@ class JsDebuggerTest {
             assertEquals(6, p.line)
             assertEquals(1, p.depth)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -337,7 +347,7 @@ class JsDebuggerTest {
             assertEquals(2, p.line)
             assertEquals(2, p.depth)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -355,7 +365,7 @@ class JsDebuggerTest {
             assertEquals(6, p.line)
             assertEquals(1, p.depth)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -369,7 +379,7 @@ class JsDebuggerTest {
             assertEquals(1, p.line)
             assertEquals("pause", p.reason)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -391,7 +401,7 @@ class JsDebuggerTest {
             val r = done(s)
             assertEquals("\"3\"", JsInterpreter.dumpResult(r))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -405,7 +415,7 @@ class JsDebuggerTest {
             assertEquals("42", s.inspect("n + 2"))
             assertEquals("\"hola\"", s.inspect("'hola'"))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -419,7 +429,7 @@ class JsDebuggerTest {
             val out = s.inspect("(function () { throw 'boom'; })()")
             assertTrue(out != null && out.startsWith("uncaught"))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -430,7 +440,7 @@ class JsDebuggerTest {
             done(s)
             assertNull(s.inspect("a"))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -447,7 +457,7 @@ class JsDebuggerTest {
             }
             assertEquals(DebugState.FINISHED, s.state)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -467,7 +477,7 @@ class JsDebuggerTest {
             s.stop()
             assertEquals(DebugState.FINISHED, s.state)
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -483,7 +493,7 @@ class JsDebuggerTest {
             val r = done(s)
             assertEquals("\"1\"", JsInterpreter.dumpResult(r))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 
@@ -509,7 +519,7 @@ class JsDebuggerTest {
             assertTrue(scopes.contains("token=[redacted]"))
             assertFalse(scopes.contains("abc"))
         } finally {
-            s.stop()
+            liberar(s)
         }
     }
 }
