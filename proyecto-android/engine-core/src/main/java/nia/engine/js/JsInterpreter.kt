@@ -1914,6 +1914,22 @@ object JsInterpreter {
      */
     internal var debugHook: ((JsStmt, Env) -> Unit)? = null
 
+    /**
+     * Evalua una expresion en el entorno pausado del debugger (T028 v2):
+     * parsea UNA sentencia de expresion y la evalua con evalExpr en el
+     * env dado (bindings visibles del scope, incluidos los de closure).
+     * La llama DebugSession.inspect desde el propio hilo de JS pausado.
+     */
+    internal fun debugEvalExpression(src: String, env: Env): JsValue {
+        val parse = JsParser.parse(src)
+        require(parse.program.statements.size == 1) { "se espera una sola expresion" }
+        val s = parse.program.statements[0]
+        require(s is JsStmt.ExprStmt) { "se espera una expresion" }
+        return evalExpr(s.expr, env)
+    }
+
+
+
 
     // ---- Runners reanudables (T018 v5): async/await y generators ----
     // Handoff estricto: en cada momento SOLO un hilo ejecuta JS. Un Runner
