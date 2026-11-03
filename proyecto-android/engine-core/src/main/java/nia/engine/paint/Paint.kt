@@ -5,12 +5,12 @@ import nia.engine.html.DomNode
 import nia.engine.layout.LayoutResult
 
 /**
- * Pintura v2 (R0023): display list de operaciones de dibujo sobre el layout.
- * DrawRect pinta el fondo de un elemento (background-color no transparente)
- * y las tiras de sus bordes; DrawText pinta una palabra con la caja del
- * fragmento de layout y el color y tamano del contexto heredado. El orden es
- * documental (pre-orden). Limitaciones v2: sin z-index/stacking contexts,
- * sin imagenes, sin transformaciones ni clip.
+ * Pintura v1 (T016): display list de operaciones de dibujo sobre el layout.
+ * DrawRect pinta el fondo de un elemento (background-color no transparente);
+ * DrawText pinta una palabra con la caja del fragmento de layout y el
+ * color y tamano del contexto heredado. El orden es documental (pre-orden).
+ * Limitaciones v1: sin z-index/stacking contexts, sin imagenes, sin
+ * transformaciones ni clip.
  */
 sealed class PaintOp {
     abstract val x: Double
@@ -59,13 +59,9 @@ class PaintScene(val ops: List<PaintOp>) {
 }
 
 /**
- * Constructor de la escena v2: recorre el arbol en pre-orden sobre el layout
- * ya calculado. Por cada elemento con caja: primero el rectangulo de fondo
- * (background-color no transparente, la caja border-box del layout) y
- * despues hasta 4 tiras de borde (border-color o color heredado): arriba y
- * abajo a lo ancho de la caja, izquierda y derecha entre las tiras
- * horizontales. Contrato del layout: fragmentsOf(texto) devuelve una caja
- * por palabra de wordsOf(texto.data), en el mismo orden.
+ * Constructor de la escena: recorre el arbol en pre-orden sobre el layout ya
+ * calculado. Contrato del layout v1: fragmentsOf(texto) devuelve una caja por
+ * palabra de wordsOf(texto.data), en el mismo orden.
  */
 object PaintSceneBuilder {
 
@@ -89,28 +85,8 @@ object PaintSceneBuilder {
                     val elColor = computed.propertyOf(node, "color") ?: color
                     val bg = computed.propertyOf(node, "background-color") ?: "transparent"
                     val box = layout.boxOf(node)
-                    if (box != null) {
-                        if (bg != "transparent") {
-                            ops.add(PaintOp.DrawRect(box.x, box.y, box.width, box.height, bg, node))
-                        }
-                        val bcol = computed.propertyOf(node, "border-color") ?: elColor
-                        val bt = parsePx(computed.propertyOf(node, "border-top-width")) ?: 0.0
-                        val bb = parsePx(computed.propertyOf(node, "border-bottom-width")) ?: 0.0
-                        val bl = parsePx(computed.propertyOf(node, "border-left-width")) ?: 0.0
-                        val br = parsePx(computed.propertyOf(node, "border-right-width")) ?: 0.0
-                        if (bt > 0) {
-                            ops.add(PaintOp.DrawRect(box.x, box.y, box.width, bt, bcol, node))
-                        }
-                        if (bb > 0) {
-                            ops.add(PaintOp.DrawRect(box.x, box.y + box.height - bb, box.width, bb, bcol, node))
-                        }
-                        val ih = box.height - bt - bb
-                        if (bl > 0 && ih > 0) {
-                            ops.add(PaintOp.DrawRect(box.x, box.y + bt, bl, ih, bcol, node))
-                        }
-                        if (br > 0 && ih > 0) {
-                            ops.add(PaintOp.DrawRect(box.x + box.width - br, box.y + bt, br, ih, bcol, node))
-                        }
+                    if (box != null && bg != "transparent") {
+                        ops.add(PaintOp.DrawRect(box.x, box.y, box.width, box.height, bg, node))
                     }
                     for (c in node.children) walk(c, elFs, elColor)
                 }
