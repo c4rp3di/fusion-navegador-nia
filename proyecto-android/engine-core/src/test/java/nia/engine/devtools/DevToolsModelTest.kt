@@ -317,17 +317,17 @@ class DevToolsModelTest {
 
     @Test fun reglaDelUsuarioEnComputed() {
         val doc = DomDocument.parse(html)
-        val model = DevToolsModel(doc, css + "\n" + "h1 { color: #ff0000; }")
+        val model = DevToolsModel(doc, css + "\n" + "#titulo { color: #ff0000; }")
         assertEquals("#ff0000", model.computedOf(h1(doc))["color"])
     }
 
     @Test fun causaDeLaReglaDelUsuarioEsLaRegla() {
         val doc = DomDocument.parse(html)
-        val model = DevToolsModel(doc, css + "\n" + "h1 { color: #ff0000; }")
+        val model = DevToolsModel(doc, css + "\n" + "#titulo { color: #ff0000; }")
         val c = model.causeOf(h1(doc), "color")
         assertTrue(c is StyleCause.Rule)
         if (c is StyleCause.Rule) {
-            assertEquals("h1", c.selector)
+            assertEquals("#titulo", c.selector)
             assertEquals("#ff0000", c.declaredValue)
             assertEquals(5, c.ruleOrder)
         }
@@ -342,7 +342,22 @@ class DevToolsModelTest {
 
     @Test fun cssInvalidoDelUsuarioNoRompeLasValidas() {
         val doc = DomDocument.parse(html)
-        val model = DevToolsModel(doc, css + "\n" + "@import x; h1 { color: #ff0000; }")
+        val model = DevToolsModel(doc, css + "\n" + "@import x; #titulo { color: #ff0000; }")
         assertEquals("#ff0000", model.computedOf(h1(doc))["color"])
+    }
+
+    @Test fun reglaDeBajaEspecificidadNoGanaAlIdDeLaDemo() {
+        val doc = DomDocument.parse(html)
+        val model = DevToolsModel(doc, css + "\n" + "h1 { color: #ff0000; }")
+        val c = model.causeOf(h1(doc), "color")
+        assertTrue(c is StyleCause.Rule)
+        if (c is StyleCause.Rule) {
+            assertEquals("#titulo", c.selector)
+            assertEquals("#778899", c.declaredValue)
+            assertEquals(CssSpecificity(1, 0, 0), c.specificity)
+            assertEquals(2, c.ruleOrder)
+        }
+        val ms = model.matchingSelectors(h1(doc))
+        assertEquals(2, ms.count { it.selector == "h1" })
     }
 }
