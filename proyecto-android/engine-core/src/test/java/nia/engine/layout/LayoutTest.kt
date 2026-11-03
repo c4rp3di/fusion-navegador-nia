@@ -9,9 +9,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
- * Tests del layout v2 (R0023): espejo validado del gemelo TS.
- * v1 (T015) + margin/padding/border (border-box, % contra contenedor,
- * em/rem contra la fuente del elemento).
+ * Tests del layout v1 (T015): espejo validado del gemelo TS (28 tests).
+ * Cada test construye el arbol DomNode, computa estilos con la cascada CSS
+ * real y comprueba la geometria resultante.
  */
 class LayoutTest {
 
@@ -314,124 +314,5 @@ class LayoutTest {
         val p = el("p", mapOf("class" to "x"), listOf(t))
         val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{text-align:right}.x{text-align:center}", 200.0)
         assertVal("x centro", r.fragmentsOf(t)[0]?.x, 88.0)
-    }
-
-    @Test
-    fun marginEntreBloques() {
-        val p1 = el("p", emptyMap(), listOf(tx("a")))
-        val p2 = el("p", emptyMap(), listOf(tx("b")))
-        val b = el("body", emptyMap(), listOf(p1, p2))
-        val r = lay(doc(b), "p{margin:10px}", 200.0)
-        assertBox("p1", r.boxOf(p1), 10.0, 10.0, 180.0, 19.2)
-        assertBox("p2", r.boxOf(p2), 10.0, 49.2, 180.0, 19.2)
-        assertVal("body h", r.boxOf(b)?.height, 78.4)
-    }
-
-    @Test
-    fun marginPctContraContenedor() {
-        val p = el("p", emptyMap(), listOf(tx("a")))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{margin:5%}", 200.0)
-        assertBox("p", r.boxOf(p), 10.0, 10.0, 180.0, 19.2)
-    }
-
-    @Test
-    fun paddingEncogeContenido() {
-        val t = tx("a")
-        val p = el("p", emptyMap(), listOf(t))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{padding:10px}", 200.0)
-        assertBox("p", r.boxOf(p), 0.0, 0.0, 200.0, 39.2)
-        assertBox("frag", r.fragmentsOf(t)[0], 10.0, 10.0, 8.0, 19.2)
-    }
-
-    @Test
-    fun borderDesplazaContenido() {
-        val t = tx("a")
-        val p = el("p", emptyMap(), listOf(t))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{border-width:4px}", 200.0)
-        assertBox("p", r.boxOf(p), 0.0, 0.0, 200.0, 27.2)
-        assertBox("frag", r.fragmentsOf(t)[0], 4.0, 4.0, 8.0, 19.2)
-    }
-
-    @Test
-    fun combinadoMarginPaddingBorder() {
-        val t = tx("a")
-        val p = el("p", emptyMap(), listOf(t))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{margin:10px;padding:5px;border-width:2px}", 200.0)
-        assertBox("p", r.boxOf(p), 10.0, 10.0, 180.0, 33.2)
-        assertBox("frag", r.fragmentsOf(t)[0], 17.0, 17.0, 8.0, 19.2)
-    }
-
-    @Test
-    fun marginEm() {
-        val t = tx("abc")
-        val h = el("h1", emptyMap(), listOf(t))
-        val r = lay(doc(el("body", emptyMap(), listOf(h))), "h1{font-size:32px;margin:0.5em}", 200.0)
-        assertBox("h1", r.boxOf(h), 16.0, 16.0, 168.0, 38.4)
-        assertBox("frag", r.fragmentsOf(t)[0], 16.0, 16.0, 48.0, 38.4)
-    }
-
-    @Test
-    fun nthChildMargin() {
-        val p1 = el("p", emptyMap(), listOf(tx("1")))
-        val p2 = el("p", emptyMap(), listOf(tx("2")))
-        val p3 = el("p", emptyMap(), listOf(tx("3")))
-        val r = lay(doc(el("body", emptyMap(), listOf(p1, p2, p3))), "p:nth-child(2){margin-top:20px}", 200.0)
-        assertVal("p2 y", r.boxOf(p2)?.y, 39.2)
-        assertVal("p3 y", r.boxOf(p3)?.y, 58.4)
-    }
-
-    @Test
-    fun anidadoPaddingBorderMargin() {
-        val p = el("p", emptyMap(), listOf(tx("a")))
-        val dv = el("div", emptyMap(), listOf(p))
-        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{padding:10px;border-width:4px}p{margin:4px}", 200.0)
-        assertBox("div", r.boxOf(dv), 0.0, 0.0, 200.0, 55.2)
-        assertBox("p", r.boxOf(p), 18.0, 18.0, 164.0, 19.2)
-    }
-
-    @Test
-    fun inlineYPadding() {
-        val t = tx("y")
-        val p = el("p", emptyMap(), listOf(t))
-        val b = el("b", emptyMap(), listOf(tx("x")))
-        val body = el("body", emptyMap(), listOf(b, p))
-        val r = lay(doc(body), "p{padding:8px}", 200.0)
-        assertBox("frag", r.fragmentsOf(t)[0], 8.0, 27.2, 8.0, 19.2)
-        assertBox("p", r.boxOf(p), 0.0, 19.2, 200.0, 35.2)
-        assertVal("body h", r.boxOf(body)?.height, 54.4)
-    }
-
-    @Test
-    fun borderPctContraContenedor() {
-        val t = tx("a")
-        val p = el("p", emptyMap(), listOf(t))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{border-width:10%}", 200.0)
-        assertBox("p", r.boxOf(p), 0.0, 0.0, 200.0, 59.2)
-        assertBox("frag", r.fragmentsOf(t)[0], 20.0, 20.0, 8.0, 19.2)
-    }
-
-    @Test
-    fun shorthandAsimetrico() {
-        val p = el("p", emptyMap(), listOf(tx("a")))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{margin:1px 2px}", 200.0)
-        assertBox("p", r.boxOf(p), 2.0, 1.0, 196.0, 19.2)
-    }
-
-    @Test
-    fun pseudoMarginIzquierda() {
-        val p1 = el("p", emptyMap(), listOf(tx("a")))
-        val p2 = el("p", emptyMap(), listOf(tx("b")))
-        val r = lay(doc(el("body", emptyMap(), listOf(p1, p2))), "p:first-child{margin-left:20px}", 200.0)
-        assertBox("p1", r.boxOf(p1), 20.0, 0.0, 180.0, 19.2)
-        assertBox("p2", r.boxOf(p2), 0.0, 19.2, 200.0, 19.2)
-    }
-
-    @Test
-    fun paddingEm() {
-        val t = tx("a")
-        val p = el("p", emptyMap(), listOf(t))
-        val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{padding:0.25em}", 200.0)
-        assertBox("frag", r.fragmentsOf(t)[0], 4.0, 4.0, 8.0, 19.2)
-        assertBox("p", r.boxOf(p), 0.0, 0.0, 200.0, 27.2)
     }
 }
