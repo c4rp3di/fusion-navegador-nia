@@ -1,4 +1,5 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0047)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0052)
+**R0052 - T026 v1: cookies, CORS y redirecciones (RES-0031).** Nuevo en nia/engine/net: CookieJar.kt (RFC 6265: parse de Set-Cookie con Name/Value/Domain/Path/Expires/Max-Age/SameSite/HttpOnly/Secure, domain-match y path-match, cookies host-only vs de dominio, Secure solo sobre https, expiracion con reloj inyectable y cabecera Cookie ordenada por ruta y creacion), Cors.kt (peticiones simples GET/HEAD/POST con cabeceras simples, preflight OPTIONS con Origin/Access-Control-Allow-Origin/-Methods/-Headers y Max-Age saneado con tope de 24h, cabeceras prohibidas) y RedirectPolicy.kt (3xx: 303 siempre GET, 301/302 convierten POST a GET, 307/308 conservan metodo y cuerpo, nunca se degrada https a http, tope de 20 saltos, Location absoluta o relativa al origen). Tests espejo del gemelo TS: CookieJarTest (17), CorsTest (20), RedirectPolicyTest (13); el workflow pasa de 67 a 73 fuentes.
 
 Navegador Android con motor HTML/CSS/layout y JavaScript **propios** (sin
 WebView, GeckoView, Chromium, WebKit ni JS externo). Este ZIP corrige la
