@@ -280,7 +280,7 @@ class JsFetchApiTest {
     @Test
     fun textareaValueLeeYEscribe() {
         val t = FakeTransport()
-        val doc = DomDocument.parse("<textarea id=\"t\">abc</textarea>"")
+        val doc = DomDocument.parse("<textarea id=\"t\">abc</textarea>")
         val r = eval(
             "var t = document.getElementById('t'); var out = t.value;" +
                 " t.value = 'xyz'; out + ',' + t.value + ',' + t.textContent",
