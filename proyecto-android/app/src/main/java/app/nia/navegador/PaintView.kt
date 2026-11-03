@@ -29,6 +29,11 @@ import nia.engine.paint.PaintSceneBuilder
  * T017 v3 (R0072): el toque tambien SELECCIONA el nodo del op (resuelto a
  * handle con DevToolsModel.handleOf sobre el documento registrado) y el
  * nodeId queda en DevToolsState para el panel DevTools.
+ *
+ * T017 v4 (R0074, RES-0042): la pagina re-renderiza con las reglas CSS del
+ * usuario escritas en el panel (rebuild por revision de DevToolsState) y
+ * el nodo seleccionado queda con resaltado persistente en cian, distinto
+ * del resaltado amarillo transitorio del toque.
  */
 class PaintView(context: Context) : View(context) {
 
@@ -36,7 +41,11 @@ class PaintView(context: Context) : View(context) {
 
     private val document: DomDocument
     private val devtoolsModel: DevToolsModel
-    private val scene: PaintScene
+    private val root: DomNode
+    private val rootDoc: DomNode.Document
+    private var scene: PaintScene
+
+    private var builtRevision = -1
 
     private val fillPaint = Paint()
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -49,20 +58,33 @@ class PaintView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeWidth = 4f
     }
+    private val selected = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(80, 200, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
 
     private var lastHit: PaintOp? = null
 
     init {
         document = DomDocument.parse(DemoPage.HTML)
         devtoolsModel = DevToolsModel(document, DemoPage.CSS)
-        val root = document.nodeOf(document.rootHandle())
-        val rootDoc = root as DomNode.Document
-        val computed = CssCascade.compute(root, CssStylesheet.parse(DemoPage.CSS))
+        root = document.nodeOf(document.rootHandle())
+        rootDoc = root as DomNode.Document
+        rebuild()
+    }
+
+    /** Recalcula cascada+layout+escena con las reglas del usuario (v4). */
+    private fun rebuild() {
+        val css = if (DevToolsState.userCss.isEmpty()) DemoPage.CSS else DemoPage.CSS + "\n" + DevToolsState.userCss
+        val computed = CssCascade.compute(root, CssStylesheet.parse(css))
         val layout = LayoutEngine.layout(rootDoc, computed, viewport)
         scene = PaintSceneBuilder.build(rootDoc, computed, layout)
+        builtRevision = DevToolsState.revision
     }
 
     override fun onDraw(canvas: Canvas) {
+        if (DevToolsState.revision != builtRevision) rebuild()
         canvas.drawColor(Color.rgb(20, 20, 34))
         val scale = width / viewport.toFloat()
         for (op in scene.ops) {
@@ -101,6 +123,21 @@ class PaintView(context: Context) : View(context) {
         }
         val sel = DevToolsState.selectedNodeId
         if (sel != null) {
+            val sh = devtoolsModel.handleWithNodeId(sel)
+            if (sh != null) {
+                val selNode = document.nodeOf(sh)
+                for (op in scene.ops) {
+                    if (op.node === selNode) {
+                        canvas.drawRect(
+                            (op.x * scale).toFloat(),
+                            (op.y * scale).toFloat(),
+                            ((op.x + op.width) * scale).toFloat(),
+                            ((op.y + op.height) * scale).toFloat(),
+                            selected
+                        )
+                    }
+                }
+            }
             canvas.drawText("seleccion #" + sel, 24f, height - 80f, footnote)
         }
         canvas.drawText("dibujo del motor propio · sin WebView", 24f, height - 48f, footnote)

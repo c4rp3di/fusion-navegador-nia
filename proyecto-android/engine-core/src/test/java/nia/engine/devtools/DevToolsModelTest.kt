@@ -312,4 +312,37 @@ class DevToolsModelTest {
         val (_, model) = fixture()
         assertTrue(model.handleWithNodeId(999) == null)
     }
+
+    // ---- T017 v4 (R0074, RES-0042): reglas CSS del usuario sobre la demo ----
+
+    @Test fun reglaDelUsuarioEnComputed() {
+        val doc = DomDocument.parse(html)
+        val model = DevToolsModel(doc, css + "\n" + "h1 { color: #ff0000; }")
+        assertEquals("#ff0000", model.computedOf(h1(doc))["color"])
+    }
+
+    @Test fun causaDeLaReglaDelUsuarioEsLaRegla() {
+        val doc = DomDocument.parse(html)
+        val model = DevToolsModel(doc, css + "\n" + "h1 { color: #ff0000; }")
+        val c = model.causeOf(h1(doc), "color")
+        assertTrue(c is StyleCause.Rule)
+        if (c is StyleCause.Rule) {
+            assertEquals("h1", c.selector)
+            assertEquals("#ff0000", c.declaredValue)
+            assertEquals(5, c.ruleOrder)
+        }
+    }
+
+    @Test fun reglaDelUsuarioEnMatchingSelectors() {
+        val doc = DomDocument.parse(html)
+        val model = DevToolsModel(doc, css + "\n" + "h1 { color: #ff0000; }")
+        val ms = model.matchingSelectors(h1(doc))
+        assertEquals(2, ms.count { it.selector == "h1" })
+    }
+
+    @Test fun cssInvalidoDelUsuarioNoRompeLasValidas() {
+        val doc = DomDocument.parse(html)
+        val model = DevToolsModel(doc, css + "\n" + "@import x; h1 { color: #ff0000; }")
+        assertEquals("#ff0000", model.computedOf(h1(doc))["color"])
+    }
 }

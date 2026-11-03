@@ -3,9 +3,13 @@ package app.nia.navegador
 import android.app.Activity
 import android.graphics.Typeface
 import android.os.Bundle
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
+import nia.engine.css.CssStylesheet
 import nia.engine.devtools.DevToolsModel
 import nia.engine.devtools.StyleCause
 import nia.engine.dom.DomDocument
@@ -23,27 +27,71 @@ import nia.engine.html.DomNode
  * pagina que pinta PaintView) y el panel abre centrado en la SELECCION
  * del usuario (DevToolsState): estilos computados con causas y matches
  * del nodo elegido con el toque, ademas del arbol y los reportes.
+ *
+ * T017 v4 (R0074, RES-0042): barra de edicion al pie del reporte: el
+ * usuario escribe una regla CSS, Aplicar la anade a
+ * DevToolsState.userCss y el reporte re-renderiza sobre la demo mas las
+ * reglas del usuario (los errores de parseo se cuentan, no rompen nada);
+ * Restaurar limpia la edicion. La pagina pintada re-renderiza al volver.
  */
 class DevToolsActivity : Activity() {
+
+    private lateinit var text: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scroll = ScrollView(this)
-        val text = TextView(this)
+        text = TextView(this)
         text.typeface = Typeface.MONOSPACE
         text.textSize = 12f
         text.setPadding(24, 32, 24, 64)
         text.text = report()
         scroll.addView(text)
-        setContentView(scroll)
+        val input = EditText(this)
+        input.hint = "regla CSS, p. ej. h1 { color: #ff0000; }"
+        val apply = Button(this)
+        apply.text = "Aplicar"
+        apply.setOnClickListener {
+            DevToolsState.addUserRule(input.text.toString())
+            text.text = report()
+        }
+        val reset = Button(this)
+        reset.text = "Restaurar"
+        reset.setOnClickListener {
+            DevToolsState.clearUserRules()
+            text.text = report()
+        }
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(apply)
+        bar.addView(reset)
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        setContentView(root)
     }
 
     private fun report(): String {
+        val userCss = DevToolsState.userCss
+        val css = if (userCss.isEmpty()) DemoPage.CSS else DemoPage.CSS + "\n" + userCss
         val doc = DomDocument.parse(DemoPage.HTML)
-        val model = DevToolsModel(doc, DemoPage.CSS)
+        val model = DevToolsModel(doc, css)
         val sb = StringBuilder()
         sb.append("== Arbol (nodeIds en pre-orden) ==").append('\n')
         sb.append(model.tree())
+        val userSheet = CssStylesheet.parse(userCss)
+        sb.append('\n')
+        sb.append("== Reglas del usuario (").append(userSheet.rules.size).append(") ==").append('\n')
+        if (userCss.isEmpty()) {
+            sb.append("(sin reglas; escribe una regla CSS en la barra y pulsa Aplicar)").append('\n')
+        } else {
+            sb.append(userCss).append('\n')
+            if (userSheet.errors.isNotEmpty()) {
+                sb.append("(parse: ").append(userSheet.errors.size).append(" error(es) ignorados)").append('\n')
+            }
+        }
         val sel = DevToolsState.selectedNodeId
         if (sel != null) {
             val h = model.handleWithNodeId(sel)
