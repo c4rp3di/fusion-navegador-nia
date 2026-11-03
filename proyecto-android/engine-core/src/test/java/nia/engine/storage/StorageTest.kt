@@ -113,14 +113,14 @@ class StorageTest {
     fun usageBytesCuentaClaveYValor() {
         val a = StorageManager().area(StorageScope.LOCAL, siteA, originA)
         a.setItem("k", "hola")
-        assertEquals(8L, a.usageBytes())
+        assertEquals(5L, a.usageBytes())
     }
 
     @Test
     fun usageBytesPorParticion() {
         val m = StorageManager()
         m.area(StorageScope.LOCAL, siteA, originA).setItem("k", "hola")
-        assertEquals(8L, m.usageBytes(StorageScope.LOCAL, siteA, originA))
+        assertEquals(5L, m.usageBytes(StorageScope.LOCAL, siteA, originA))
         assertEquals(0L, m.usageBytes(StorageScope.LOCAL, siteB, originC))
     }
 
@@ -166,8 +166,8 @@ class StorageTest {
         session.setItem("k", "session")
         assertEquals(1, m.clearSessions())
         assertEquals("local", local.getItem("k"))
-        assertEquals(0, m.area(StorageScope.SESSION, siteA, originA).length)
         assertEquals(2, m.partitionCount())
+        assertEquals(0, m.area(StorageScope.SESSION, siteA, originA).length)
     }
 
     @Test

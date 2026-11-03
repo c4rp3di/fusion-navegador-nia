@@ -175,7 +175,7 @@ class IndexedDbTest {
     @Test
     fun storeInexistenteLanzaNotFound() {
         val db = dbConStore(IndexedDb())
-        val tx = db.transaction("s")
+        val tx = db.transaction("nope")
         val e = assertFailsWith<IdbException> { tx.store("nope") }
         assertEquals("NotFoundError", e.name)
     }
