@@ -43,7 +43,7 @@ class PaintView(context: Context) : View(context) {
     private val devtoolsModel: DevToolsModel
     private val root: DomNode
     private val rootDoc: DomNode.Document
-    private var scene: PaintScene
+    private lateinit var scene: PaintScene
 
     private var builtRevision = -1
 
