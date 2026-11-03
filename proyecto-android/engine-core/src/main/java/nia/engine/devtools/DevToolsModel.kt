@@ -29,10 +29,14 @@ import nia.engine.inspector.InspectorSession
  * la ultima escritura ganadora. La seleccion se graba como evento del
  * inspector (T008) con redaccion en la ingesta.
  *
- * Limitaciones v1: sin UI Android (siguiente version), re-analisis por
- * consulta (sin cache por revision), sin origenes multiples ni
- * !important (limitaciones heredadas de la cascada v2), sin edicion de
- * estilos ni live-highlight.
+ * T017 v3 (R0072, RES-0041): handleOf (nodo vivo -> handle por identidad)
+ * y handleWithNodeId (nodeId -> handle en pre-orden), las dos consultas
+ * de la seleccion interactiva del panel (el hit de pintura se resuelve a
+ * handle; el panel mapea nodeId -> handle).
+ *
+ * Limitaciones v3: re-analisis por consulta (sin cache por revision),
+ * sin origenes multiples ni !important (limitaciones heredadas de la
+ * cascada v2), sin edicion de estilos ni live-highlight.
  */
 
 sealed class StyleCause {
@@ -190,6 +194,40 @@ class DevToolsModel(private val document: DomDocument, private val stylesheet: C
             }
         }
         return out
+    }
+
+    /** Handle del nodo vivo dado por identidad (T017 v3): recorre el
+     * documento en pre-orden desde la raiz; null si el nodo no pertenece
+     * al documento registrado (p. ej. de otro parse o desregistrado). */
+    fun handleOf(node: DomNode): DomHandle? {
+        fun walk(h: DomHandle): DomHandle? {
+            val n = document.nodeOf(h)
+            if (n === node) return h
+            if (n is DomNode.Document || n is DomNode.Element) {
+                for (c in document.childrenOf(h)) {
+                    val r = walk(c)
+                    if (r != null) return r
+                }
+            }
+            return null
+        }
+        return walk(document.rootHandle())
+    }
+
+    /** Handle del nodo con ese nodeId de pre-orden (T017 v3), o null. */
+    fun handleWithNodeId(nodeId: Int): DomHandle? {
+        fun walk(h: DomHandle): DomHandle? {
+            if (h.nodeId == nodeId) return h
+            val n = document.nodeOf(h)
+            if (n is DomNode.Document || n is DomNode.Element) {
+                for (c in document.childrenOf(h)) {
+                    val r = walk(c)
+                    if (r != null) return r
+                }
+            }
+            return null
+        }
+        return walk(document.rootHandle())
     }
 
     /** Graba la seleccion como evento del inspector (payload redactado en la ingesta). */

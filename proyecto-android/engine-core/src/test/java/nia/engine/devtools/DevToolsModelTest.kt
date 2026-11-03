@@ -269,4 +269,47 @@ class DevToolsModelTest {
         assertEquals(1, session.eventsSince(1).size)
         assertEquals("11", session.eventsSince(1)[0].payload["nodeId"])
     }
+
+    // ---- T017 v3 (R0072, RES-0041): seleccion interactiva (handleOf/handleWithNodeId) ----
+
+    @Test fun handleOfDevuelveElHandleDelElemento() {
+        val (doc, model) = fixture()
+        val h = model.handleOf(doc.nodeOf(h1(doc)))
+        assertTrue(h != null)
+        if (h != null) assertEquals(7, h.nodeId)
+    }
+
+    @Test fun handleOfDevuelveElHandleDelTexto() {
+        val (doc, model) = fixture()
+        val texto = hijos(doc, h1(doc))[0]
+        val h = model.handleOf(doc.nodeOf(texto))
+        assertTrue(h != null)
+        if (h != null) assertEquals(8, h.nodeId)
+    }
+
+    @Test fun handleOfDelRootEsElDocumento() {
+        val (doc, model) = fixture()
+        val h = model.handleOf(doc.nodeOf(doc.rootHandle()))
+        assertTrue(h != null)
+        if (h != null) assertEquals(1, h.nodeId)
+    }
+
+    @Test fun handleOfNodoAjenoNull() {
+        val (_, model) = fixture()
+        val otro = DomDocument.parse("<html><body><p>x</p></body></html>")
+        val ajeno = otro.nodeOf(otro.findFirst("p") ?: throw AssertionError("falta p"))
+        assertTrue(model.handleOf(ajeno) == null)
+    }
+
+    @Test fun handleWithNodeIdEncuentraPorPreOrden() {
+        val (doc, model) = fixture()
+        val h = model.handleWithNodeId(7)
+        assertTrue(h != null)
+        if (h != null) assertEquals(h1(doc), h)
+    }
+
+    @Test fun handleWithNodeIdInexistenteNull() {
+        val (_, model) = fixture()
+        assertTrue(model.handleWithNodeId(999) == null)
+    }
 }

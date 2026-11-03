@@ -9,7 +9,9 @@ import android.view.View
 import nia.contracts.ContractsVersion
 import nia.engine.css.CssCascade
 import nia.engine.css.CssStylesheet
-import nia.engine.html.HtmlTreeBuilder
+import nia.engine.devtools.DevToolsModel
+import nia.engine.dom.DomDocument
+import nia.engine.html.DomNode
 import nia.engine.layout.LayoutEngine
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
@@ -23,24 +25,17 @@ import nia.engine.paint.PaintSceneBuilder
  * border-color, pseudo-clase :first-child y selector de hermano p+p. El
  * toque se convierte a coordenadas de documento y se resuelve con hitTest
  * del motor; el op topmost queda resaltado. Sin WebView y sin layout XML.
+ *
+ * T017 v3 (R0072): el toque tambien SELECCIONA el nodo del op (resuelto a
+ * handle con DevToolsModel.handleOf sobre el documento registrado) y el
+ * nodeId queda en DevToolsState para el panel DevTools.
  */
 class PaintView(context: Context) : View(context) {
 
     private val viewport = 360.0
 
-    private val demoHtml = "<html><body>" +
-        "<h1>Navegador NIA</h1>" +
-        "<p>Motor propio con CSS v2: hermanos, pseudo-clases, unidades relativas, margenes, padding y bordes. Sin WebView.</p>" +
-        "<div id=\"card\"><p>Primera tarjeta: borde y padding reales (px, em, %).</p><p>La segunda raya queda mas cerca: p+p con margin-top.</p></div>" +
-        "</body></html>"
-
-    private val demoCss = "body{background-color:#141428;font-size:18px;color:#f0eef8;padding:12px}" +
-        "h1{font-size:28px;color:#7fe0bc;border-width:2px;border-color:#7fe0bc;padding:6px}" +
-        "p{margin-top:8px}" +
-        "#card{background-color:#23233f;border-width:3px;border-color:#4a4a7a;padding:12px;margin-top:12px}" +
-        "#card p:first-child{color:#ffd610}" +
-        "p+p{margin-top:4px}"
-
+    private val document: DomDocument
+    private val devtoolsModel: DevToolsModel
     private val scene: PaintScene
 
     private val fillPaint = Paint()
@@ -58,10 +53,13 @@ class PaintView(context: Context) : View(context) {
     private var lastHit: PaintOp? = null
 
     init {
-        val parsed = HtmlTreeBuilder.parse(demoHtml)
-        val computed = CssCascade.compute(parsed.document, CssStylesheet.parse(demoCss))
-        val layout = LayoutEngine.layout(parsed.document, computed, viewport)
-        scene = PaintSceneBuilder.build(parsed.document, computed, layout)
+        document = DomDocument.parse(DemoPage.HTML)
+        devtoolsModel = DevToolsModel(document, DemoPage.CSS)
+        val root = document.nodeOf(document.rootHandle())
+        val rootDoc = root as DomNode.Document
+        val computed = CssCascade.compute(root, CssStylesheet.parse(DemoPage.CSS))
+        val layout = LayoutEngine.layout(rootDoc, computed, viewport)
+        scene = PaintSceneBuilder.build(rootDoc, computed, layout)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -101,6 +99,10 @@ class PaintView(context: Context) : View(context) {
                 highlight
             )
         }
+        val sel = DevToolsState.selectedNodeId
+        if (sel != null) {
+            canvas.drawText("seleccion #" + sel, 24f, height - 80f, footnote)
+        }
         canvas.drawText("dibujo del motor propio · sin WebView", 24f, height - 48f, footnote)
         canvas.drawText("contracts v$ContractsVersion", 24f, height - 16f, footnote)
     }
@@ -110,7 +112,12 @@ class PaintView(context: Context) : View(context) {
             val scale = width / viewport.toFloat()
             val docX = (event.x / scale).toDouble()
             val docY = (event.y / scale).toDouble()
-            lastHit = scene.hitTest(docX, docY)
+            val hit = scene.hitTest(docX, docY)
+            lastHit = hit
+            if (hit != null) {
+                val h = devtoolsModel.handleOf(hit.node)
+                if (h != null) DevToolsState.selectedNodeId = h.nodeId
+            }
             performClick()
             invalidate()
             return true

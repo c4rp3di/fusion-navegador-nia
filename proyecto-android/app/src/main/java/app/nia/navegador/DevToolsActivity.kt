@@ -18,6 +18,11 @@ import nia.engine.html.DomNode
  * computados reales de la cascada y la CAUSA de cada propiedad. Sin
  * WebView: un ScrollView con texto monoespaciado construido con el
  * DevToolsModel del engine-core sobre una demo propia.
+ *
+ * T017 v3 (R0072, RES-0041): la demo se unifica en DemoPage (la misma
+ * pagina que pinta PaintView) y el panel abre centrado en la SELECCION
+ * del usuario (DevToolsState): estilos computados con causas y matches
+ * del nodo elegido con el toque, ademas del arbol y los reportes.
  */
 class DevToolsActivity : Activity() {
 
@@ -34,11 +39,16 @@ class DevToolsActivity : Activity() {
     }
 
     private fun report(): String {
-        val doc = DomDocument.parse(DEMO_HTML)
-        val model = DevToolsModel(doc, DEMO_CSS)
+        val doc = DomDocument.parse(DemoPage.HTML)
+        val model = DevToolsModel(doc, DemoPage.CSS)
         val sb = StringBuilder()
         sb.append("== Arbol (nodeIds en pre-orden) ==").append('\n')
         sb.append(model.tree())
+        val sel = DevToolsState.selectedNodeId
+        if (sel != null) {
+            val h = model.handleWithNodeId(sel)
+            if (h != null) appendSelection(sb, doc, model, h)
+        }
         val body = doc.findFirst("body")
         if (body != null) {
             for (h in doc.childrenOf(body)) {
@@ -69,6 +79,32 @@ class DevToolsActivity : Activity() {
         }
     }
 
+    private fun appendSelection(sb: StringBuilder, doc: DomDocument, model: DevToolsModel, handle: DomHandle) {
+        val node = doc.nodeOf(handle)
+        sb.append('\n')
+        sb.append("== SELECCION #").append(handle.nodeId).append(' ').append(describeName(node)).append(" ==").append('\n')
+        val computed = model.computedOf(handle)
+        if (computed.isEmpty()) {
+            sb.append("(sin estilo computado)").append('\n')
+        }
+        for ((k, v) in computed) {
+            sb.append(k).append(": ").append(v)
+            sb.append("  // ").append(causeText(model.causeOf(handle, k))).append('\n')
+        }
+        for (m in model.matchingSelectors(handle)) {
+            sb.append("match ").append(m.selector)
+            sb.append(" (orden ").append(m.ruleOrder).append(')').append('\n')
+        }
+    }
+
+    private fun describeName(node: DomNode): String = when (node) {
+        is DomNode.Document -> "document"
+        is DomNode.Text -> "text \"" + node.data + "\""
+        is DomNode.Comment -> "comment"
+        is DomNode.Doctype -> "doctype"
+        is DomNode.Element -> node.name
+    }
+
     private fun causeText(c: StyleCause?): String {
         if (c == null) return "-"
         return when (c) {
@@ -78,13 +114,4 @@ class DevToolsActivity : Activity() {
         }
     }
 
-    companion object {
-        private const val DEMO_HTML = "<html><head><title>demo</title></head><body><h1 id=\"titulo\">NIA DevTools</h1><p class=\"tarjeta\">Panel v1</p><p>Seleccion y causas visibles</p></body></html>"
-
-        private const val DEMO_CSS = "body { color: #222222; font-size: 20px; }" + "\n" +
-            "h1 { color: #445566; }" + "\n" +
-            "#titulo { color: #778899; }" + "\n" +
-            "p { margin: 1em; }" + "\n" +
-            ".tarjeta { margin: 2em; }"
-    }
 }
