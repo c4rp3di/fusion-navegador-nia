@@ -45,8 +45,13 @@ class DebugSnapshot(
  *
  * Exclusiones v1: sin reanudacion real (la pila de ejecucion no se
  * conserva: continuar = re-evaluar), sin step-in/over/out granular
- * (solo presupuesto de pasos), sin breakpoints condicionales ni
- * watchpoints, sin UI (la integracion con DevTools llega en otra fase).
+ * (solo presupuesto de pasos). T028 v3 (R0070) anade breakpoints
+ * condicionales y watchpoints a esta API abortiva: la condicion JS se
+ * evalua en el entorno vivo en cada impacto de la linea (solo pausa si
+ * es verdadera; un throw de la condicion NO pausa, documentado) y el
+ * watchpoint pausa cuando el dump canonico de la expresion cambia
+ * entre sentencias (la primera observacion fija la linea base).
+ * Sin UI (la integracion con DevTools llega en otra fase).
  */
 class JsDebugger(
     private val source: String,
@@ -62,6 +67,10 @@ class JsDebugger(
 
     private val lineStarts: IntArray = computeLineStarts(source)
     private val breakpoints = HashSet<Int>()
+    private val conditions = HashMap<Int, String>()
+    private val watches = ArrayList<String>()
+    private val watchValues = HashMap<String, String>()
+    private var evaluating = false
     private var stepBudget: Long = -1L
     private var steps: Long = 0L
 
@@ -72,6 +81,22 @@ class JsDebugger(
     /** Fija un breakpoint en la linea 1-based dada. */
     fun breakOn(line: Int): JsDebugger {
         breakpoints.add(line)
+        return this
+    }
+
+    /** Breakpoint CONDICIONAL (T028 v3): la expresion JS se evalua en el
+     * entorno vivo en cada impacto de la linea; solo pausa si es verdadera
+     * (un throw de la condicion NO pausa, documentado). */
+    fun breakOn(line: Int, condition: String): JsDebugger {
+        breakpoints.add(line)
+        conditions[line] = condition
+        return this
+    }
+
+    /** Watchpoint (T028 v3): pausa cuando el dump canonico de la expresion
+     * cambia entre sentencias (la primera observacion fija la linea base). */
+    fun watch(expr: String): JsDebugger {
+        watches.add(expr)
         return this
     }
 
@@ -99,14 +124,69 @@ class JsDebugger(
         }
     }
 
-    /** Safepoint por sentencia (T028): lo llama runStatement junto al tick de T021. */
+    /** Safepoint por sentencia (T028 v1/v3): lo llama runStatement junto al
+     * tick de T021. Mientras se evalua una condicion o un watch el hook no
+     * actua: sus llamadas internas no anidan pausas ni cuentan pasos. */
     private fun onStatement(s: JsStmt, env: Env) {
+        if (evaluating) return
         steps = steps + 1L
         val line = lineOf(s.start)
-        val hitBp = breakpoints.contains(line)
+        val hitWatch = checkWatches(env)
+        val hitBp = breakpoints.contains(line) && conditionPasses(line, env)
         val hitStep = stepBudget > 0L && steps > stepBudget
-        if (!hitBp && !hitStep) return
-        pause(line, if (hitBp) "breakpoint" else "step", env)
+        if (!hitBp && !hitStep && hitWatch == null) return
+        pause(line, if (hitBp) "breakpoint" else if (hitWatch != null) "watchpoint" else "step", env)
+    }
+
+    /** Condicion del breakpoint (T028 v3): sin condicion pausa siempre; la
+     * expresion se evalua en el entorno vivo y decide JsRuntime.toBoolean;
+     * un throw de JS o un error NO pausan (documentado); JsAbort se propaga. */
+    private fun conditionPasses(line: Int, env: Env): Boolean {
+        val cond = conditions[line] ?: return true
+        evaluating = true
+        try {
+            return JsRuntime.toBoolean(JsInterpreter.debugEvalExpression(cond, env))
+        } catch (ex: JsThrown) {
+            return false
+        } catch (ex: JsAbort) {
+            throw ex
+        } catch (ex: Exception) {
+            return false
+        } finally {
+            evaluating = false
+        }
+    }
+
+    /** Watchpoints (T028 v3): observan el dump canonico en cada sentencia;
+     * la primera observacion fija la linea base SIN pausa. Un throw del
+     * watch se observa como "uncaught <dump>" (valor observable estable). */
+    private fun checkWatches(env: Env): String? {
+        if (watches.isEmpty()) return null
+        var changed: String? = null
+        for (expr in watches) {
+            val dump = evalWatch(expr, env)
+            val prev = watchValues[expr]
+            watchValues[expr] = dump
+            if (prev != null && prev != dump && changed == null) changed = expr
+        }
+        return changed
+    }
+
+    private fun evalWatch(expr: String, env: Env): String {
+        evaluating = true
+        try {
+            return try {
+                JsRuntime.dumpValue(JsInterpreter.debugEvalExpression(expr, env))
+            } catch (ex: JsThrown) {
+                "uncaught " + JsRuntime.dumpValue(ex.value)
+            } catch (ex: JsAbort) {
+                throw ex
+            } catch (ex: Exception) {
+                "error " + (ex.message ?: "inesperado")
+            }
+        } finally {
+            evaluating = false
+        }
     }
 
     /** Captura el snapshot, emite el evento del inspector y aborta con DEBUG_PAUSE. */
@@ -197,10 +277,16 @@ internal sealed class DebugCmd {
  * async/generators corren en runners con handoff estricto y bloquearlos
  * deadlockearia (exclusion documentada: solo el flujo principal pausa).
  *
- * Exclusiones v2: sin breakpoints condicionales ni watchpoints (v3), sin
- * pausa dentro de runners async/generators, inspect puede mutar el
- * entorno (efectos de un REPL real, documentado), una sesion por
- * programa (sin reattach) y sin UI Android (fase posterior).
+ * T028 v3 (R0070) anade breakpoints condicionales (la condicion se
+ * evalua en el entorno vivo en cada impacto de la linea; solo pausa si
+ * es verdadera, un throw NO pausa) y watchpoints (pausa con motivo
+ * watchpoint cuando el dump canonico de la expresion cambia entre
+ * sentencias; la primera observacion fija la linea base sin pausa).
+ *
+ * Exclusiones v3: sin pausa dentro de runners async/generators,
+ * inspect/condiciones/watchpoints pueden mutar el entorno (efectos de
+ * un REPL real, documentado), una sesion por programa (sin reattach) y
+ * sin UI Android (fase posterior).
  */
 class DebugSession(
     private val source: String,
@@ -216,6 +302,9 @@ class DebugSession(
 
     private val lineStarts: IntArray = JsDebugger.computeLineStarts(source)
     private val breakpoints = HashSet<Int>()
+    private val conditions = HashMap<Int, String>()
+    private val watches = ArrayList<String>()
+    private val watchValues = HashMap<String, String>()
     private val inbox = LinkedBlockingQueue<DebugCmd>()
 
     @Volatile
@@ -256,6 +345,22 @@ class DebugSession(
     /** Fija un breakpoint en la linea 1-based dada. */
     fun breakOn(line: Int): DebugSession {
         breakpoints.add(line)
+        return this
+    }
+
+    /** Breakpoint CONDICIONAL (T028 v3): la expresion JS se evalua en el
+     * entorno vivo en cada impacto de la linea; solo pausa si es verdadera
+     * (un throw de la condicion NO pausa, documentado). */
+    fun breakOn(line: Int, condition: String): DebugSession {
+        breakpoints.add(line)
+        conditions[line] = condition
+        return this
+    }
+
+    /** Watchpoint (T028 v3): pausa cuando el dump canonico de la expresion
+     * cambia entre sentencias (la primera observacion fija la linea base). */
+    fun watch(expr: String): DebugSession {
+        watches.add(expr)
         return this
     }
 
@@ -357,24 +462,78 @@ class DebugSession(
         if (state == DebugState.PAUSED) inbox.add(cmd)
     }
 
-    /** Safepoint por sentencia (T028 v2): solo actua el hilo de la sesion. */
+    /** Safepoint por sentencia (T028 v2/v3): solo actua el hilo de la sesion.
+     * Las condiciones y los watches se evaluan con el guard del REPL
+     * (inspecting): sus llamadas internas no anidan pausas ni cuentan. */
     private fun onStatement(s: JsStmt, env: Env) {
         if (Thread.currentThread() !== sessionThread) return
         if (inspecting) return
         val line = lineOf(s.start)
         val depth = depthOf(env)
-        val hitBp = breakpoints.contains(line)
+        val hitWatch = checkWatches(env)
+        val hitBp = breakpoints.contains(line) && conditionPasses(line, env)
         val wantPause = pauseRequested
         val hit = when (policy) {
-            DebugPolicy.RUN -> hitBp || wantPause
+            DebugPolicy.RUN -> hitBp || wantPause || hitWatch != null
             DebugPolicy.STEP_IN -> true
             DebugPolicy.STEP_OVER -> depth <= targetDepth
             DebugPolicy.STEP_OUT -> depth < targetDepth
         }
         if (!hit) return
-        val reason = if (hitBp) "breakpoint" else if (wantPause) "pause" else "step"
+        val reason = if (hitBp) "breakpoint" else if (hitWatch != null) "watchpoint" else if (wantPause) "pause" else "step"
         pauseRequested = false
         park(env, line, depth, reason)
+    }
+
+    /** Condicion del breakpoint (T028 v3): sin condicion pausa siempre; la
+     * expresion se evalua en el entorno vivo y decide JsRuntime.toBoolean;
+     * un throw de JS o un error NO pausan (documentado); JsAbort se propaga. */
+    private fun conditionPasses(line: Int, env: Env): Boolean {
+        val cond = conditions[line] ?: return true
+        inspecting = true
+        try {
+            return JsRuntime.toBoolean(JsInterpreter.debugEvalExpression(cond, env))
+        } catch (ex: JsThrown) {
+            return false
+        } catch (ex: JsAbort) {
+            throw ex
+        } catch (ex: Exception) {
+            return false
+        } finally {
+            inspecting = false
+        }
+    }
+
+    /** Watchpoints (T028 v3): observan el dump canonico en cada sentencia;
+     * la primera observacion fija la linea base SIN pausa. Un throw del
+     * watch se observa como "uncaught <dump>" (valor observable estable). */
+    private fun checkWatches(env: Env): String? {
+        if (watches.isEmpty()) return null
+        var changed: String? = null
+        for (expr in watches) {
+            val dump = evalWatch(expr, env)
+            val prev = watchValues[expr]
+            watchValues[expr] = dump
+            if (prev != null && prev != dump && changed == null) changed = expr
+        }
+        return changed
+    }
+
+    private fun evalWatch(expr: String, env: Env): String {
+        inspecting = true
+        try {
+            return try {
+                JsRuntime.dumpValue(JsInterpreter.debugEvalExpression(expr, env))
+            } catch (ex: JsThrown) {
+                "uncaught " + JsRuntime.dumpValue(ex.value)
+            } catch (ex: JsAbort) {
+                throw ex
+            } catch (ex: Exception) {
+                "error " + (ex.message ?: "inesperado")
+            }
+        } finally {
+            inspecting = false
+        }
     }
 
     /** Publica el snapshot y bloquea el hilo de JS hasta el proximo comando. */

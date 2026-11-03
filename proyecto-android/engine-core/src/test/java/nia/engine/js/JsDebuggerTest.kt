@@ -522,4 +522,177 @@ class JsDebuggerTest {
             liberar(s)
         }
     }
+
+    // ---- T028 v3 (R0070, RES-0040): breakpoints condicionales + watchpoints ----
+
+    @Test
+    fun breakpointCondicionalFalsoNoPausa() {
+        val d = JsDebugger("var a = 1;\nvar b = 2;\na + b").breakOn(2, "a > 5")
+        val r = d.evaluate()
+        assertFalse(r.interrupted)
+        assertEquals("3", JsInterpreter.dumpResult(r))
+        assertNull(d.lastSnapshot)
+        assertNull(JsInterpreter.debugHook)
+    }
+
+    @Test
+    fun breakpointCondicionalVerdaderoPausa() {
+        val d = JsDebugger("var a = 1;\nvar b = 2;\na + b").breakOn(2, "a > 0")
+        val r = d.evaluate()
+        assertTrue(r.interrupted)
+        assertEquals(JsAbortReason.DEBUG_PAUSE, r.abortReason)
+        val s = snap(d)
+        assertEquals(2, s.line)
+        assertEquals("breakpoint", s.reason)
+    }
+
+    @Test
+    fun breakpointCondicionalConThrowNoPausa() {
+        val d = JsDebugger("var a = 1;\nvar b = 2;\na + b").breakOn(2, "inexistente > 0")
+        val r = d.evaluate()
+        assertFalse(r.interrupted)
+        assertEquals("3", JsInterpreter.dumpResult(r))
+        assertNull(d.lastSnapshot)
+    }
+
+    @Test
+    fun watchEnV1PausaCuandoCambia() {
+        val d = JsDebugger("var x = 1;\nvar y = 2;\nx + y").watch("x")
+        val r = d.evaluate()
+        assertTrue(r.interrupted)
+        assertEquals(JsAbortReason.DEBUG_PAUSE, r.abortReason)
+        val s = snap(d)
+        assertEquals(2, s.line)
+        assertEquals("watchpoint", s.reason)
+    }
+
+    @Test
+    fun condicionalFalsoEnSesionSigue() {
+        val s = DebugSession("var a = 1;\nvar b = 2;\na + b").breakOn(2, "a > 5").start()
+        try {
+            val r = done(s)
+            assertEquals("3", JsInterpreter.dumpResult(r))
+            assertEquals(0L, s.pauseCount)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun condicionalConThrowEnSesionNoPausa() {
+        val s = DebugSession("var a = 1;\nvar b = 2;\na + b").breakOn(2, "inexistente > 0").start()
+        try {
+            val r = done(s)
+            assertEquals("3", JsInterpreter.dumpResult(r))
+            assertEquals(0L, s.pauseCount)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun condicionalVerdaderoEnSesionPausa() {
+        val s = DebugSession("var a = 1;\nvar b = 2;\na + b").breakOn(2, "a > 0").start()
+        var n = 0L
+        try {
+            val p = esperaPausa(s, n)
+            assertEquals(2, p.line)
+            assertEquals("breakpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            val r = done(s)
+            assertEquals("3", JsInterpreter.dumpResult(r))
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun condicionalQueLlamaFuncionesNoAnida() {
+        val src = "function f() {\nvar q = 7;\nreturn q;\n}\nvar a = 1;\nvar b = f() + 1;\nb"
+        val s = DebugSession(src).breakOn(2).breakOn(5, "f() > 0").start()
+        var n = 0L
+        try {
+            var p = esperaPausa(s, n)
+            assertEquals(5, p.line)
+            assertEquals("breakpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            p = esperaPausa(s, n)
+            assertEquals(2, p.line)
+            n = n + 1L
+            s.resume()
+            val r = done(s)
+            assertEquals("8", JsInterpreter.dumpResult(r))
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun watchPausaCuandoElValorCambiaYResume() {
+        val s = DebugSession("var x = 1;\nvar y = 2;\nx = 5;\nvar z = x + y;\nz").watch("x").start()
+        var n = 0L
+        try {
+            var p = esperaPausa(s, n)
+            assertEquals(2, p.line)
+            assertEquals("watchpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            p = esperaPausa(s, n)
+            assertEquals(4, p.line)
+            assertEquals("watchpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            val r = done(s)
+            assertEquals("7", JsInterpreter.dumpResult(r))
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun watchConstanteNoPausa() {
+        val s = DebugSession("var a = 1;\nvar b = a + 1;\nb").watch("9").start()
+        try {
+            val r = done(s)
+            assertEquals("2", JsInterpreter.dumpResult(r))
+            assertEquals(0L, s.pauseCount)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun watchConThrowNoPausa() {
+        val s = DebugSession("var a = 1;\nvar b = 2;\nb").watch("inexistente").start()
+        try {
+            val r = done(s)
+            assertEquals("2", JsInterpreter.dumpResult(r))
+            assertEquals(0L, s.pauseCount)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun watchYBreakpointALaVezPriorizaBreakpoint() {
+        val s = DebugSession("var x = 1;\nvar y = 2;\ny").watch("y").breakOn(2).start()
+        var n = 0L
+        try {
+            var p = esperaPausa(s, n)
+            assertEquals(2, p.line)
+            assertEquals("breakpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            p = esperaPausa(s, n)
+            assertEquals(3, p.line)
+            assertEquals("watchpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            done(s)
+        } finally {
+            liberar(s)
+        }
+    }
 }
