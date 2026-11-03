@@ -11,8 +11,6 @@ tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
 }
 
 dependencies {
-    implementation project(':contracts')
-
     // Coordenadas explicitas (R0005): la forma corta kotlin('test') es del DSL Kotlin.
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 }
