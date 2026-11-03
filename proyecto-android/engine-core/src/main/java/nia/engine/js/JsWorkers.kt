@@ -38,7 +38,7 @@ class JsWorkers(private val limits: JsLimits = JsLimits()) {
     /** Estado del lifecycle del worker (T034): RUNNING hasta terminar. */
     enum class WorkerState { RUNNING, TERMINATED }
 
-    private class Timer(
+    internal class Timer(
         val id: Long,
         var deadline: Long,
         val every: Long,
