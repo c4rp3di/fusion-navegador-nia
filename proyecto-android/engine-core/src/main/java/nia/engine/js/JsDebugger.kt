@@ -232,6 +232,11 @@ class DebugSession(
     var result: JsEvalResult? = null
         private set
 
+    /** Numero de pausas publicadas; los awaiters filtran pausas ya vistas. */
+    @Volatile
+    var pauseCount: Long = 0L
+        private set
+
     @Volatile
     private var policy: DebugPolicy = DebugPolicy.RUN
 
@@ -314,12 +319,20 @@ class DebugSession(
         return reply.poll(timeoutMs, TimeUnit.MILLISECONDS)
     }
 
-    /** Espera a la pausa (tests/UI); null si agota el tiempo. */
-    fun awaitPause(timeoutMs: Long = 5000L): DebugSnapshot? {
+    /**
+     * Espera una pausa nueva (tests/UI); null si agota el tiempo. El
+     * parametro after filtra pausas ya vistas (la pausa k-esima se
+     * publica con pauseCount = k): sin filtro, la lectura del estado
+     * PAUSED puede devolver el snapshot de la pausa anterior mientras
+     * el hilo de JS procesa el comando de reanudacion.
+     */
+    fun awaitPause(timeoutMs: Long = 5000L, after: Long = 0L): DebugSnapshot? {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val s = lastSnapshot
-            if (state == DebugState.PAUSED && s != null) return s
+            if (state == DebugState.PAUSED && pauseCount > after) {
+                val s = lastSnapshot
+                if (s != null) return s
+            }
             Thread.sleep(5)
         }
         return null
@@ -363,6 +376,7 @@ class DebugSession(
     private fun park(env: Env, line: Int, depth: Int, reason: String) {
         val snap = capture(env, line, depth, reason)
         lastSnapshot = snap
+        pauseCount = pauseCount + 1L
         state = DebugState.PAUSED
         emitEvent(snap)
         while (true) {

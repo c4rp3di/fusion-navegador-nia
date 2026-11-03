@@ -217,10 +217,13 @@ class JsDebuggerTest {
     }
 
     // ---- T028 v2 (R0064, RES-0037): sesion con reanudacion real ----
+    // Cada test libera SIEMPRE la sesion en finally: una sesion pausada
+    // que sobrevive al test deja el hook montado y las colas/runners
+    // globales del interprete vivas, contaminando a los demas tests.
 
-    private fun paused(s: DebugSession, ms: Long = 5000L): DebugSnapshot {
-        val p = s.awaitPause(ms)
-        if (p == null) throw AssertionError("timeout esperando pausa")
+    private fun esperaPausa(s: DebugSession, after: Long, ms: Long = 5000L): DebugSnapshot {
+        val p = s.awaitPause(ms, after)
+        if (p == null) throw AssertionError("timeout esperando pausa " + (after + 1L))
         return p
     }
 
@@ -234,178 +237,254 @@ class JsDebuggerTest {
     @Test
     fun resumeContinuaDesdeElPuntoExacto() {
         val s = DebugSession("var c = 1;\nvar d = c + 1;\nd").breakOn(2).start()
-        val p = paused(s)
-        assertEquals(2, p.line)
-        assertTrue(p.scopes[0].contains("c=1"))
-        assertEquals("40", s.inspect("c = 40"))
-        s.resume()
-        val r = done(s)
-        assertFalse(r.interrupted)
-        assertEquals("\"41\"", JsInterpreter.dumpResult(r))
+        var n = 0L
+        try {
+            val p = esperaPausa(s, n)
+            n = n + 1L
+            assertEquals(2, p.line)
+            assertTrue(p.scopes[0].contains("c=1"))
+            assertEquals("40", s.inspect("c = 40"))
+            s.resume()
+            val r = done(s)
+            assertFalse(r.interrupted)
+            assertEquals("\"41\"", JsInterpreter.dumpResult(r))
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun pausaPublicaSnapshotYEstado() {
         val s = DebugSession("var a = 5;\nvar b = a + 1;").breakOn(2).start()
-        val p = paused(s)
-        assertEquals(DebugState.PAUSED, s.state)
-        assertEquals(2, p.line)
-        assertEquals("breakpoint", p.reason)
-        s.stop()
-        done(s)
-        assertEquals(DebugState.FINISHED, s.state)
+        var n = 0L
+        try {
+            val p = esperaPausa(s, n)
+            n = n + 1L
+            assertEquals(DebugState.PAUSED, s.state)
+            assertEquals(2, p.line)
+            assertEquals("breakpoint", p.reason)
+            s.stop()
+            done(s)
+            assertEquals(DebugState.FINISHED, s.state)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun stopInterrumpeLaEvaluacion() {
         val s = DebugSession("var a = 1;\nvar b = 2;\nvar c = 3;").breakOn(2).start()
-        paused(s)
-        s.stop()
-        val r = done(s)
-        assertTrue(r.interrupted)
-        assertEquals(JsAbortReason.INTERRUPTED, r.abortReason)
+        var n = 0L
+        try {
+            esperaPausa(s, n)
+            n = n + 1L
+            s.stop()
+            val r = done(s)
+            assertTrue(r.interrupted)
+            assertEquals(JsAbortReason.INTERRUPTED, r.abortReason)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun stepInAvanzaSentenciaASentencia() {
         val s = DebugSession("var a = 1;\nvar b = 2;\nvar c = 3;\nc").breakOn(1).start()
-        paused(s)
-        s.stepIn()
-        assertEquals(2, paused(s).line)
-        s.stepIn()
-        assertEquals(3, paused(s).line)
-        s.stop()
-        done(s)
+        var n = 0L
+        try {
+            assertEquals(1, esperaPausa(s, n).line)
+            n = n + 1L
+            s.stepIn()
+            assertEquals(2, esperaPausa(s, n).line)
+            n = n + 1L
+            s.stepIn()
+            assertEquals(3, esperaPausa(s, n).line)
+            n = n + 1L
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun stepOverNoEntraEnLaFuncion() {
         val src = "function f() {\nvar y = 2;\nreturn y;\n}\nvar r = f();\nr"
         val s = DebugSession(src).breakOn(5).start()
-        assertEquals(5, paused(s).line)
-        s.stepOver()
-        val p = paused(s)
-        assertEquals(6, p.line)
-        assertEquals(1, p.depth)
-        s.stop()
-        done(s)
+        var n = 0L
+        try {
+            assertEquals(5, esperaPausa(s, n).line)
+            n = n + 1L
+            s.stepOver()
+            val p = esperaPausa(s, n)
+            n = n + 1L
+            assertEquals(6, p.line)
+            assertEquals(1, p.depth)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun stepInSiEntraEnLaFuncion() {
         val src = "function f() {\nvar y = 7;\nreturn y;\n}\nvar r = f();\nr"
         val s = DebugSession(src).breakOn(5).start()
-        paused(s)
-        s.stepIn()
-        val p = paused(s)
-        assertEquals(2, p.line)
-        assertEquals(2, p.depth)
-        s.stop()
-        done(s)
+        var n = 0L
+        try {
+            esperaPausa(s, n)
+            n = n + 1L
+            s.stepIn()
+            val p = esperaPausa(s, n)
+            n = n + 1L
+            assertEquals(2, p.line)
+            assertEquals(2, p.depth)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun stepOutVuelveAlLlamador() {
         val src = "function f() {\nvar y = 7;\nreturn y;\n}\nvar r = f();\nr"
         val s = DebugSession(src).breakOn(2).start()
-        assertEquals(2, paused(s).depth)
-        s.stepOut()
-        val p = paused(s)
-        assertEquals(6, p.line)
-        assertEquals(1, p.depth)
-        s.stop()
-        done(s)
+        var n = 0L
+        try {
+            assertEquals(2, esperaPausa(s, n).depth)
+            n = n + 1L
+            s.stepOut()
+            val p = esperaPausa(s, n)
+            n = n + 1L
+            assertEquals(6, p.line)
+            assertEquals(1, p.depth)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun pauseFuerzaPausaEnElSiguienteSafepoint() {
-        val s = DebugSession("var a = 1;\nvar b = 2;\nb").start()
+        val s = DebugSession("var a = 1;\nvar b = 2;\nb")
         s.pause()
-        val p = paused(s)
-        assertEquals(1, p.line)
-        assertEquals("pause", p.reason)
-        s.stop()
-        done(s)
+        s.start()
+        try {
+            val p = esperaPausa(s, 0L)
+            assertEquals(1, p.line)
+            assertEquals("pause", p.reason)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun breakpointEnBuclePausaEnCadaIteracion() {
         val src = "var t = 0;\nfor (var i = 0; i < 3; i++) {\nt = t + i;\n}\nt"
         val s = DebugSession(src).breakOn(3).start()
-        assertTrue(paused(s).scopes[0].contains("t=0"))
-        s.resume()
-        assertTrue(paused(s).scopes[0].contains("t=0"))
-        s.resume()
-        assertTrue(paused(s).scopes[0].contains("t=1"))
-        s.resume()
-        val r = done(s)
-        assertEquals("\"3\"", JsInterpreter.dumpResult(r))
+        var n = 0L
+        try {
+            assertTrue(esperaPausa(s, n).scopes[0].contains("t=0"))
+            n = n + 1L
+            s.resume()
+            assertTrue(esperaPausa(s, n).scopes[0].contains("t=0"))
+            n = n + 1L
+            s.resume()
+            assertTrue(esperaPausa(s, n).scopes[0].contains("t=1"))
+            n = n + 1L
+            s.resume()
+            val r = done(s)
+            assertEquals("\"3\"", JsInterpreter.dumpResult(r))
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun inspectEvaluaEnElEntornoPausado() {
         val s = DebugSession("var n = 40;\nvar m = n + 2;").breakOn(2).start()
-        paused(s)
-        assertEquals("42", s.inspect("n + 2"))
-        assertEquals("\"hola\"", s.inspect("'hola'"))
-        s.stop()
-        done(s)
+        var n = 0L
+        try {
+            esperaPausa(s, n)
+            n = n + 1L
+            assertEquals("42", s.inspect("n + 2"))
+            assertEquals("\"hola\"", s.inspect("'hola'"))
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun inspectConThrowDevuelveUncaught() {
         val s = DebugSession("var a = 1;\nvar b = 2;").breakOn(2).start()
-        paused(s)
-        val out = s.inspect("(function () { throw 'boom'; })()")
-        assertTrue(out != null && out.startsWith("uncaught"))
-        s.stop()
-        done(s)
+        var n = 0L
+        try {
+            esperaPausa(s, n)
+            n = n + 1L
+            val out = s.inspect("(function () { throw 'boom'; })()")
+            assertTrue(out != null && out.startsWith("uncaught"))
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun inspectFueraDePausaDevuelveNull() {
         val s = DebugSession("var a = 1;").start()
-        done(s)
-        assertNull(s.inspect("a"))
+        try {
+            done(s)
+            assertNull(s.inspect("a"))
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun asyncConBreakpointNoCuelgaLaSesion() {
         val src = "async function f() {\nvar x = await 1;\nreturn x + 1;\n}\nf();\nvar z = 9;"
         val s = DebugSession(src).breakOn(3).start()
-        // La pausa llega por el hilo principal o se ignora (runners): la
-        // sesion debe poder terminar en ambos casos sin colgar.
-        var guard = 0
-        while (s.state != DebugState.FINISHED && guard < 200) {
-            if (s.state == DebugState.PAUSED) s.resume()
-            Thread.sleep(10)
-            guard = guard + 1
+        try {
+            var guard = 0
+            while (s.state != DebugState.FINISHED && guard < 200) {
+                if (s.state == DebugState.PAUSED) s.resume()
+                Thread.sleep(10)
+                guard = guard + 1
+            }
+            assertEquals(DebugState.FINISHED, s.state)
+        } finally {
+            s.stop()
         }
-        assertEquals(DebugState.FINISHED, s.state)
     }
 
     @Test
     fun comandosTrasFinalSonInofensivos() {
         val s = DebugSession("var a = 1;\nvar b = 2;").breakOn(2).start()
-        paused(s)
-        s.resume()
-        done(s)
-        s.resume()
-        s.stepIn()
-        s.stepOver()
-        s.stepOut()
-        s.stop()
-        assertEquals(DebugState.FINISHED, s.state)
+        var n = 0L
+        try {
+            esperaPausa(s, n)
+            n = n + 1L
+            s.resume()
+            done(s)
+            s.resume()
+            s.stepIn()
+            s.stepOver()
+            s.stepOut()
+            s.stop()
+            assertEquals(DebugState.FINISHED, s.state)
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
     fun evaluateWithDomEnLaSesion() {
         val doc = DomDocument.parse("<body><p id='x'>h</p></body>")
         val s = DebugSession("var a = 1;\nvar p = document.getElementById('x');\na").breakOn(2).start(doc)
-        assertEquals(2, paused(s).line)
-        s.resume()
-        val r = done(s)
-        assertEquals("\"1\"", JsInterpreter.dumpResult(r))
+        var n = 0L
+        try {
+            assertEquals(2, esperaPausa(s, n).line)
+            n = n + 1L
+            s.resume()
+            val r = done(s)
+            assertEquals("\"1\"", JsInterpreter.dumpResult(r))
+        } finally {
+            s.stop()
+        }
     }
 
     @Test
@@ -413,18 +492,24 @@ class JsDebuggerTest {
         val session = InspectorSession(FakeClock())
         val ctx = EventContext("s1", "t1", "f1", "d1", 1L)
         val s = DebugSession("var token = 'abc';\nvar q = 2;", session, ctx).breakOn(2).start()
-        paused(s)
-        s.stop()
-        done(s)
-        val evs = session.all()
-        assertEquals(1, evs.size)
-        val ev = evs[0]
-        assertEquals("debugger", ev.kind)
-        assertEquals(EventLevel.DEBUG, ev.level)
-        assertEquals("2", ev.payload["line"])
-        assertEquals("breakpoint", ev.payload["reason"])
-        val scopes = ev.payload["scopes"] ?: ""
-        assertTrue(scopes.contains("token=[redacted]"))
-        assertFalse(scopes.contains("abc"))
+        var n = 0L
+        try {
+            esperaPausa(s, n)
+            n = n + 1L
+            s.stop()
+            done(s)
+            val evs = session.all()
+            assertEquals(1, evs.size)
+            val ev = evs[0]
+            assertEquals("debugger", ev.kind)
+            assertEquals(EventLevel.DEBUG, ev.level)
+            assertEquals("2", ev.payload["line"])
+            assertEquals("breakpoint", ev.payload["reason"])
+            val scopes = ev.payload["scopes"] ?: ""
+            assertTrue(scopes.contains("token=[redacted]"))
+            assertFalse(scopes.contains("abc"))
+        } finally {
+            s.stop()
+        }
     }
 }
