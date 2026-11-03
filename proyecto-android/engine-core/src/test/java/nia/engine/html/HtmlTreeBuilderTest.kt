@@ -4,8 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Tests del tree builder HTML (T012 v2): espejo del gemelo TS validado
- * (45 casos con snapshot exacto del arbol via DomPretty y conteo exacto
+ * Tests del tree builder HTML (T012 v3): espejo del gemelo TS validado
+ * (76 casos con snapshot exacto del arbol via DomPretty y conteo exacto
  * de errores de parseo).
  */
 class HtmlTreeBuilderTest {
@@ -147,8 +147,8 @@ class HtmlTreeBuilderTest {
     }
 
     @Test
-    fun tablaV1() {
-        assertEquals("(document (html (head) (body (table (tr (td \"x\"))))))", arbol("<table><tr><td>x</td></tr></table>"))
+    fun tablaBasica() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"x\")))))))", arbol("<table><tr><td>x</td></tr></table>"))
         assertEquals(0, errores("<table><tr><td>x</td></tr></table>"))
     }
 
@@ -282,5 +282,191 @@ class HtmlTreeBuilderTest {
     fun comentarioAntesDeHtml() {
         assertEquals("(document (comment \"c\") (html (head) (body (p \"x\"))))", arbol("<!--c--><p>x"))
         assertEquals(1, errores("<!--c--><p>x"))
+    }
+
+    @Test
+    fun tablaTheadTbodyTfoot() {
+        assertEquals("(document (html (head) (body (table (thead (tr (th \"H\"))) (tbody (tr (td \"a\"))) (tfoot (tr (td \"f\")))))))", arbol("<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>a</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>"))
+        assertEquals(0, errores("<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>a</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>"))
+    }
+
+    @Test
+    fun tablaDosCeldasFila() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"1\") (td \"2\")))))))", arbol("<table><tbody><tr><td>1</td><td>2</td></tr></tbody></table>"))
+        assertEquals(0, errores("<table><tbody><tr><td>1</td><td>2</td></tr></tbody></table>"))
+    }
+
+    @Test
+    fun tablaTdSuelto() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"x\")))))))", arbol("<table><td>x</td></table>"))
+        assertEquals(1, errores("<table><td>x</td></table>"))
+    }
+
+    @Test
+    fun tablaDosFilasUnTbody() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\")) (tr (td \"b\")))))))", arbol("<table><tr><td>a</td></tr><tr><td>b</td></tr></table>"))
+        assertEquals(0, errores("<table><tr><td>a</td></tr><tr><td>b</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaAnidadaEnCelda() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\" (table (tbody (tr (td \"b\")))))))))))", arbol("<table><tr><td>a<table><tr><td>b</td></tr></table></td></tr></table>"))
+        assertEquals(0, errores("<table><tr><td>a<table><tr><td>b</td></tr></table></td></tr></table>"))
+    }
+
+    @Test
+    fun tablaFosterTexto() {
+        assertEquals("(document (html (head) (body \"x\" (table))))", arbol("<table>x</table>"))
+        assertEquals(1, errores("<table>x</table>"))
+    }
+
+    @Test
+    fun tablaFosterB() {
+        assertEquals("(document (html (head) (body (b \"x\") (table))))", arbol("<table><b>x</b></table>"))
+        assertEquals(3, errores("<table><b>x</b></table>"))
+    }
+
+    @Test
+    fun tablaFosterDivTexto() {
+        assertEquals("(document (html (head) (body (div \"a\") (table))))", arbol("<table><div>a</div></table>"))
+        assertEquals(3, errores("<table><div>a</div></table>"))
+    }
+
+    @Test
+    fun tablaWsDentro() {
+        assertEquals("(document (html (head) (body (table \" \" (tbody (tr (td \"x\")))))))", arbol("<table> <tr><td>x</td></tr></table>"))
+        assertEquals(0, errores("<table> <tr><td>x</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaCaption() {
+        assertEquals("(document (html (head) (body (table (caption \"T\") (tbody (tr (td \"x\")))))))", arbol("<table><caption>T</caption><tr><td>x</td></tr></table>"))
+        assertEquals(0, errores("<table><caption>T</caption><tr><td>x</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaCaptionConP() {
+        assertEquals("(document (html (head) (body (table (caption (p \"a\")) (tbody (tr (td \"b\")))))))", arbol("<table><caption><p>a</p></caption><tr><td>b</td></tr></table>"))
+        assertEquals(0, errores("<table><caption><p>a</p></caption><tr><td>b</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaCaptionEnd() {
+        assertEquals("(document (html (head) (body (table (caption \"x\")))))", arbol("<table><caption>x</caption></table>"))
+        assertEquals(0, errores("<table><caption>x</caption></table>"))
+    }
+
+    @Test
+    fun tablaColgroup() {
+        assertEquals("(document (html (head) (body (table (colgroup (col) (col)) (tbody (tr (td \"x\")))))))", arbol("<table><colgroup><col><col></colgroup><tr><td>x</td></tr></table>"))
+        assertEquals(0, errores("<table><colgroup><col><col></colgroup><tr><td>x</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaColImplicito() {
+        assertEquals("(document (html (head) (body (table (colgroup (col)) (tbody (tr (td \"x\")))))))", arbol("<table><col><tr><td>x</td></tr></table>"))
+        assertEquals(0, errores("<table><col><tr><td>x</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaEndCierraCeldas() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\")))))))", arbol("<table><tr><td>a</table>"))
+        assertEquals(0, errores("<table><tr><td>a</table>"))
+    }
+
+    @Test
+    fun tablaTdImplicitoSegundo() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\") (td \"b\")))))))", arbol("<table><tr><td>a<td>b</td></tr></table>"))
+        assertEquals(0, errores("<table><tr><td>a<td>b</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaTrImplicitoSegundo() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\")) (tr (td \"b\")))))))", arbol("<table><tr><td>a<tr><td>b</td></tr></table>"))
+        assertEquals(1, errores("<table><tr><td>a<tr><td>b</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaEndTdSuelto() {
+        assertEquals("(document (html (head) (body (table))))", arbol("<table></td></table>"))
+        assertEquals(1, errores("<table></td></table>"))
+    }
+
+    @Test
+    fun tablaTrSinCerrarFin() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\")))))))", arbol("<table><tr><td>a</td>"))
+        assertEquals(1, errores("<table><tr><td>a</td>"))
+    }
+
+    @Test
+    fun tablaDosHermanas() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \"a\")))) \"texto\" (table (tbody (tr (td \"b\")))))))", arbol("<table><tr><td>a</td></tr></table>texto<table><tr><td>b</td></tr></table>"))
+        assertEquals(0, errores("<table><tr><td>a</td></tr></table>texto<table><tr><td>b</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaTextoEnCelda() {
+        assertEquals("(document (html (head) (body (table (tbody (tr (td \" a \") (td \"b\")))))))", arbol("<table><tr><td> a </td><td>b</td></tr></table>"))
+        assertEquals(0, errores("<table><tr><td> a </td><td>b</td></tr></table>"))
+    }
+
+    @Test
+    fun tablaComentario() {
+        assertEquals("(document (html (head) (body (table (comment \"c\") (tbody (tr (td \"x\")))))))", arbol("<table><!--c--><tr><td>x</td></tr></table>"))
+        assertEquals(0, errores("<table><!--c--><tr><td>x</td></tr></table>"))
+    }
+
+    @Test
+    fun hrCierraP() {
+        assertEquals("(document (html (head) (body (p \"a\") (hr))))", arbol("<p>a<hr>"))
+        assertEquals(0, errores("<p>a<hr>"))
+    }
+
+    @Test
+    fun tdSueltoEnBody() {
+        assertEquals("(document (html (head) (body \"x\")))", arbol("<td>x"))
+        assertEquals(1, errores("<td>x"))
+    }
+
+    @Test
+    fun templateEnBody() {
+        assertEquals("(document (html (head (template \"a\" (b \"c\") \"d\")) (body \"x\")))", arbol("<template>a<b>c</b>d</template>x"))
+        assertEquals(0, errores("<template>a<b>c</b>d</template>x"))
+    }
+
+    @Test
+    fun templateEnHead() {
+        assertEquals("(document (html (head (template \"x\")) (body \"y\")))", arbol("<template>x</template>y"))
+        assertEquals(0, errores("<template>x</template>y"))
+    }
+
+    @Test
+    fun templateFragmentoTabla() {
+        assertEquals("(document (html (head (template (tr (td \"x\")))) (body)))", arbol("<template><tr><td>x</td></tr></template>"))
+        assertEquals(0, errores("<template><tr><td>x</td></tr></template>"))
+    }
+
+    @Test
+    fun templateTablaNormal() {
+        assertEquals("(document (html (head (template (table (tbody (tr (td \"x\")))))) (body)))", arbol("<template><table><tr><td>x</td></tr></table></template>"))
+        assertEquals(0, errores("<template><table><tr><td>x</td></tr></table></template>"))
+    }
+
+    @Test
+    fun templateAnidado() {
+        assertEquals("(document (html (head (template (template \"x\") \"y\")) (body \"z\")))", arbol("<template><template>x</template>y</template>z"))
+        assertEquals(0, errores("<template><template>x</template>y</template>z"))
+    }
+
+    @Test
+    fun templateEof() {
+        assertEquals("(document (html (head (template \"x\")) (body)))", arbol("<template>x"))
+        assertEquals(1, errores("<template>x"))
+    }
+
+    @Test
+    fun templateEndSuelto() {
+        assertEquals("(document (html (head) (body \"x\")))", arbol("</template>x"))
+        assertEquals(1, errores("</template>x"))
     }
 }
