@@ -1,6 +1,7 @@
 name: contracts-tests
 
 on:
+  push:
   workflow_dispatch:
 
 defaults:
@@ -117,12 +118,6 @@ jobs:
             engine-core/src/main/java/nia/engine/net/RedirectPolicy.kt \
             engine-core/src/test/java/nia/engine/net/CookieJarTest.kt \
             engine-core/src/test/java/nia/engine/net/CorsTest.kt \
-            engine-core/src/test/java/nia/engine/net/RedirectPolicyTest.kt \
-            engine-core/src/main/java/nia/engine/net/CookieJar.kt \
-            engine-core/src/test/java/nia/engine/net/CookieJarTest.kt \
-            engine-core/src/main/java/nia/engine/net/Cors.kt \
-            engine-core/src/test/java/nia/engine/net/CorsTest.kt \
-            engine-core/src/main/java/nia/engine/net/RedirectPolicy.kt \
             engine-core/src/test/java/nia/engine/net/RedirectPolicyTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
