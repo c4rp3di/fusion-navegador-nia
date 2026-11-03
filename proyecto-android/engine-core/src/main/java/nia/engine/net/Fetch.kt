@@ -1,0 +1,139 @@
+package nia.engine.net
+
+import nia.contracts.CancellationToken
+import nia.contracts.CancellationTokenSource
+import nia.contracts.ErrorCode
+import nia.contracts.ErrorInfo
+import nia.contracts.Outcome
+import nia.contracts.SystemWallClock
+import nia.contracts.WallClock
+
+/**
+ * T011 v1 (R0039, RES-0026): fetch/TLS/cancelacion. FetchManager es el
+ * dueno del ciclo de vida de una peticion y es AGNOSTICO del transporte:
+ * el transporte real (TLS incluido) se inyecta como FetchTransport y en
+ * v1 es un Stub en los tests (la pila real llega con el adaptador de
+ * Android en una fase posterior). Todo lo que puede salir mal se mapea a
+ * los codigos cerrados de :contracts:
+ *
+ * - TLS invalido (el transporte no valida el certificado) -> TLS, no
+ *   reintentable, mensaje seguro que NUNCA repite la URL.
+ * - Fallo de DNS o de red -> NETWORK, reintentable mas tarde.
+ * - Cancelacion cooperativa (contratos): deadline comprobado con el
+ *   reloj inyectable antes de llamar al transporte y cancelacion
+ *   explicita observada despues; ambas -> CANCELLED y la respuesta se
+ *   descarta aunque el transporte la devuelva.
+ * - Respuestas stale: invalidate() sube la generacion (navegacion); una
+ *   respuesta de una generacion anterior -> STALE_HANDLE. Si hay
+ *   cancelacion Y stale, gana la cancelacion (se informa de por que).
+ *
+ * Limitaciones v1: transporte sincrono (el adaptador real sera
+ * asincrono sobre esta misma frontera), sin redireccion, sin
+ * descompresion, sin pool de conexiones, sin cookies/CORS/cache (T026),
+ * y sin cableado por broker (el codec de payloads de NETWORK_FETCH llega
+ * en la v2 junto al modulo de red del broker).
+ */
+
+data class FetchRequest(
+    val id: Long,
+    val method: String,
+    val url: String,
+    val headers: Map<String, String>,
+    val body: ByteArray?
+)
+
+data class FetchResponse(
+    val status: Int,
+    val headers: Map<String, String>,
+    val body: ByteArray
+)
+
+/** Fallos que reporta el transporte; el manager los mapea a ErrorCode. */
+enum class TransportFailure { TLS_INVALID, DNS, NETWORK }
+
+sealed class TransportResult {
+    data class Success(val response: FetchResponse) : TransportResult()
+    data class Failure(val kind: TransportFailure) : TransportResult()
+}
+
+interface FetchTransport {
+    fun fetch(request: FetchRequest, token: CancellationToken): TransportResult
+}
+
+class FetchManager(
+    private val transport: FetchTransport,
+    private val clock: WallClock = SystemWallClock()
+) {
+    private val methods = setOf("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS")
+    private var generation = 0L
+    private var nextId = 0L
+    private var delivered = 0
+
+    /** Peticion nueva con id monotomico; el cuerpo y cabeceras llegan aparte. */
+    fun newRequest(
+        method: String,
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        body: ByteArray? = null
+    ): FetchRequest {
+        nextId += 1
+        return FetchRequest(nextId, method, url, headers, body)
+    }
+
+    /** Nueva generacion: las respuestas de generaciones anteriores son stale. */
+    fun invalidate(): Long {
+        generation += 1
+        return generation
+    }
+
+    fun deliveredCount(): Int = delivered
+
+    /**
+     * Ejecuta una peticion con cancelacion cooperativa: el token externo
+     * manda (el interno se crea solo si no se pasa ninguno) y el deadline
+     * (si deadlineMillis > 0) se comprueba ANTES de llamar al transporte.
+     */
+    fun fetch(
+        request: FetchRequest,
+        token: CancellationToken? = null,
+        deadlineMillis: Long = -1
+    ): Outcome<FetchResponse> {
+        if (!methods.contains(request.method)) {
+            return Outcome.failure(ErrorInfo(ErrorCode.INVALID_INPUT, "metodo no soportado"))
+        }
+        val lower = request.url.trim().lowercase()
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+            return Outcome.failure(ErrorInfo(ErrorCode.UNSUPPORTED, "esquema no soportado"))
+        }
+        val g = generation
+        val t = token ?: CancellationTokenSource(clock).token
+        if (deadlineMillis > 0) {
+            val r = t.checkDeadline(deadlineMillis)
+            if (r != null) {
+                return Outcome.failure(ErrorInfo(ErrorCode.CANCELLED, "operacion cancelada: " + r))
+            }
+        }
+        val result = transport.fetch(request, t)
+        val cr = t.reason()
+        if (cr != null) {
+            return Outcome.failure(ErrorInfo(ErrorCode.CANCELLED, "operacion cancelada: " + cr))
+        }
+        if (generation != g) {
+            return Outcome.failure(ErrorInfo(ErrorCode.STALE_HANDLE, "respuesta descartada: generacion anterior"))
+        }
+        return when (result) {
+            is TransportResult.Success -> {
+                delivered += 1
+                Outcome.success(result.response)
+            }
+            is TransportResult.Failure -> when (result.kind) {
+                TransportFailure.TLS_INVALID ->
+                    Outcome.failure(ErrorInfo(ErrorCode.TLS, "TLS invalido: conexion rechazada"))
+                TransportFailure.DNS ->
+                    Outcome.failure(ErrorInfo(ErrorCode.NETWORK, "fallo de red: DNS"))
+                TransportFailure.NETWORK ->
+                    Outcome.failure(ErrorInfo(ErrorCode.NETWORK, "fallo de red"))
+            }
+        }
+    }
+}
