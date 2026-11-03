@@ -72,7 +72,7 @@ class RedirectPolicyTest {
     }
 
     @Test fun redirHttpAHttpsPermitido() {
-        assertTrue(RedirectPolicy.plan(302, "GET", "https://a.example/x", "http://a.example/", 0) is RedirectPolicy.Follow)
+        assertTrue(RedirectPolicy.plan(302, "GET", "https://a.example/x", "http://a.example/", 0) is RedirectPolicy.Plan.Follow)
     }
 
     @Test fun redirRelativaComplejaRechazada() {
