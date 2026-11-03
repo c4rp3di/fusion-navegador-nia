@@ -1,6 +1,7 @@
 name: contracts-tests
 
 on:
+  push:
   workflow_dispatch:
 
 defaults:
