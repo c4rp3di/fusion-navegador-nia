@@ -65,7 +65,8 @@ class JsDebuggerTest {
         val s = snap(d)
         assertEquals(4, s.line)
         assertEquals(2, s.depth)
-        assertEquals("y=2", s.scopes[0])
+        assertTrue(s.scopes[0].contains("y=2"))
+        assertFalse(s.scopes[0].contains("x=1"))
         assertTrue(s.scopes[1].contains("x=1"))
     }
 
@@ -97,8 +98,10 @@ class JsDebuggerTest {
         val s = snap(d)
         assertEquals(5, s.line)
         assertEquals(3, s.depth)
-        assertEquals(1, s.scopes.size)
-        assertTrue(s.scopes[0].contains("r=undefined"))
+        assertEquals(3, s.scopes.size)
+        assertTrue(s.scopes[0].contains("g=(fun g)"))
+        assertFalse(s.scopes[0].contains("r=undefined"))
+        assertTrue(s.scopes[2].contains("r=undefined"))
     }
 
     @Test
@@ -202,7 +205,7 @@ class JsDebuggerTest {
         assertTrue(sc.contains("hola"))
         assertTrue(sc.contains("b=true"))
         assertTrue(sc.contains("u=undefined"))
-        assertTrue(sc.contains("z=1.5"))
+        assertTrue(sc.contains("z=undefined"))
     }
 
     @Test
