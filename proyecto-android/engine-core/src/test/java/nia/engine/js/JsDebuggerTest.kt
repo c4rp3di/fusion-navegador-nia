@@ -92,11 +92,11 @@ class JsDebuggerTest {
     @Test
     fun profundidadConFuncionesAnidadas() {
         val d = JsDebugger(
-            "function f() {\nreturn g();\n}\nfunction g() {\nreturn 7;\n}\nvar r = f();"
-        ).breakOn(5)
+            "function f() {\nfunction g() {\nreturn 7;\n}\nreturn g();\n}\nvar r = f();"
+        ).breakOn(3)
         d.evaluate()
         val s = snap(d)
-        assertEquals(5, s.line)
+        assertEquals(3, s.line)
         assertEquals(3, s.depth)
         assertEquals(3, s.scopes.size)
         assertTrue(s.scopes[0].contains("g=(fun g)"))
