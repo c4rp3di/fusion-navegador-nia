@@ -4,17 +4,17 @@ import nia.engine.css.CssComputedStyle
 import nia.engine.html.DomNode
 
 /**
- * Layout v2 (R0023): caja rectangular en coordenadas del documento.
- * Limitaciones v2: sin width/height fijados, sin float/flex/tablas,
- * medicion monoespaciada (avance = fontSize/2), overflow permitido
- * (las palabras no se parten).
+ * Layout v1 (T015): caja rectangular en coordenadas del documento.
+ * Limitaciones v1: sin margin/padding/border, sin width/height fijados,
+ * sin float/flex/tablas, medicion monoespaciada (avance = fontSize/2),
+ * overflow permitido (las palabras no se parten).
  */
 class LayoutBox(val x: Double, val y: Double, val width: Double, val height: Double)
 
 /**
- * Resultado del layout. boxOf: bloque -> su caja (border box); inline/texto ->
- * envolvente de sus fragmentos (null si no dibuja nada). fragmentsOf: una caja
- * por palabra de un nodo de texto.
+ * Resultado del layout. boxOf: bloque -> su caja; inline/texto -> envolvente
+ * de sus fragmentos (null si no dibuja nada). fragmentsOf: una caja por
+ * palabra de un nodo de texto.
  */
 class LayoutResult internal constructor(
     private val blockBoxes: Map<DomNode, LayoutBox>,
@@ -62,19 +62,13 @@ class LayoutResult internal constructor(
 }
 
 /**
- * Motor de layout v2 (R0023): apila bloques verticalmente y fluye el
- * contenido inline con envoltura greedy de palabras. Novedades v2: cada
- * bloque hijo se coloca con margin (sin margin collapsing), padding y
- * border de sus estilos computados; el modelo es border-box para el
- * rectangulo devuelto (los margins quedan fuera), la caja de contenido
- * del hijo es x + margin-left + border-left + padding-left y ancho del
- * contenedor menos margins, paddings y borders horizontales. margin,
- * padding y border-width aceptan px, em/rem (contra la fuente del propio
- * elemento; rem contra la raiz 16px) y N% resuelto contra el ancho del
- * contenedor. Alturas de linea: line-height en px o normal = 1.2 x
- * fontSize (por linea se usa el maximo de sus palabras). Alineacion
- * heredada left/center/right. Los textos solo con espacios se ignoran;
- * el whitespace colapsa a un espacio.
+ * Motor de layout v1 (T015): apila bloques verticalmente (ancho completo del
+ * contenedor) y fluye el contenido inline con envoltura greedy de palabras;
+ * las tiras de inline entre bloques generan bloques anonimos. Alturas de
+ * linea: line-height en px o normal = 1.2 x fontSize (por linea se usa el
+ * maximo de sus palabras). Alineacion heredada left/center/right. El hueco
+ * entre palabras usa la fuente de la palabra siguiente. Los textos solo con
+ * espacios se ignoran; el whitespace colapsa a un espacio.
  */
 object LayoutEngine {
 
@@ -105,9 +99,6 @@ object LayoutEngine {
         private val noneElements = HashSet<DomNode>()
         private val blockBoxes = LinkedHashMap<DomNode, LayoutBox>()
         private val fragments = LinkedHashMap<DomNode, MutableList<LayoutBox>>()
-
-        private val lenRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))(px|em|rem|%)$")
-        private val numRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))$")
 
         private class W(val node: DomNode.Text, val text: String, val fs: Double, val lh: Double, var startX: Double)
 
@@ -160,33 +151,6 @@ object LayoutEngine {
             if (v.substring(v.length - 2) != "px") return null
             return v.substring(0, v.length - 2).toDoubleOrNull()
         }
-
-        /** Longitud con unidad o numero puro; em/rem contra fs (rem usa raiz 16px), % contra containerW. */
-        private fun parseLen(v: String?, fs: Double, containerW: Double): Double? {
-            if (v == null) return null
-            val s = v.trim()
-            if (s.isEmpty()) return null
-            val m = lenRegex.find(s)
-            if (m != null) {
-                val num = m.groupValues[1].toDouble()
-                return when (m.groupValues[4]) {
-                    "px" -> num
-                    "%" -> (num * containerW) / 100
-                    "em" -> num * fs
-                    "rem" -> num * 16.0
-                    else -> null
-                }
-            }
-            val mn = numRegex.find(s)
-            if (mn != null) {
-                val num = mn.groupValues[1].toDouble()
-                return if (num == 0.0) 0.0 else null
-            }
-            return null
-        }
-
-        private fun boxLen(el: DomNode.Element, name: String, containerW: Double, fs: Double): Double =
-            parseLen(styleOf(el, name), fs, containerW) ?: 0.0
 
         private fun fontSizeOf(n: DomNode): Double {
             val el = nearestEl(n)
@@ -285,26 +249,9 @@ object LayoutEngine {
                         cur += layoutInlineRun(run.toList(), x, cur, width, align)
                         run.clear()
                     }
-                    val fs = fontSizeOf(child)
-                    val mt = boxLen(child, "margin-top", width, fs)
-                    val mr = boxLen(child, "margin-right", width, fs)
-                    val mb = boxLen(child, "margin-bottom", width, fs)
-                    val ml = boxLen(child, "margin-left", width, fs)
-                    val pt = boxLen(child, "padding-top", width, fs)
-                    val pr = boxLen(child, "padding-right", width, fs)
-                    val pb = boxLen(child, "padding-bottom", width, fs)
-                    val pl = boxLen(child, "padding-left", width, fs)
-                    val bt = boxLen(child, "border-top-width", width, fs)
-                    val br = boxLen(child, "border-right-width", width, fs)
-                    val bb = boxLen(child, "border-bottom-width", width, fs)
-                    val bl = boxLen(child, "border-left-width", width, fs)
-                    val cx = x + ml + bl + pl
-                    val cy = cur + mt + bt + pt
-                    val cw = width - ml - mr - bl - br - pl - pr
-                    val h = layoutContainer(child, cx, cy, cw)
-                    val bh = h + pt + pb + bt + bb
-                    blockBoxes[child] = LayoutBox(x + ml, cur + mt, width - ml - mr, bh)
-                    cur += mt + bh + mb
+                    val h = layoutContainer(child, x, cur, width)
+                    blockBoxes[child] = LayoutBox(x, cur, width, h)
+                    cur += h
                     continue
                 }
             }
