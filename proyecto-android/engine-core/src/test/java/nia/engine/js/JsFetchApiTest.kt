@@ -228,7 +228,7 @@ class JsFetchApiTest {
     fun demoSubmitFetchRender() {
         val t = FakeTransport()
         val doc = DomDocument.parse(
-            "<form id="f"><input id="q" name="q" value="hola"></form>"
+            "<form id=\"f\"><input id=\"q\" name=\"q\" value=\"hola\"></form>"
         )
         val r = eval(
             "var o = []; var f = document.getElementById('f');" +
@@ -248,7 +248,7 @@ class JsFetchApiTest {
     fun demoSubmitFetchCancelado() {
         val t = FakeTransport()
         val doc = DomDocument.parse(
-            "<form id="f"><input id="q" name="q" value="hola"></form>"
+            "<form id=\"f\"><input id=\"q\" name=\"q\" value=\"hola\"></form>"
         )
         val r = eval(
             "var o = []; var f = document.getElementById('f');" +
@@ -268,7 +268,7 @@ class JsFetchApiTest {
     @Test
     fun inputValueLeeYEscribe() {
         val t = FakeTransport()
-        val doc = DomDocument.parse("<input id="n" value="7">")
+        val doc = DomDocument.parse("<input id=\"n\" value=\"7\">")
         val r = eval(
             "var i = document.getElementById('n'); var out = i.value;" +
                 " i.value = '5'; out + ',' + i.value + ',' + i.getAttribute('value')",
@@ -280,7 +280,7 @@ class JsFetchApiTest {
     @Test
     fun textareaValueLeeYEscribe() {
         val t = FakeTransport()
-        val doc = DomDocument.parse("<textarea id="t">abc</textarea>")
+        val doc = DomDocument.parse("<textarea id=\"t\">abc</textarea>"")
         val r = eval(
             "var t = document.getElementById('t'); var out = t.value;" +
                 " t.value = 'xyz'; out + ',' + t.value + ',' + t.textContent",
@@ -293,9 +293,9 @@ class JsFetchApiTest {
     fun formElementsConName() {
         val t = FakeTransport()
         val doc = DomDocument.parse(
-            "<form id="f"><input name="a"><textarea name="b"></textarea><p>sin</p></form>"
+            "<form id=\"f\"><input name=\"a\"><textarea name=\"b\"></textarea><p>sin</p></form>"
         )
-        const r = eval(
+        val r = eval(
             "var f = document.getElementById('f');" +
                 " f.elements.length + ':' + f.elements[0].getAttribute('name')" +
                 " + ',' + f.elements[1].getAttribute('name')",
@@ -307,8 +307,8 @@ class JsFetchApiTest {
     @Test
     fun formSubmitDisparaYBurbujea() {
         val t = FakeTransport()
-        const doc = DomDocument.parse("<form id="f"><input name="q"></form>")
-        const r = eval(
+        val doc = DomDocument.parse("<form id=\"f\"><input name=\"q\"></form>")
+        val r = eval(
             "var o = []; var f = document.getElementById('f');" +
                 " document.body.addEventListener('submit', function (ev) {" +
                 " o.push('b:' + ev.target.getAttribute('id')); });" +
@@ -323,7 +323,7 @@ class JsFetchApiTest {
     @Test
     fun formSubmitConPreventDefaultDevuelveFalse() {
         val t = FakeTransport()
-        val doc = DomDocument.parse("<form id="f"></form>")
+        val doc = DomDocument.parse("<form id=\"f\"></form>")
         val r = eval(
             "var f = document.getElementById('f');" +
                 " f.addEventListener('submit', function (ev) { ev.preventDefault(); });" +
