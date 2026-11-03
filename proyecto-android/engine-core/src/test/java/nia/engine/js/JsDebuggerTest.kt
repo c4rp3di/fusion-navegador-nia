@@ -257,7 +257,7 @@ class JsDebuggerTest {
             s.resume()
             val r = done(s)
             assertFalse(r.interrupted)
-            assertEquals("\"41\"", JsInterpreter.dumpResult(r))
+            assertEquals("41", JsInterpreter.dumpResult(r))
         } finally {
             liberar(s)
         }
@@ -399,7 +399,7 @@ class JsDebuggerTest {
             n = n + 1L
             s.resume()
             val r = done(s)
-            assertEquals("\"3\"", JsInterpreter.dumpResult(r))
+            assertEquals("3", JsInterpreter.dumpResult(r))
         } finally {
             liberar(s)
         }
@@ -491,7 +491,7 @@ class JsDebuggerTest {
             n = n + 1L
             s.resume()
             val r = done(s)
-            assertEquals("\"1\"", JsInterpreter.dumpResult(r))
+            assertEquals("1", JsInterpreter.dumpResult(r))
         } finally {
             liberar(s)
         }

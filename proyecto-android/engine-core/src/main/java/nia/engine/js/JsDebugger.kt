@@ -246,6 +246,10 @@ class DebugSession(
     @Volatile
     private var pauseRequested: Boolean = false
 
+    /** True mientras corre un inspect: el REPL del debugger no pausa. */
+    @Volatile
+    private var inspecting: Boolean = false
+
     @Volatile
     private var sessionThread: Thread? = null
 
@@ -356,6 +360,7 @@ class DebugSession(
     /** Safepoint por sentencia (T028 v2): solo actua el hilo de la sesion. */
     private fun onStatement(s: JsStmt, env: Env) {
         if (Thread.currentThread() !== sessionThread) return
+        if (inspecting) return
         val line = lineOf(s.start)
         val depth = depthOf(env)
         val hitBp = breakpoints.contains(line)
@@ -392,17 +397,30 @@ class DebugSession(
         }
     }
 
-    /** Evalua la expresion en el env pausado; la llama el hilo de JS. */
-    private fun inspectIn(expr: String, env: Env): String =
+    /**
+     * Evalua la expresion en el env pausado; la llama el hilo de JS.
+     * Mientras corre, el hook de la sesion no actua: el REPL del
+     * debugger no dispara pausas (como la consola de DevTools) y una
+     * llamada con sentencias internas (p. ej. una funcion que hace
+     * throw) no puede anidar un park dentro de otro, lo que dejaria
+     * el reply del inspect colgado para siempre.
+     */
+    private fun inspectIn(expr: String, env: Env): String {
+        inspecting = true
         try {
-            JsRuntime.dumpValue(JsInterpreter.debugEvalExpression(expr, env))
-        } catch (ex: JsThrown) {
-            "uncaught " + JsRuntime.dumpValue(ex.value)
-        } catch (ex: JsAbort) {
-            throw ex
-        } catch (ex: Exception) {
-            "error " + (ex.message ?: "inesperado")
+            return try {
+                JsRuntime.dumpValue(JsInterpreter.debugEvalExpression(expr, env))
+            } catch (ex: JsThrown) {
+                "uncaught " + JsRuntime.dumpValue(ex.value)
+            } catch (ex: JsAbort) {
+                throw ex
+            } catch (ex: Exception) {
+                "error " + (ex.message ?: "inesperado")
+            }
+        } finally {
+            inspecting = false
         }
+    }
 
     /** Captura scopes/profundidad como v1: cadena de Env, dump canonico. */
     private fun capture(env: Env, line: Int, depth: Int, reason: String): DebugSnapshot {
