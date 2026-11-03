@@ -1736,6 +1736,7 @@ object JsInterpreter {
         JsBuiltins.install(genv)
         installCallbackBuiltins(genv)
         JsDomBindings.installConsole(genv)
+        keepAliveRunners = false
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         var aborted: JsAbortReason? = null
@@ -1782,6 +1783,7 @@ object JsInterpreter {
         installCallbackBuiltins(genv)
         JsDomBindings.installConsole(genv)
         JsDomBindings.install(genv, doc)
+        keepAliveRunners = false
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         var aborted: JsAbortReason? = null
@@ -1819,6 +1821,70 @@ object JsInterpreter {
      */
     fun interrupt() {
         JsQuotas.interrupt()
+    }
+
+    // ---- Sesion del event loop (T025 v1, RES-0032) ----
+    // La sesion del loop se mantiene entre pumps: genv, cuotas y runners
+    // de async/await vivos mientras el host avanza el reloj (un await
+    // asentado por el callback de un setTimeout continua en el pump
+    // siguiente); endLoopSession corta y limpia. El evaluate clasico
+    // fija keepAliveRunners = false en su entrada, asi que nunca se ve
+    // afectado por una sesion del loop que quedo abierta.
+
+    private var keepAliveRunners = false
+
+    /** Abre la sesion del loop: genv con los builtins, runners vivos y cuotas. */
+    internal fun startLoopSession(limits: JsLimits): Env {
+        val genv = Env(null, true)
+        genv.declare("undefined", JsUndefined)
+        genv.declare("NaN", JsNum(Double.NaN))
+        genv.declare("Infinity", JsNum(Double.POSITIVE_INFINITY))
+        genv.declare("Error", JsNative("Error"))
+        JsBuiltins.install(genv)
+        installCallbackBuiltins(genv)
+        JsDomBindings.installConsole(genv)
+        keepAliveRunners = true
+        JsQuotas.begin(limits)
+        return genv
+    }
+
+    /** Corre source en la sesion abierta (mismo genv) y drena microtasks sin limpiar runners. */
+    internal fun runInSession(source: String, genv: Env): JsEvalResult {
+        var last: JsValue = JsUndefined
+        var thrown: JsValue? = null
+        var aborted: JsAbortReason? = null
+        try {
+            val parse = JsParser.parse(source)
+            hoist(parse.program.statements, genv)
+            for (s in parse.program.statements) {
+                val c = runStatement(s, genv, emptyList())
+                if (c.type != CType.NORMAL) break
+                if (c.value != null) last = c.value
+            }
+        } catch (ex: JsAbort) {
+            aborted = ex.reason
+        } catch (ex: Exception) {
+            if (ex is JsThrown) thrown = ex.value else throw ex
+        }
+        if (aborted == null) {
+            try {
+                val mv = drainMicrotasks()
+                if (mv != null) last = mv
+            } catch (ex: JsAbort) {
+                aborted = ex.reason
+            }
+        }
+        return JsEvalResult(last, thrown != null, thrown, aborted)
+    }
+
+    /** Drena microtasks dentro de la sesion del loop (sin limpiar runners). */
+    internal fun drainInSession(): JsValue? = drainMicrotasks()
+
+    /** Cierra la sesion del loop: corta runners, limpia colas/registros y las cuotas. */
+    internal fun endLoopSession() {
+        keepAliveRunners = false
+        cleanupRunners()
+        JsQuotas.end()
     }
 
 
@@ -2055,7 +2121,7 @@ object JsInterpreter {
                 }
             }
         } finally {
-            cleanupRunners()
+            if (!keepAliveRunners) cleanupRunners()
         }
         return res
     }
