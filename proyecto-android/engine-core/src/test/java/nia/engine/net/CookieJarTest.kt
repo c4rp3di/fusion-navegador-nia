@@ -11,6 +11,7 @@ import nia.contracts.WallClock
 /**
  * Tests T026 v1 (R0052): cookies RFC 6265. Espejo 1:1 del gemelo TS
  * validado offline: mismas fuentes, mismas expectativas.
+ * v2 (R0060): SameSite aplicado (SiteContext).
  */
 class CookieJarTest {
 
@@ -124,5 +125,47 @@ class CookieJarTest {
         val c = jar.all()[0]
         assertEquals("/", c.path)
         assertEquals("h=1", jar.cookieHeader("a.example", "/otro", false))
+    }
+
+    @Test fun sameSiteStrictSoloSameSite() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Strict"))
+        assertEquals("s=1", jar.cookieHeader("a.example", "/", true, SiteContext.SAME_SITE))
+    }
+
+    @Test fun sameSiteStrictRechazaTopLevelCrossSite() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Strict"))
+        assertEquals("", jar.cookieHeader("a.example", "/", true, SiteContext.TOP_LEVEL_CROSS_SITE))
+    }
+
+    @Test fun sameSiteLaxPermiteTopLevelCrossSite() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Lax"))
+        assertEquals("s=1", jar.cookieHeader("a.example", "/", true, SiteContext.TOP_LEVEL_CROSS_SITE))
+    }
+
+    @Test fun sameSiteLaxRechazaEmbebido() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Lax"))
+        assertEquals("", jar.cookieHeader("a.example", "/", true, SiteContext.EMBEDDED_CROSS_SITE))
+    }
+
+    @Test fun sameSiteNoneSiempre() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=None"))
+        assertEquals("s=1", jar.cookieHeader("a.example", "/", true, SiteContext.EMBEDDED_CROSS_SITE))
+    }
+
+    @Test fun sameSitePorDefectoEsLax() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/"))
+        assertEquals("s=1", jar.cookieHeader("a.example", "/", true, SiteContext.TOP_LEVEL_CROSS_SITE))
+        assertEquals("", jar.cookieHeader("a.example", "/", true, SiteContext.EMBEDDED_CROSS_SITE))
+    }
+
+    @Test fun sameSiteValorDesconocidoEsLax() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Raro"))
+        assertEquals("s=1", jar.cookieHeader("a.example", "/", true, SiteContext.SAME_SITE))
+        assertEquals("", jar.cookieHeader("a.example", "/", true, SiteContext.EMBEDDED_CROSS_SITE))
+    }
+
+    @Test fun sameSiteApiV1SinContextoNoFiltra() {
+        val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Strict"))
+        assertEquals("s=1", jar.cookieHeader("a.example", "/", true))
     }
 }

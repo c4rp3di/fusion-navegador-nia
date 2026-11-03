@@ -25,6 +25,12 @@ package nia.engine.net
  * envio de cookies en peticiones CORS llegan con el cableado del broker,
  * v2), sin cache real de preflights (solo se informa el Max-Age) y sin
  * Vary/Origin null avanzados.
+ *
+ * v2 (R0060, RES-0035): credenciales CORS. evaluate y
+ * evaluatePreflight aceptan credentials: con credenciales el ACAO
+ * *
+ * se rechaza y Access-Control-Allow-Credentials: true pasa a ser
+ * obligatorio.
  */
 object Cors {
 
@@ -77,12 +83,22 @@ object Cors {
     }
 
     /** Origin vacio = same-origin: sin CORS que evaluar. */
-    fun evaluate(origin: String, responseHeaders: Map<String, String>): Decision {
+    fun evaluate(
+        origin: String,
+        responseHeaders: Map<String, String>,
+        credentials: Boolean = false
+    ): Decision {
         if (origin.isEmpty()) return Decision(true, "same-origin")
         val acao = headerValue(responseHeaders, "access-control-allow-origin")
             ?: return Decision(false, "sin-access-control-allow-origin")
-        if (acao.trim() == "*") return Decision(true, "allow-origin-*")
+        if (acao.trim() == "*") {
+            if (credentials) return Decision(false, "allow-origin-*-con-credenciales")
+            return Decision(true, "allow-origin-*")
+        }
         if (acao.trim() != origin) return Decision(false, "allow-origin-no-coincide")
+        if (credentials && headerValue(responseHeaders, "access-control-allow-credentials")?.trim()?.lowercase() != "true") {
+            return Decision(false, "sin-allow-credentials")
+        }
         return Decision(true, "allow-origin")
     }
 
@@ -90,13 +106,17 @@ object Cors {
         origin: String,
         method: String,
         requestHeaders: List<String>,
-        responseHeaders: Map<String, String>
+        responseHeaders: Map<String, String>,
+        credentials: Boolean = false
     ): Decision {
         val acao = headerValue(responseHeaders, "access-control-allow-origin")
             ?: return Decision(false, "sin-access-control-allow-origin")
         val trimmedOrigin = acao.trim()
         if (trimmedOrigin != "*" && trimmedOrigin != origin) {
             return Decision(false, "allow-origin-no-coincide")
+        }
+        if (trimmedOrigin == "*" && credentials) {
+            return Decision(false, "allow-origin-*-con-credenciales")
         }
         val acam = headerValue(responseHeaders, "access-control-allow-methods")
             ?: return Decision(false, "sin-access-control-allow-methods")
@@ -113,6 +133,9 @@ object Cors {
                     return Decision(false, "cabecera-no-permitida:" + h)
                 }
             }
+        }
+        if (credentials && headerValue(responseHeaders, "access-control-allow-credentials")?.trim()?.lowercase() != "true") {
+            return Decision(false, "sin-allow-credentials")
         }
         return Decision(true, "preflight-ok")
     }

@@ -9,6 +9,7 @@ import kotlin.test.assertTrue
 /**
  * Tests T026 v1 (R0052): CORS. Espejo 1:1 del gemelo TS validado
  * offline: mismas fuentes, mismas expectativas (pruebas multi-origen).
+ * v2 (R0060): credenciales CORS.
  */
 class CorsTest {
 
@@ -138,5 +139,73 @@ class CorsTest {
 
     @Test fun corsCabeceraProhibida() {
         assertTrue(Cors.isForbiddenHeader("Cookie"))
+    }
+
+    @Test fun corsCredencialesEstrellaDenegada() {
+        assertEquals(
+            Cors.Decision(false, "allow-origin-*-con-credenciales"),
+            Cors.evaluate("https://a.example", mapOf("access-control-allow-origin" to "*"), true)
+        )
+    }
+
+    @Test fun corsCredencialesSinAcacDenegadas() {
+        assertEquals(
+            Cors.Decision(false, "sin-allow-credentials"),
+            Cors.evaluate("https://a.example", mapOf("access-control-allow-origin" to "https://a.example"), true)
+        )
+    }
+
+    @Test fun corsCredencialesConAcacOk() {
+        assertEquals(
+            Cors.Decision(true, "allow-origin"),
+            Cors.evaluate(
+                "https://a.example",
+                mapOf(
+                    "access-control-allow-origin" to "https://a.example",
+                    "access-control-allow-credentials" to "true"
+                ),
+                true
+            )
+        )
+    }
+
+    @Test fun corsCredencialesAcacFalseDenegadas() {
+        assertEquals(
+            Cors.Decision(false, "sin-allow-credentials"),
+            Cors.evaluate(
+                "https://a.example",
+                mapOf(
+                    "access-control-allow-origin" to "https://a.example",
+                    "access-control-allow-credentials" to "false"
+                ),
+                true
+            )
+        )
+    }
+
+    @Test fun corsPreflightCredencialesEstrellaDenegada() {
+        assertEquals(
+            Cors.Decision(false, "allow-origin-*-con-credenciales"),
+            Cors.evaluatePreflight(
+                "https://a.example", "GET", emptyList(),
+                mapOf("access-control-allow-origin" to "*", "access-control-allow-methods" to "GET"),
+                true
+            )
+        )
+    }
+
+    @Test fun corsPreflightCredencialesOk() {
+        assertEquals(
+            Cors.Decision(true, "preflight-ok"),
+            Cors.evaluatePreflight(
+                "https://a.example", "DELETE", emptyList(),
+                mapOf(
+                    "access-control-allow-origin" to "https://a.example",
+                    "access-control-allow-methods" to "DELETE",
+                    "access-control-allow-credentials" to "true"
+                ),
+                true
+            )
+        )
     }
 }

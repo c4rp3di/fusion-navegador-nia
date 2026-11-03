@@ -116,9 +116,11 @@ jobs:
             engine-core/src/main/java/nia/engine/devtools/DevToolsModel.kt \
             engine-core/src/test/java/nia/engine/devtools/DevToolsModelTest.kt \
             engine-core/src/main/java/nia/engine/net/Fetch.kt \
+            engine-core/src/main/java/nia/engine/net/HttpCache.kt \
             engine-core/src/test/java/nia/engine/net/FetchManagerTest.kt \
             engine-core/src/main/java/nia/engine/net/HttpTransport.kt \
             engine-core/src/test/java/nia/engine/net/HttpTransportTest.kt \
+            engine-core/src/test/java/nia/engine/net/HttpCacheTest.kt \
             engine-core/src/main/java/nia/engine/net/CookieJar.kt \
             engine-core/src/main/java/nia/engine/net/Cors.kt \
             engine-core/src/main/java/nia/engine/net/RedirectPolicy.kt \

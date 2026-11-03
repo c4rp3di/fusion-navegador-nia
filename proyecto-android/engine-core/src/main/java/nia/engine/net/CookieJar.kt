@@ -5,6 +5,9 @@ import java.time.format.DateTimeFormatter
 
 import nia.contracts.WallClock
 
+/** Contexto de navegacion de la peticion (T026 v2, R0060): SameSite. */
+enum class SiteContext { SAME_SITE, TOP_LEVEL_CROSS_SITE, EMBEDDED_CROSS_SITE }
+
 /**
  * T026 v1 (R0052, RES-0031): cookies RFC 6265 para el motor de red.
  *
@@ -29,6 +32,12 @@ import nia.contracts.WallClock
  * particiones (T033); una sola cookie por cabecera Set-Cookie (el
  * transporte une las repetidas con coma, y partir por comas romperia
  * los Expires: el que llama entrega una cookie por cabecera).
+ *
+ * v2 (R0060, RES-0035): SameSite aplicado. La sobrecarga de
+ * cookieHeader con SiteContext filtra con sameSiteAllowed (strict
+ * solo same-site, lax acepta ademas navegacion top-level, none
+ * siempre, sin atributo o desconocido lax); la API de 3 argumentos
+ * queda intacta (sin contexto, sin filtro).
  */
 data class Cookie(
     val name: String,
@@ -86,6 +95,24 @@ class CookieJar(private val clock: WallClock) {
         return cookies
             .filter { c ->
                 (c.expiresAtMillis == null || (c.expiresAtMillis > 0 && c.expiresAtMillis > now)) &&
+                    domainMatch(host.lowercase(), c) &&
+                    pathMatch(path, c.path) &&
+                    (!c.secure || isSecureTransport)
+            }
+            .sortedWith(compareByDescending<Cookie> { it.path.length }.thenBy { it.createdAtMillis })
+            .joinToString("; ") { it.name + "=" + it.value }
+    }
+
+    /**
+     * T026 v2 (R0060, RES-0035): cookieHeader con SameSite aplicado.
+     * La sobrecarga de 3 argumentos queda sin filtro (compatibilidad).
+     */
+    fun cookieHeader(host: String, path: String, isSecureTransport: Boolean, siteContext: SiteContext): String {
+        val now = clock.nowMillis()
+        return cookies
+            .filter { c ->
+                sameSiteAllowed(c.sameSite, siteContext) &&
+                    (c.expiresAtMillis == null || (c.expiresAtMillis > 0 && c.expiresAtMillis > now)) &&
                     domainMatch(host.lowercase(), c) &&
                     pathMatch(path, c.path) &&
                     (!c.secure || isSecureTransport)
@@ -164,6 +191,19 @@ class CookieJar(private val clock: WallClock) {
                 if (rp[cp.length] == '/') return true
             }
             return false
+        }
+
+        /**
+         * T026 v2 (R0060): strict solo same-site; lax acepta ademas
+         * navegacion top-level cross-site; none siempre; sin atributo
+         * o valor desconocido se trata como lax.
+         */
+        fun sameSiteAllowed(sameSite: String?, siteContext: SiteContext): Boolean {
+            return when (sameSite) {
+                "strict" -> siteContext == SiteContext.SAME_SITE
+                "none" -> true
+                else -> siteContext == SiteContext.SAME_SITE || siteContext == SiteContext.TOP_LEVEL_CROSS_SITE
+            }
         }
     }
 }

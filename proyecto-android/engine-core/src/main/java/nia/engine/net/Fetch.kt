@@ -32,6 +32,14 @@ import nia.contracts.WallClock
  * descompresion, sin pool de conexiones, sin cookies/CORS/cache (T026),
  * y sin cableado por broker (el codec de payloads de NETWORK_FETCH llega
  * en la v2 junto al modulo de red del broker).
+ *
+ * v2 (R0060, RES-0035): cache HTTP opcional. Con un HttpCache
+ * inyectado, los GET frescos se sirven de cache sin tocar el
+ * transporte, los caducados se revalidan con If-None-Match o
+ * If-Modified-Since (un 304 revive la entrada guardada) y los 200
+ * se almacenan; una peticion con cache-control no-cache salta el
+ * cache. Sin cache inyectado el comportamiento es exactamente el
+ * de v1.
  */
 
 data class FetchRequest(
@@ -62,7 +70,8 @@ interface FetchTransport {
 
 class FetchManager(
     private val transport: FetchTransport,
-    private val clock: WallClock = SystemWallClock()
+    private val clock: WallClock = SystemWallClock(),
+    private val cache: HttpCache? = null
 ) {
     private val methods = setOf("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS")
     private var generation = 0L
@@ -113,7 +122,24 @@ class FetchManager(
                 return Outcome.failure(ErrorInfo(ErrorCode.CANCELLED, "operacion cancelada: " + r))
             }
         }
-        val result = transport.fetch(request, t)
+        var effective = request
+        if (cache != null && request.method == "GET" && !requestCacheNoCache(request)) {
+            when (val lu = cache.lookup(request.method, request.url)) {
+                is HttpCache.Lookup.Fresh -> {
+                    delivered += 1
+                    return Outcome.success(FetchResponse(lu.entry.status, lu.entry.headers, lu.entry.body))
+                }
+                is HttpCache.Lookup.Stale -> {
+                    val conditional = cache.revalidationHeaders(lu.entry)
+                    if (conditional.isNotEmpty()) {
+                        effective = request.copy(headers = request.headers + conditional)
+                    }
+                }
+                HttpCache.Lookup.Miss -> {
+                }
+            }
+        }
+        val result = transport.fetch(effective, t)
         val cr = t.reason()
         if (cr != null) {
             return Outcome.failure(ErrorInfo(ErrorCode.CANCELLED, "operacion cancelada: " + cr))
@@ -123,6 +149,17 @@ class FetchManager(
         }
         return when (result) {
             is TransportResult.Success -> {
+                if (cache != null && request.method == "GET") {
+                    if (result.response.status == 304) {
+                        val served = cache.serveRevalidated(request.url, result.response)
+                        if (served != null) {
+                            delivered += 1
+                            return Outcome.success(served)
+                        }
+                    } else if (result.response.status == 200) {
+                        cache.store(request.url, result.response)
+                    }
+                }
                 delivered += 1
                 Outcome.success(result.response)
             }
@@ -135,5 +172,20 @@ class FetchManager(
                     Outcome.failure(ErrorInfo(ErrorCode.NETWORK, "fallo de red"))
             }
         }
+    }
+
+    /** La peticion pide explicitamente no-cache (cache-control o pragma). */
+    private fun requestCacheNoCache(request: FetchRequest): Boolean {
+        for ((k, v) in request.headers) {
+            val lk = k.lowercase()
+            if (lk == "cache-control") {
+                for (part in v.split(',')) {
+                    if (part.trim().lowercase() == "no-cache") return true
+                }
+            } else if (lk == "pragma") {
+                if (v.lowercase().contains("no-cache")) return true
+            }
+        }
+        return false
     }
 }
