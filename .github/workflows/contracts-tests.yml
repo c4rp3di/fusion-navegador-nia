@@ -96,11 +96,13 @@ jobs:
             engine-core/src/main/java/nia/engine/js/JsQuotas.kt \
             engine-core/src/main/java/nia/engine/js/JsBuiltins.kt \
             engine-core/src/main/java/nia/engine/js/JsEventLoop.kt \
+            engine-core/src/main/java/nia/engine/js/JsFetchApi.kt \
             engine-core/src/main/java/nia/engine/js/JsDomBindings.kt \
             engine-core/src/test/java/nia/engine/js/JsInterpreterTest.kt \
             engine-core/src/test/java/nia/engine/js/JsDomBindingsTest.kt \
             engine-core/src/test/java/nia/engine/js/JsQuotasTest.kt \
             engine-core/src/test/java/nia/engine/js/JsEventLoopTest.kt \
+            engine-core/src/test/java/nia/engine/js/JsFetchApiTest.kt \
             engine-core/src/main/java/nia/engine/broker/BrokerRenderer.kt \
             engine-core/src/test/java/nia/engine/broker/BrokerRendererTest.kt \
             engine-core/src/main/java/nia/engine/config/NiaConfig.kt \

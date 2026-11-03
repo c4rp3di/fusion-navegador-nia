@@ -169,6 +169,11 @@ object JsDomBindings {
         private val tcGet = parseAccessorFun("(function () { return this.__textContentGet(); })")
         private val tcSet = parseAccessorFun("(function (v) { this.__textContentSet(v); })")
 
+        /** Accessors de value de input y de form.elements (T027): parseados una vez por sesion. */
+        private val ivGet = parseAccessorFun("(function () { return this.__valueGet(); })")
+        private val ivSet = parseAccessorFun("(function (v) { this.__valueSet(v); })")
+        private val elGet = parseAccessorFun("(function () { return this.__elementsGet(); })")
+
         private fun parseAccessorFun(src: String): JsFun {
             val r = JsInterpreter.evaluate(src)
             val v = r.value
@@ -469,8 +474,82 @@ object JsDomBindings {
                 if (!can) return@fn JsBool(true)
                 val dEntry = ev.props["defaultPrevented"]
                 val dVal = (dEntry as? JsProp.Value)?.v
+
                 JsBool(!(dVal is JsBool && dVal.value))
             })
+
+            // T027 v1 (RES-0033): formularios - value de input/textarea,
+            // form.elements y form.submit().
+            val selfH = handleOf(w)
+            val selfNode = if (selfH != null) domOp { doc.nodeOf(selfH) } else null
+            val tag = (selfNode as? DomNode.Element)?.name?.lowercase()
+            if (tag == "input") {
+                w.props["__valueGet"] = JsProp.Value(JsBuiltins.fn("__valueGet") { _, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "value exige un nodo del documento")
+                    }
+                    val v = try {
+                        doc.attributeOf(h, "value")
+                    } catch (e: DomException) {
+                        null
+                    }
+                    JsStr(v ?: "")
+                })
+                w.props["__valueSet"] = JsProp.Value(JsBuiltins.fn("__valueSet") { args, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "value exige un nodo del documento")
+                    }
+                    val v = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                    domOp { doc.setAttribute(h, "value", v) }
+                    JsUndefined
+                })
+                w.props["value"] = JsProp.Accessor(ivGet, ivSet)
+            }
+            if (tag == "textarea") {
+                w.props["value"] = JsProp.Accessor(tcGet, tcSet)
+            }
+            if (tag == "form") {
+                w.props["__elementsGet"] = JsProp.Value(JsBuiltins.fn("__elementsGet") { _, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "elements exige un nodo del documento")
+                    }
+                    val arr = JsRuntime.newArr()
+                    fun go(cur: DomHandle) {
+                        for (k in childrenOrEmpty(cur)) {
+                            val named = try {
+                                doc.attributeOf(k, "name")
+                            } catch (e: DomException) {
+                                null
+                            }
+                            if (named != null) arr.elems.add(wrap(k))
+                            go(k)
+                        }
+                    }
+                    go(h)
+                    arr
+                })
+                w.props["elements"] = JsProp.Accessor(elGet, null)
+                w.props["submit"] = JsProp.Value(JsBuiltins.fn("submit") { _, thiz ->
+                    val target = thiz as? JsObj
+                    if (target == null) return@fn JsBool(false)
+                    val ev = JsRuntime.newObj()
+                    ev.props["type"] = JsProp.Value(JsStr("submit"))
+                    ev.props["bubbles"] = JsProp.Value(JsBool(true))
+                    ev.props["cancelable"] = JsProp.Value(JsBool(true))
+                    ev.props["defaultPrevented"] = JsProp.Value(JsBool(false))
+                    ev.props["preventDefault"] = JsProp.Value(JsBuiltins.fn("preventDefault") { _, _ ->
+                        ev.props["defaultPrevented"] = JsProp.Value(JsBool(true))
+                        JsUndefined
+                    })
+                    val dEntry = target.props["dispatchEvent"]
+                    val dVal = (dEntry as? JsProp.Value)?.v
+                    if (dVal == null) return@fn JsBool(false)
+                    JsInterpreter.callFunction(dVal, target, listOf(ev))
+                })
+            }
         }
     }
 
@@ -505,3 +584,4 @@ object JsDomBindings {
         genv.declare("document", document)
     }
 }
+

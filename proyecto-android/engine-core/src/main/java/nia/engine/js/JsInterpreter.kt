@@ -1772,7 +1772,12 @@ object JsInterpreter {
         evaluateWithDom(source, doc, JsLimits())
 
     /** Evaluacion con bindings DOM y cuotas explicitas (T021). */
-    fun evaluateWithDom(source: String, doc: DomDocument, limits: JsLimits): JsEvalResult {
+    fun evaluateWithDom(
+        source: String,
+        doc: DomDocument,
+        limits: JsLimits,
+        fetch: JsFetchApi? = null
+    ): JsEvalResult {
         val parse = JsParser.parse(source)
         val genv = Env(null, true)
         genv.declare("undefined", JsUndefined)
@@ -1784,6 +1789,7 @@ object JsInterpreter {
         JsDomBindings.installConsole(genv)
         JsDomBindings.install(genv, doc)
         keepAliveRunners = false
+        if (fetch != null) fetch.install(genv)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         var aborted: JsAbortReason? = null
@@ -1885,6 +1891,16 @@ object JsInterpreter {
         keepAliveRunners = false
         cleanupRunners()
         JsQuotas.end()
+    }
+
+    // ---- Fetch JS (T027 v1, RES-0033) ----
+
+    /** Promise nueva para un builtin nativo (fetch); el builtin la asienta. */
+    internal fun nativePromise(): JsObj = makePromise()
+
+    /** Asienta una Promise de un builtin nativo (fetch): reacciones y awaiters incluidos. */
+    internal fun settleNativePromise(p: JsObj, ok: Boolean, v: JsValue) {
+        settlePromise(p, ok, v)
     }
 
 
@@ -2167,3 +2183,4 @@ object JsInterpreter {
         return JsRuntime.dumpValue(r.value)
     }
 }
+
