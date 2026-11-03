@@ -250,12 +250,6 @@ class JsFetchApiTest {
         val doc = DomDocument.parse(
             "<form id="f"><input id="q" name="q" value="hola"></form>"
         )
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
         val r = eval(
             "var o = []; var f = document.getElementById('f');" +
                 " var c = new AbortController();" +
@@ -301,14 +295,6 @@ class JsFetchApiTest {
         val doc = DomDocument.parse(
             "<form id="f"><input name="a"><textarea name="b"></textarea><p>sin</p></form>"
         )
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
         const r = eval(
             "var f = document.getElementById('f');" +
                 " f.elements.length + ':' + f.elements[0].getAttribute('name')" +
@@ -321,13 +307,6 @@ class JsFetchApiTest {
     @Test
     fun formSubmitDisparaYBurbujea() {
         val t = FakeTransport()
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
         const doc = DomDocument.parse("<form id="f"><input name="q"></form>")
         const r = eval(
             "var o = []; var f = document.getElementById('f');" +
@@ -344,15 +323,6 @@ class JsFetchApiTest {
     @Test
     fun formSubmitConPreventDefaultDevuelveFalse() {
         val t = FakeTransport()
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
-        const c = 1; // marcador eliminado
         val doc = DomDocument.parse("<form id="f"></form>")
         val r = eval(
             "var f = document.getElementById('f');" +
