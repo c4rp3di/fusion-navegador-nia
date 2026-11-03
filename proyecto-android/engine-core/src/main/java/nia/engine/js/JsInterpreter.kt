@@ -751,6 +751,8 @@ object JsInterpreter {
 
     private fun runStatement(s: JsStmt, env: Env, labels: List<String>): Completion {
         JsQuotas.tick()
+        val dbgHook = debugHook
+        if (dbgHook != null) dbgHook(s, env)
         when (s) {
             is JsStmt.Empty -> return normal()
             is JsStmt.Block -> {
@@ -1903,6 +1905,15 @@ object JsInterpreter {
         settlePromise(p, ok, v)
     }
 
+    // ---- Debugger JS (T028 v1, RES-0034) ----
+
+    /**
+     * Hook del debugger (T028): lo instala JsDebugger para observar cada
+     * sentencia ejecutada (safepoint por sentencia, junto al tick de T021);
+     * null cuando no hay debugger activo.
+     */
+    internal var debugHook: ((JsStmt, Env) -> Unit)? = null
+
 
     // ---- Runners reanudables (T018 v5): async/await y generators ----
     // Handoff estricto: en cada momento SOLO un hilo ejecuta JS. Un Runner
@@ -2173,6 +2184,7 @@ object JsInterpreter {
         if (reason != null) {
             if (reason == JsAbortReason.INTERRUPTED) return "interrupted"
             if (reason == JsAbortReason.STEP_QUOTA) return "interrupted step-quota"
+            if (reason == JsAbortReason.DEBUG_PAUSE) return "interrupted debugger"
             return "interrupted heap-quota"
         }
         if (r.thrown) {

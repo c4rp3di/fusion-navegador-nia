@@ -17,8 +17,8 @@ package nia.engine.js
  * safepoint (la UI pide la interrupcion y nunca se bloquea esperando).
  */
 
-/** Motivo del abort de una evaluacion con cuotas (T021). */
-enum class JsAbortReason { INTERRUPTED, STEP_QUOTA, HEAP_QUOTA }
+/** Motivo del abort de una evaluacion con cuotas (T021; DEBUG_PAUSE: T028). */
+enum class JsAbortReason { INTERRUPTED, STEP_QUOTA, HEAP_QUOTA, DEBUG_PAUSE }
 
 /**
  * Abort de cuotas (T021): interno del motor y NO es JsThrown, para que el
