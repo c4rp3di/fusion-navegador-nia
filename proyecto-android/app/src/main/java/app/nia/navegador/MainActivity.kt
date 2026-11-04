@@ -12,7 +12,11 @@ import android.widget.TextView
 import nia.contracts.WallClock
 import nia.engine.media.MediaEngine
 import nia.engine.media.MediaSource
+import nia.engine.download.DownloadEngine
+import nia.engine.download.DownloadSink
+import nia.engine.download.DownloadState
 import nia.engine.media.MediaState
+import java.util.concurrent.Executors
 
 /**
  * NIA (T016, R0021): la actividad delega en PaintView, que renderiza la
@@ -38,6 +42,17 @@ import nia.engine.media.MediaState
  * con posicion y estado en un TextView. Exclusiones v1: solo audio (sin
  * video), sin audio-element del DOM ni HTMLMediaElement JS (T039), sin subs
  * ni fullscreen (v2+).
+ *
+ * T046 v1 (R0097, RES-0053): descargas reales con cola: el nucleo
+ * DownloadEngine (nia.engine.download) corre hasta dos descargas a la
+ * vez con cola FIFO, progreso por chunks y cancelacion cooperativa
+ * (CancellationToken de T011) sobre un DownloadTransport inyectable; el
+ * adaptador PlatformDownloadTransport usa HttpURLConnection (misma pila
+ * de T011 v2, sin dependencias nuevas) y el destino se elige con SAF
+ * (ACTION_CREATE_DOCUMENT octet-stream). Botones Descargar y Cancelar
+ * descargas con la lista de items y su progreso en un TextView.
+ * Exclusiones v1: sin reanudacion, sin reintentos y sin apertura del
+ * archivo descargado (v2).
  */
 class MainActivity : Activity() {
 
@@ -47,6 +62,9 @@ class MainActivity : Activity() {
         override fun nowMillis(): Long = System.currentTimeMillis()
     }
     private val media = MediaEngine(PlatformMediaBackend(this), mediaClock)
+    private val downloadPool = Executors.newFixedThreadPool(2)
+    private val downloads = DownloadEngine(PlatformDownloadTransport(), downloadPool, maxConcurrent = 2)
+    private lateinit var downloadText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +91,10 @@ class MainActivity : Activity() {
         menos10.text = "-10s"
         val mas10 = Button(this)
         mas10.text = "+10s"
+        val descargar = Button(this)
+        descargar.text = "Descargar"
+        val cancelarDl = Button(this)
+        cancelarDl.text = "Cancelar descargas"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -89,6 +111,8 @@ class MainActivity : Activity() {
         buttons.addView(playPause)
         buttons.addView(menos10)
         buttons.addView(mas10)
+        buttons.addView(descargar)
+        buttons.addView(cancelarDl)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -121,6 +145,20 @@ class MainActivity : Activity() {
         playPause.setOnClickListener { media.playPause() }
         menos10.setOnClickListener { media.seekBy(-10000) }
         mas10.setOnClickListener { media.seekBy(10000) }
+        descargar.setOnClickListener {
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.setType("application/octet-stream")
+            i.putExtra(Intent.EXTRA_TITLE, "nia-descarga.bin")
+            startActivityForResult(i, REQUEST_DOWNLOAD)
+        }
+        cancelarDl.setOnClickListener {
+            for (item in downloads.list()) {
+                if (item.state == DownloadState.RUNNING || item.state == DownloadState.QUEUED) {
+                    downloads.cancel(item.id)
+                }
+            }
+        }
         mediaText = TextView(this)
         frame.addView(mediaText, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -128,6 +166,13 @@ class MainActivity : Activity() {
             Gravity.BOTTOM or Gravity.START
         ))
         media.addListener { refreshMedia() }
+        downloadText = TextView(this)
+        frame.addView(downloadText, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.END
+        ))
+        downloads.addListener { downloadText.post { refreshDownloads() } }
         refreshMedia()
         setContentView(frame)
     }
@@ -153,6 +198,24 @@ class MainActivity : Activity() {
         if (requestCode == REQUEST_AUDIO && resultCode == RESULT_OK) {
             media.load(MediaSource.Local(uri.toString()), autoplay = true)
         }
+        if (requestCode == REQUEST_DOWNLOAD && resultCode == RESULT_OK) {
+            val stream = try {
+                contentResolver.openOutputStream(uri)
+            } catch (e: java.io.IOException) {
+                null
+            } ?: return
+            downloads.enqueue(DEMO_DOWNLOAD_URL, object : DownloadSink {
+                override fun write(bytes: ByteArray, length: Int) {
+                    stream.write(bytes, 0, length)
+                }
+                override fun close() {
+                    try {
+                        stream.close()
+                    } catch (e: java.io.IOException) {
+                    }
+                }
+            })
+        }
     }
 
     /** T036 v1: posicion/duracion/estado del nucleo multimedia en la UI
@@ -166,10 +229,26 @@ class MainActivity : Activity() {
         }
     }
 
+    /** T046 v1: lista de descargas con estado y progreso en la UI. */
+    private fun refreshDownloads() {
+        val builder = StringBuilder()
+        for (item in downloads.list()) {
+            if (builder.isNotEmpty()) builder.append('\n')
+            builder.append('#').append(item.id).append(' ')
+                .append(item.state.name.lowercase()).append(' ')
+                .append(item.bytesDownloaded).append('/')
+            if (item.totalBytes >= 0) builder.append(item.totalBytes)
+            else builder.append('?')
+        }
+        downloadText.text = builder.toString()
+    }
+
     companion object {
         private const val REQUEST_ABRIR = 41
         private const val REQUEST_GUARDAR = 42
         private const val REQUEST_AUDIO = 43
+        private const val REQUEST_DOWNLOAD = 44
         private const val DEMO_AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
+        private const val DEMO_DOWNLOAD_URL = "https://raw.githubusercontent.com/c4rp3di/fusion-navegador-nia/main/README.md"
     }
 }
