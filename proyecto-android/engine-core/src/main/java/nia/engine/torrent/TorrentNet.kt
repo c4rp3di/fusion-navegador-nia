@@ -277,7 +277,7 @@ class PeerWireClient(
 
     private fun leerHandshake(input: InputStream): Boolean {
         val h = leer(input, 68) ?: return false
-        if (h[0] != 19) return false
+        if (h[0].toInt() != 19) return false
         val pstr = String(h, 1, 19, Charsets.US_ASCII)
         if (pstr != "BitTorrent protocol") return false
         return h.copyOfRange(28, 48).contentEquals(infoHash)
