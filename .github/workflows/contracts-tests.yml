@@ -101,6 +101,7 @@ jobs:
             engine-core/src/main/java/nia/engine/js/JsDomBindings.kt \
             engine-core/src/main/java/nia/engine/js/JsDebugger.kt \
             engine-core/src/main/java/nia/engine/js/JsWorkers.kt \
+            engine-core/src/main/java/nia/engine/js/JsServiceWorkers.kt \
             engine-core/src/test/java/nia/engine/js/JsInterpreterTest.kt \
             engine-core/src/test/java/nia/engine/js/JsDomBindingsTest.kt \
             engine-core/src/test/java/nia/engine/js/JsQuotasTest.kt \
@@ -109,6 +110,7 @@ jobs:
             engine-core/src/test/java/nia/engine/js/JsStorageApiTest.kt \
             engine-core/src/test/java/nia/engine/js/JsDebuggerTest.kt \
             engine-core/src/test/java/nia/engine/js/JsWorkersTest.kt \
+            engine-core/src/test/java/nia/engine/js/JsServiceWorkersTest.kt \
             engine-core/src/main/java/nia/engine/broker/BrokerRenderer.kt \
             engine-core/src/test/java/nia/engine/broker/BrokerRendererTest.kt \
             engine-core/src/main/java/nia/engine/config/NiaConfig.kt \

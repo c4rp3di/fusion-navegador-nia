@@ -41,10 +41,15 @@ import nia.engine.net.FetchTransport
  * text()), sin credenciales/cookies (T026 v2), sin XMLHttpRequest, y la
  * API es propia del motor (las expectativas de los tests vienen del
  * diseno, no de un oraculo del estandar).
+ *
+ * T034 v2 (RES-0045): con serviceWorkers inyectado, fetch consulta al
+ * SW ACTIVE del scope ANTES del transporte (offline real: el cache
+ * sirve sin red); sin SW o sin respondWith el transporte corre igual.
  */
 class JsFetchApi(
     transport: FetchTransport,
-    private val clock: WallClock = SystemWallClock()
+    private val clock: WallClock = SystemWallClock(),
+    private val serviceWorkers: JsServiceWorkers? = null
 ) {
 
     private val manager = FetchManager(transport, clock)
@@ -109,6 +114,25 @@ class JsFetchApi(
                     JsRuntime.makeErrorObj("AbortError", "operacion abortada")
                 )
                 return@fn p
+            }
+            val sw = serviceWorkers
+            if (sw != null) {
+                when (val h = sw.intercept(method, url)) {
+                    is JsServiceWorkers.Intercept.Responded -> {
+                        JsInterpreter.settleNativePromise(
+                            p,
+                            true,
+                            responseOf(FetchResponse(h.status, emptyMap<String, String>(), h.body.toByteArray()))
+                        )
+                        return@fn p
+                    }
+                    is JsServiceWorkers.Intercept.Threw -> {
+                        JsInterpreter.settleNativePromise(p, false, h.value)
+                        return@fn p
+                    }
+                    JsServiceWorkers.Intercept.None -> {
+                    }
+                }
             }
             val req = manager.newRequest(method, url, headers, body)
             when (val out = manager.fetch(req, token, deadline)) {
