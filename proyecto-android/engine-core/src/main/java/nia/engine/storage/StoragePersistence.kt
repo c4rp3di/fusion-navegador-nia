@@ -26,6 +26,7 @@ import java.io.IOException
  * a<TAB>clave<TAB>valor                    entrada del area (en orden)
  * D<TAB>idbPartitionKey<TAB>nombre<TAB>ver base de IndexedDB
  * k<TAB>store<TAB>keyPath                  keyPath del store (solo no-null)
+ * s<TAB>store                             store declarado de la base (tambien si esta vacio)
  * e<TAB>store<TAB>clave<TAB>valor          entrada comprometida del store
  *
  * Exclusiones v3: la integracion del ciclo de vida en :app (CUANDO guardar
@@ -67,6 +68,7 @@ class StoragePersistence(private val dir: File) {
                 }
             }
             for ((store, data) in db.stores) {
+                sb.append('s').append('\t').append(esc(store)).append('\n')
                 for ((k, v) in data) {
                     sb.append('e').append('\t').append(esc(store)).append('\t').append(esc(k)).append('\t').append(esc(v)).append('\n')
                     entries++
@@ -128,6 +130,11 @@ class StoragePersistence(private val dir: File) {
                     expectFields(parts, 3, i)
                     val d = db ?: throw PersistenceException("keyPath sin base en linea " + (i + 1))
                     d.keyPaths[unesc(parts[1], i)] = unesc(parts[2], i)
+                }
+                "s" -> {
+                    expectFields(parts, 2, i)
+                    val d = db ?: throw PersistenceException("store sin base en linea " + (i + 1))
+                    d.stores.getOrPut(unesc(parts[1], i)) { LinkedHashMap() }
                 }
                 "e" -> {
                     expectFields(parts, 4, i)
