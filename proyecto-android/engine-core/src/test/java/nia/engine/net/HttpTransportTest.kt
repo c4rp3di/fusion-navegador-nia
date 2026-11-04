@@ -193,7 +193,10 @@ class HttpTransportTest {
                 // el cliente se desconecto: esperado en este test
             }
         }, { url ->
-            val manager = FetchManager(HttpTransport())
+            // Determinista: si disconnect() no desbloquea la lectura a tiempo
+            // (el JDK no lo garantiza), el readTimeout corto la libera igual
+            // y el manager informa CANCELLED en ambos caminos.
+            val manager = FetchManager(HttpTransport(readTimeoutMillis = 500))
             val source = CancellationTokenSource()
             var outcome: Outcome<FetchResponse>? = null
             val worker = Thread {
