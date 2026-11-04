@@ -26,6 +26,13 @@ import nia.engine.media.SubtitleTrack
 import nia.engine.profile.BrowserProfile
 import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
+import nia.engine.torrent.Benc
+import nia.engine.torrent.Bencode
+import nia.engine.torrent.MagnetParser
+import nia.engine.torrent.PieceSource
+import nia.engine.torrent.PumpResult
+import nia.engine.torrent.TorrentParser
+import nia.engine.torrent.TorrentSession
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -87,6 +94,12 @@ import java.util.concurrent.Executors
  * sessionStorage o TODO el estado con conteo (incluido el archivo
  * persistido en disco) con confirmacion explicita (AlertDialog).
  * Botones Fire sesion y Fire total; marcadores nunca por defecto.
+ *
+ * T047 v1 (R0108, RES-0058, ADR-016): Torrent demo del dominio torrent
+ * SIN red con cliente propio tras la auditoria de ADR-016 (ninguna
+ * candidata cumple): parseo de magnet y .torrent (Bencode canonico) y
+ * sesion con piezas verificadas con SHA-1 hasta DONE sobre una fuente
+ * PieceSource sintetica; resultado en el TextView de descargas.
  */
 class MainActivity : Activity() {
 
@@ -154,6 +167,8 @@ class MainActivity : Activity() {
         fireSesion.text = "Fire sesion"
         val fireTotal = Button(this)
         fireTotal.text = "Fire total"
+        val torrentDemo = Button(this)
+        torrentDemo.text = "Torrent demo"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -181,6 +196,7 @@ class MainActivity : Activity() {
         buttons.addView(wipePerfil)
         buttons.addView(fireSesion)
         buttons.addView(fireTotal)
+        buttons.addView(torrentDemo)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -261,6 +277,9 @@ class MainActivity : Activity() {
                 profile?.let { DataFire.apply(FireLevel.TOTAL, it) }
                 refreshProfile()
             }
+        }
+        torrentDemo.setOnClickListener {
+            runTorrentDemo()
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -426,6 +445,47 @@ class MainActivity : Activity() {
             .setPositiveButton("Si") { _, _ -> accion() }
             .setNegativeButton("No", null)
             .show()
+    }
+
+    /** T047 v1 (R0108, RES-0058, ADR-016): demo torrent SIN red (cliente propio). */
+    private fun runTorrentDemo() {
+        val magnet = MagnetParser.parse("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=demo&tr=http%3A%2F%2Ftracker.example%2Fannounce")
+        val data = ByteArray(40) { (it + 1).toByte() }
+        val info = Benc.BDict(LinkedHashMap())
+        info.entries["name"] = Benc.BStr("demo.txt".toByteArray(Charsets.UTF_8))
+        info.entries["piece length"] = Benc.BInt(16)
+        info.entries["pieces"] = Benc.BStr(piezasSha1(data, 16))
+        info.entries["length"] = Benc.BInt(40)
+        val root = Benc.BDict(LinkedHashMap())
+        root.entries["announce"] = Benc.BStr("http://tracker.example/announce".toByteArray(Charsets.UTF_8))
+        root.entries["info"] = info
+        val meta = TorrentParser.parse(Bencode.encode(root))
+        val sesion = TorrentSession(meta, emptySet())
+        val fuente = object : PieceSource {
+            override fun piece(index: Int, length: Int): ByteArray =
+                data.copyOfRange(index * 16, index * 16 + length)
+        }
+        var bomba: PumpResult
+        do {
+            bomba = sesion.pump(fuente)
+        } while (bomba == PumpResult.COMPLETED)
+        val progreso = sesion.progress()
+        downloadText.text = "torrent: " + meta.name + " - magnet " + magnet.infoHashHex +
+            " - piezas " + progreso.completedPieces + "/" + progreso.totalPieces +
+            " - trackers " + meta.trackers.size + " - estado " + sesion.state.name
+    }
+
+    private fun piezasSha1(data: ByteArray, largo: Int): ByteArray {
+        val md = java.security.MessageDigest.getInstance("SHA-1")
+        val out = java.io.ByteArrayOutputStream()
+        var i = 0
+        while (i < data.size) {
+            val len = minOf(largo, data.size - i)
+            md.reset()
+            out.write(md.digest(data.copyOfRange(i, i + len)))
+            i += len
+        }
+        return out.toByteArray()
     }
 
     companion object {
