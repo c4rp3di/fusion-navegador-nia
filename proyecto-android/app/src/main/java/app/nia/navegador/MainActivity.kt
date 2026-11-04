@@ -38,6 +38,7 @@ import nia.engine.profile.BrowserProfile
 import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
 import nia.engine.qa.GithubGmailMatrix
+import nia.engine.qa.YoutubeMatrix
 import nia.engine.torrent.Benc
 import nia.engine.torrent.Bencode
 import nia.engine.torrent.MagnetParser
@@ -149,6 +150,16 @@ import java.util.concurrent.Executors
  * limites fechados y las acciones excluidas reservadas al smoke
  * real (T067). Boton Matriz GH/Gmail: corre las acciones completas
  * y muestra el informe.
+ *
+ * T039 v1 (R0120, RES-0063): matriz P7 YouTube del nucleo (segundo
+ * objetivo explicito del navegador): catalogo fechado de acciones
+ * objetivo (busqueda, watch con relacionados, comentarios, subs,
+ * historial, login, portada y ver-mas-tarde) ejecutadas contra un
+ * corpus enlatado con transporte falso SIN red, con limites fechados
+ * (play/seek y calidad exigen HTMLMediaElement en el DOM, pendiente
+ * del elemento multimedia del DOM con codecs de plataforma segun
+ * ADR-015) y protegido/directos aparte (T059 y smoke real T067).
+ * Boton Matriz YT: corre las acciones completas y muestra el informe.
  */
 class MainActivity : Activity() {
 
@@ -227,6 +238,8 @@ class MainActivity : Activity() {
         subsOsBtn.text = "Subs OS"
         val matrizBtn = Button(this)
         matrizBtn.text = "Matriz GH/Gmail"
+        val ytBtn = Button(this)
+        ytBtn.text = "Matriz YT"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -259,6 +272,7 @@ class MainActivity : Activity() {
         buttons.addView(subsTorrentBtn)
         buttons.addView(subsOsBtn)
         buttons.addView(matrizBtn)
+        buttons.addView(ytBtn)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -354,6 +368,9 @@ class MainActivity : Activity() {
         }
         matrizBtn.setOnClickListener {
             runMatrizDemo()
+        }
+        ytBtn.setOnClickListener {
+            runMatrizYtDemo()
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -761,6 +778,43 @@ class MainActivity : Activity() {
         }
     }
 
+    /** T039 v1: demo de la matriz YouTube SIN red (transporte falso
+     * enlatado): corre las acciones completas del corpus y muestra el
+     * informe con el resumen de limites fechados. */
+    private fun runMatrizYtDemo() {
+        val matriz = YoutubeMatrix(TransporteMatrizYt(), mediaClock)
+        val builder = StringBuilder()
+        for (r in matriz.correr()) {
+            if (builder.isNotEmpty()) builder.append('\n')
+            builder.append(r.action.id).append(' ').append(if (r.ok) "OK" else "FALLO")
+                .append(' ').append(r.detail)
+        }
+        builder.append('\n').append(matriz.resumen())
+        AlertDialog.Builder(this)
+            .setTitle("Matriz YT")
+            .setMessage(builder.toString())
+            .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
+    /** Transporte falso de la demo Matriz YT: respuestas enlatadas
+     * del corpus SIN red (el smoke con red real es T067). */
+    private class TransporteMatrizYt : FetchTransport {
+        override fun fetch(request: FetchRequest, token: CancellationToken): TransportResult {
+            val cuerpo = when {
+                request.url.contains("/yt/search") -> YT_SEARCH_DEMO
+                request.url.contains("yt/comentario-7/c1") -> YT_C1_DEMO
+                request.url.contains("yt/comentario-7/c2") -> YT_C2_DEMO
+                request.url.contains("/yt/session") -> YT_SESSION_DEMO
+                request.url.contains("/yt/subs-7.vtt") -> YT_SUBS_DEMO
+                else -> ""
+            }
+            return TransportResult.Success(
+                FetchResponse(200, emptyMap(), cuerpo.toByteArray(Charsets.UTF_8))
+            )
+        }
+    }
+
     companion object {
         private const val REQUEST_ABRIR = 41
         private const val REQUEST_GUARDAR = 42
@@ -778,5 +832,10 @@ class MainActivity : Activity() {
         private const val SESSION_DEMO = "OK"
         private const val HILO_DEMO = "Ana:Presupuesto Q4"
         private const val BUSQUEDA_GM_DEMO = "1"
+        private const val YT_SEARCH_DEMO = "2"
+        private const val YT_C1_DEMO = "Ana:Gran video, gracias"
+        private const val YT_C2_DEMO = "Luis:El seek funciona bien"
+        private const val YT_SESSION_DEMO = "OK"
+        private const val YT_SUBS_DEMO = "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nGran video\n\n00:00:05.000 --> 00:00:08.000\nEl seek funciona\n\n00:00:09.000 --> 00:00:12.000\nTercera linea\n"
     }
 }
