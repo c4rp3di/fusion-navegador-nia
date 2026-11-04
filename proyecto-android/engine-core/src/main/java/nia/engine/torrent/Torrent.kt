@@ -238,6 +238,7 @@ class TorrentSession(
         private set
     private val selected: Set<Int>
     private val completed = mutableSetOf<Int>()
+    private val pieceBytes = HashMap<Int, ByteArray>()
     private var descargado = 0L
     val neededPieces: List<Int>
 
@@ -282,6 +283,9 @@ class TorrentSession(
     fun progress(): TorrentProgress =
         TorrentProgress(completed.size, neededPieces.size, descargado)
 
+    /** Bytes de la pieza index COMPLETA (verificada SHA-1) o null. */
+    fun pieceData(index: Int): ByteArray? = pieceBytes[index]
+
     fun pump(source: PieceSource): PumpResult {
         when (state) {
             TorrentState.PAUSED -> return PumpResult.PAUSED
@@ -301,6 +305,7 @@ class TorrentSession(
             return PumpResult.REJECTED
         }
         completed.add(index)
+        pieceBytes[index] = data
         descargado += largo
         if (completed.size == neededPieces.size) state = TorrentState.DONE
         return PumpResult.COMPLETED

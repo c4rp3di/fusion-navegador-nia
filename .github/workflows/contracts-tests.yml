@@ -152,6 +152,8 @@ jobs:
             engine-core/src/main/java/nia/engine/torrent/Bencode.kt \
             engine-core/src/main/java/nia/engine/torrent/Torrent.kt \
             engine-core/src/test/java/nia/engine/torrent/TorrentTest.kt \
+            engine-core/src/main/java/nia/engine/torrent/TorrentStream.kt \
+            engine-core/src/test/java/nia/engine/torrent/TorrentStreamTest.kt \
             engine-core/src/main/java/nia/engine/download/DownloadEngine.kt \
             engine-core/src/test/java/nia/engine/download/DownloadEngineTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \

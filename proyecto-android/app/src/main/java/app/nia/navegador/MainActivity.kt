@@ -33,6 +33,7 @@ import nia.engine.torrent.PieceSource
 import nia.engine.torrent.PumpResult
 import nia.engine.torrent.TorrentParser
 import nia.engine.torrent.TorrentSession
+import nia.engine.torrent.TorrentStream
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -100,6 +101,12 @@ import java.util.concurrent.Executors
  * candidata cumple): parseo de magnet y .torrent (Bencode canonico) y
  * sesion con piezas verificadas con SHA-1 hasta DONE sobre una fuente
  * PieceSource sintetica; resultado en el TextView de descargas.
+ *
+ * T048 v1 (R0110, RES-0059): streaming torrent: boton Stream torrent que
+ * bombea 3 de 5 piezas de un WAV sintetico, escribe el prefijo legible
+ * en cacheDir y lo carga en el reproductor (MediaSource.Local): el
+ * archivo parcial reproducible del titulo de T048, servido por
+ * TorrentStream sobre las piezas verificadas de la sesion.
  */
 class MainActivity : Activity() {
 
@@ -169,6 +176,8 @@ class MainActivity : Activity() {
         fireTotal.text = "Fire total"
         val torrentDemo = Button(this)
         torrentDemo.text = "Torrent demo"
+        val streamDemo = Button(this)
+        streamDemo.text = "Stream torrent"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -197,6 +206,7 @@ class MainActivity : Activity() {
         buttons.addView(fireSesion)
         buttons.addView(fireTotal)
         buttons.addView(torrentDemo)
+        buttons.addView(streamDemo)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -280,6 +290,9 @@ class MainActivity : Activity() {
         }
         torrentDemo.setOnClickListener {
             runTorrentDemo()
+        }
+        streamDemo.setOnClickListener {
+            runStreamDemo()
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -484,6 +497,64 @@ class MainActivity : Activity() {
             md.reset()
             out.write(md.digest(data.copyOfRange(i, i + len)))
             i += len
+        }
+        return out.toByteArray()
+    }
+
+    /** T048 v1 (R0110, RES-0059): demo de streaming del archivo
+     * parcial: bombea 3 de 5 piezas del WAV sintetico, escribe el
+     * prefijo legible en cacheDir y lo carga en el reproductor. */
+    private fun runStreamDemo() {
+        val audio = wavSintetico(200)
+        val info = Benc.BDict(LinkedHashMap())
+        info.entries["name"] = Benc.BStr("demo.wav".toByteArray(Charsets.UTF_8))
+        info.entries["piece length"] = Benc.BInt(40)
+        info.entries["pieces"] = Benc.BStr(piezasSha1(audio, 40))
+        info.entries["length"] = Benc.BInt(200)
+        val root = Benc.BDict(LinkedHashMap())
+        root.entries["announce"] = Benc.BStr("http://tracker.example/announce".toByteArray(Charsets.UTF_8))
+        root.entries["info"] = info
+        val meta = TorrentParser.parse(Bencode.encode(root))
+        val sesion = TorrentSession(meta, emptySet())
+        val fuente = object : PieceSource {
+            override fun piece(index: Int, length: Int): ByteArray? =
+                if (index < 3) audio.copyOfRange(index * 40, index * 40 + length) else null
+        }
+        var bomba: PumpResult
+        do {
+            bomba = sesion.pump(fuente)
+        } while (bomba == PumpResult.COMPLETED)
+        val stream = TorrentStream(sesion, 0)
+        val chunk = stream.read(0, stream.readableBytes().toInt())
+        val archivo = java.io.File(cacheDir, "nia-stream-demo.wav")
+        if (chunk != null) {
+            archivo.writeBytes(chunk.bytes)
+            media.load(MediaSource.Local("file://" + archivo.absolutePath), autoplay = true)
+        }
+        downloadText.text = "stream: " + meta.name + " - legibles " +
+            stream.readableBytes() + "/" + stream.length +
+            " - prefijo en cache para el reproductor"
+    }
+
+    private fun wavSintetico(total: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        out.write("RIFF".toByteArray(Charsets.US_ASCII))
+        val resto = total - 8
+        out.write(byteArrayOf((resto and 0xff).toByte(), ((resto shr 8) and 0xff).toByte(), ((resto shr 16) and 0xff).toByte(), ((resto shr 24) and 0xff).toByte()))
+        out.write("WAVE".toByteArray(Charsets.US_ASCII))
+        out.write("fmt ".toByteArray(Charsets.US_ASCII))
+        out.write(byteArrayOf(16, 0, 0, 0))
+        out.write(byteArrayOf(1, 0))
+        out.write(byteArrayOf(1, 0))
+        out.write(byteArrayOf(0x40, 0x1f, 0, 0))
+        out.write(byteArrayOf(0x40, 0x1f, 0, 0))
+        out.write(byteArrayOf(1, 0))
+        out.write(byteArrayOf(8, 0))
+        out.write("data".toByteArray(Charsets.US_ASCII))
+        val muestras = total - 44
+        out.write(byteArrayOf((muestras and 0xff).toByte(), ((muestras shr 8) and 0xff).toByte(), ((muestras shr 16) and 0xff).toByte(), ((muestras shr 24) and 0xff).toByte()))
+        for (i in 0 until muestras) {
+            out.write(128)
         }
         return out.toByteArray()
     }
