@@ -34,7 +34,7 @@ import nia.engine.media.MediaState
  * T036 v1 (R0093, RES-0051): audio con el nucleo propio MediaEngine
  * (nia.engine.media, estados y seek contra reloj) sobre el MediaPlayer de
  * plataforma via PlatformMediaBackend (sin dependencias nuevas). Botones
- * Audio (SAF audio/*), Audio URL (demo https), Play/Pausa y seek -10s/+10s
+ * Audio (SAF de audio), Audio URL (demo https), Play/Pausa y seek -10s/+10s
  * con posicion y estado en un TextView. Exclusiones v1: solo audio (sin
  * video), sin audio-element del DOM ni HTMLMediaElement JS (T039), sin subs
  * ni fullscreen (v2+).
