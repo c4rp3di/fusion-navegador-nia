@@ -8,7 +8,9 @@ package nia.engine.css
  * :last-child, :only-child y :nth-child(an+b, odd, even, entero); agrupacion
  * por comas. Errores tipificados: unsupported-at-rule, invalid-selector,
  * unsupported-pseudo, unterminated-block, invalid-declaration,
- * unexpected-character. Limitaciones v2: sin @-rules, sin pseudo-clases
+ * unexpected-character. v3 (R0090, RES-0050): @media con min-width y
+ * max-width; el query se guarda por regla y lo evalua la cascada contra el
+ * viewport. Limitaciones v3: resto de @-rules sin soporte, sin pseudo-clases
  * dinamicas u otras (hover, :not, :root...), nombres de pseudo-clase solo
  * en minusculas.
  */
@@ -36,7 +38,8 @@ data class CssComplexSelector(
 data class CssRule(
     val selectors: List<CssComplexSelector>,
     val declarations: List<Pair<String, String>>,
-    val order: Int
+    val order: Int,
+    val media: String? = null
 )
 
 class CssStylesheet private constructor(val rules: List<CssRule>, val errors: List<String>) {
@@ -51,6 +54,7 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
         private val errors = mutableListOf<String>()
         private var i = 0
         private val n = text.length
+        private val mediaStack = mutableListOf<String>()
 
         fun run(): CssStylesheet {
             parseLoop()
@@ -113,6 +117,53 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                     }
                 }
                 i++
+            }
+        }
+
+        /**
+         * @-rules v3 (R0090): solo @media. Otro ident da unsupported-at-rule
+         * y se salta con skipAtRule (comportamiento v2 para el resto). @media
+         * captura el prelude hasta la llave, lo apila en mediaStack y las
+         * reglas internas heredan el query; el cierre del bloque se consume
+         * en parseLoop tras la ultima regla interna.
+         */
+        private fun handleAtRule() {
+            i++
+            val sb = StringBuilder()
+            while (i < n && isIdent(text[i])) {
+                sb.append(text[i])
+                i++
+            }
+            val name = sb.toString()
+            if (name != "media") {
+                errors.add("unsupported-at-rule")
+                skipAtRule()
+                return
+            }
+            skipNoise()
+            val psb = StringBuilder()
+            while (i < n && text[i] != '{' && text[i] != ';') {
+                psb.append(text[i])
+                i++
+            }
+            if (i >= n || text[i] == ';') {
+                errors.add("unsupported-at-rule")
+                skipAtRule()
+                return
+            }
+            val query = psb.toString().trim()
+            if (query.isEmpty()) {
+                errors.add("unsupported-at-rule")
+                i++
+                skipAtRule()
+                return
+            }
+            mediaStack.add(query)
+            i++
+            skipNoise()
+            if (i < n && text[i] == '}') {
+                i++
+                mediaStack.removeAt(mediaStack.size - 1)
             }
         }
 
@@ -307,8 +358,7 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                 if (i >= n) return
                 val c = text[i]
                 if (c == '@') {
-                    errors.add("unsupported-at-rule")
-                    skipAtRule()
+                    handleAtRule()
                     continue
                 }
                 if (c == '}' || c == ';' || c == ',') {
@@ -393,7 +443,14 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                     if (i < n && text[i] == ';') i++
                 }
                 if (!anyBad && !aborted && selectors.isNotEmpty()) {
-                    rules.add(CssRule(selectors.toList(), decls.toList(), order++))
+                    rules.add(CssRule(selectors.toList(), decls.toList(), order++, mediaStack.lastOrNull()))
+                }
+                if (mediaStack.isNotEmpty()) {
+                    skipNoise()
+                    if (i < n && text[i] == '}') {
+                        i++
+                        mediaStack.removeAt(mediaStack.size - 1)
+                    }
                 }
             }
         }

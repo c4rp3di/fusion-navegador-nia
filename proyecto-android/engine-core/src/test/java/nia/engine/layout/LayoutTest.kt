@@ -14,6 +14,8 @@ import kotlin.test.assertNull
  * em/rem contra la fuente del elemento).
  * v3 (R0084, RES-0047): tablas HTML (T032 v1) - reftests de columnas,
  * filas, estirado de celdas y exclusiones documentadas.
+ * v4 (R0090, RES-0050): flexbox, grid y responsive (T032 v2) - reftests
+ * de filas flex (justify/align/grow/gap/wrap), columnas grid y @media.
  */
 class LayoutTest {
 
@@ -37,6 +39,9 @@ class LayoutTest {
 
     private fun lay(d: DomNode.Document, css: String, vw: Double): LayoutResult =
         LayoutEngine.layout(d, CssCascade.compute(d, CssStylesheet.parse(css)), vw)
+
+    private fun layVw(d: DomNode.Document, css: String, vw: Double): LayoutResult =
+        LayoutEngine.layout(d, CssCascade.compute(d, CssStylesheet.parse(css), vw), vw)
 
     private fun assertBox(name: String, b: LayoutBox?, x: Double, y: Double, w: Double, h: Double) {
         assertNotNull(b, name + " es null")
@@ -642,5 +647,229 @@ class LayoutTest {
         val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:table}", 200.0)
         assertBox("td", r.boxOf(td), 0.0, 0.0, 8.0, 19.2)
         assertBox("div", r.boxOf(dv), 0.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun flexRowDosItems() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 8.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 8.0, 0.0, 8.0, 19.2)
+        assertBox("div", r.boxOf(dv), 0.0, 0.0, 200.0, 19.2)
+    }
+
+    @Test
+    fun flexJustifyCenter() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;justify-content:center}", 100.0)
+        assertBox("s1", r.boxOf(s1), 42.0, 0.0, 8.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 50.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun flexJustifySpaceBetween() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val s3 = el("span", emptyMap(), listOf(tx("c")))
+        val dv = el("div", emptyMap(), listOf(s1, s2, s3))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;justify-content:space-between}", 40.0)
+        assertVal("s1 x", r.boxOf(s1)?.x, 0.0)
+        assertVal("s2 x", r.boxOf(s2)?.x, 16.0)
+        assertVal("s3 x", r.boxOf(s3)?.x, 32.0)
+    }
+
+    @Test
+    fun flexGap() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;gap:10px}", 200.0)
+        assertVal("s2 x", r.boxOf(s2)?.x, 18.0)
+    }
+
+    @Test
+    fun flexGrow() {
+        val s1 = el("span", mapOf("class" to "a"), listOf(tx("a")))
+        val s2 = el("span", mapOf("class" to "b"), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex}.a{flex-grow:1}.b{flex-grow:1}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 100.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 100.0, 0.0, 100.0, 19.2)
+    }
+
+    @Test
+    fun flexRowReverse() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;flex-direction:row-reverse}", 200.0)
+        assertVal("s1 x", r.boxOf(s1)?.x, 192.0)
+        assertVal("s2 x", r.boxOf(s2)?.x, 184.0)
+    }
+
+    @Test
+    fun flexWrap() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val s3 = el("span", emptyMap(), listOf(tx("c")))
+        val dv = el("div", emptyMap(), listOf(s1, s2, s3))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;flex-wrap:wrap}", 20.0)
+        assertBox("s3", r.boxOf(s3), 0.0, 19.2, 8.0, 19.2)
+        assertVal("div h", r.boxOf(dv)?.height, 38.4)
+    }
+
+    @Test
+    fun flexColumn() {
+        val p1 = el("p", emptyMap(), listOf(tx("a")))
+        val p2 = el("p", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(p1, p2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;flex-direction:column}", 200.0)
+        assertBox("p1", r.boxOf(p1), 0.0, 0.0, 200.0, 19.2)
+        assertBox("p2", r.boxOf(p2), 0.0, 19.2, 200.0, 19.2)
+        assertVal("div h", r.boxOf(dv)?.height, 38.4)
+    }
+
+    @Test
+    fun flexAlignCenter() {
+        val s1 = el("span", mapOf("class" to "a"), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex;align-items:center}.a{padding:10px}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 28.0, 39.2)
+        assertBox("s2", r.boxOf(s2), 28.0, 10.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun flexItemMargin() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex}span{margin:4px}", 200.0)
+        assertBox("s1", r.boxOf(s1), 4.0, 4.0, 8.0, 19.2)
+        assertVal("s2 x", r.boxOf(s2)?.x, 20.0)
+    }
+
+    @Test
+    fun flexStretch() {
+        val s1 = el("span", mapOf("class" to "a"), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:flex}.a{padding:10px}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 28.0, 39.2)
+        assertBox("s2", r.boxOf(s2), 28.0, 0.0, 8.0, 39.2)
+    }
+
+    @Test
+    fun gridDosColumnas() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:grid;grid-template-columns:50px 50px}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 50.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 50.0, 0.0, 50.0, 19.2)
+    }
+
+    @Test
+    fun gridFr() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:grid;grid-template-columns:1fr 1fr}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 100.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 100.0, 0.0, 100.0, 19.2)
+    }
+
+    @Test
+    fun gridAuto() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:grid;grid-template-columns:auto auto}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 8.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 8.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun gridPct() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:grid;grid-template-columns:50% 25%}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 100.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 100.0, 0.0, 50.0, 19.2)
+    }
+
+    @Test
+    fun gridGap() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val s2 = el("span", emptyMap(), listOf(tx("b")))
+        val dv = el("div", emptyMap(), listOf(s1, s2))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:grid;grid-template-columns:1fr 1fr;gap:10px}", 200.0)
+        assertBox("s1", r.boxOf(s1), 0.0, 0.0, 95.0, 19.2)
+        assertBox("s2", r.boxOf(s2), 105.0, 0.0, 95.0, 19.2)
+    }
+
+    @Test
+    fun gridItemMargin() {
+        val s1 = el("span", emptyMap(), listOf(tx("a")))
+        val dv = el("div", emptyMap(), listOf(s1))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:grid;grid-template-columns:1fr}span{margin:4px}", 200.0)
+        assertBox("s1", r.boxOf(s1), 4.0, 4.0, 192.0, 19.2)
+    }
+
+    @Test
+    fun mediaMinWidthAplica() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val r = layVw(doc(el("body", emptyMap(), listOf(p))), "p{margin-top:10px}@media (min-width: 100px) {p{margin-top:20px}}", 200.0)
+        assertVal("p y", r.boxOf(p)?.y, 20.0)
+    }
+
+    @Test
+    fun mediaMinWidthNoAplica() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val r = layVw(doc(el("body", emptyMap(), listOf(p))), "p{margin-top:10px}@media (min-width: 100px) {p{margin-top:20px}}", 50.0)
+        assertVal("p y", r.boxOf(p)?.y, 10.0)
+    }
+
+    @Test
+    fun mediaMaxWidthAplica() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val r = layVw(doc(el("body", emptyMap(), listOf(p))), "p{margin-top:10px}@media (max-width: 100px) {p{margin-top:20px}}", 50.0)
+        assertVal("p y", r.boxOf(p)?.y, 20.0)
+    }
+
+    @Test
+    fun mediaMaxWidthNoAplica() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val r = layVw(doc(el("body", emptyMap(), listOf(p))), "p{margin-top:10px}@media (max-width: 100px) {p{margin-top:20px}}", 150.0)
+        assertVal("p y", r.boxOf(p)?.y, 10.0)
+    }
+
+    @Test
+    fun mediaCombinada() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val css = "p{margin-top:10px}@media (min-width: 50px) and (max-width: 100px) {p{margin-top:20px}}"
+        val r1 = layVw(doc(el("body", emptyMap(), listOf(p))), css, 75.0)
+        assertVal("p y 75", r1.boxOf(p)?.y, 20.0)
+        val r2 = layVw(doc(el("body", emptyMap(), listOf(p))), css, 200.0)
+        assertVal("p y 200", r2.boxOf(p)?.y, 10.0)
+    }
+
+    @Test
+    fun mediaTipoScreenAplica() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val r = layVw(doc(el("body", emptyMap(), listOf(p))), "p{margin-top:10px}@media screen and (min-width: 100px) {p{margin-top:20px}}", 200.0)
+        assertVal("p y", r.boxOf(p)?.y, 20.0)
+    }
+
+    @Test
+    fun mediaTipoPrintNoCasa() {
+        val p = el("p", emptyMap(), listOf(tx("a")))
+        val r = layVw(doc(el("body", emptyMap(), listOf(p))), "p{margin-top:10px}@media print and (min-width: 100px) {p{margin-top:20px}}", 200.0)
+        assertVal("p y", r.boxOf(p)?.y, 10.0)
     }
 }

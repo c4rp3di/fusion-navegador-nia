@@ -35,6 +35,9 @@ class CssComputedStyle internal constructor(private val computed: Map<DomNode, M
  * sin unidades vale 0px). margin/padding/border-width en % se quedan como
  * "N%" y los resuelve el layout contra el ancho del contenedor.
  * Limitaciones v2: sin origenes multiples, !important ni inline styles.
+ * v3 (R0090, RES-0050): @media min-width/max-width evaluado contra el
+ * viewport (px, em/rem contra la raiz 16px), tipos screen/all y el
+ * combinator and; las reglas fuera de su query no aplican.
  */
 object CssCascade {
 
@@ -249,6 +252,31 @@ object CssCascade {
         return false
     }
 
+    private val mediaFeatureRegex = Regex("^\\(\\s*(min-width|max-width)\\s*:\\s*([+-]?(\\d+(\\.\\d+)?|\\.\\d+))\\s*(px|em|rem)\\s*\\)$")
+
+    /**
+     * @media (v3): tokens separados por and; screen/all (con only) pasan;
+     * cada feature (min-width|max-width) en px (em/rem contra la raiz 16px)
+     * se evalua contra viewportWidth; cualquier token invalido no casa.
+     */
+    fun mediaMatches(query: String, viewportWidth: Double): Boolean {
+        val q = query.trim().replace(Regex("\\s+"), " ")
+        for (tok in q.split(Regex(" and ", RegexOption.IGNORE_CASE))) {
+            val t = tok.trim()
+            if (t.isEmpty()) continue
+            if (t == "screen" || t == "all" || t == "only screen" || t == "only all") continue
+            if (!t.startsWith("(")) return false
+            val m = mediaFeatureRegex.find(t) ?: return false
+            val px = when (m.groupValues[5]) {
+                "em", "rem" -> m.groupValues[2].toDouble() * 16.0
+                else -> m.groupValues[2].toDouble()
+            }
+            if (m.groupValues[1] == "min-width" && viewportWidth < px) return false
+            if (m.groupValues[1] == "max-width" && viewportWidth > px) return false
+        }
+        return true
+    }
+
     private fun expandDecl(k: String, v: String): List<Pair<String, String>> {
         if (k == "margin" || k == "padding" || k == "border-width") {
             val parts = v.split(' ', '\t', '\n', '\r', '\u000C').filter { it.isNotEmpty() }
@@ -270,7 +298,7 @@ object CssCascade {
         return listOf(k to v)
     }
 
-    fun compute(root: DomNode, stylesheet: CssStylesheet): CssComputedStyle {
+    fun compute(root: DomNode, stylesheet: CssStylesheet, viewportWidth: Double = 360.0): CssComputedStyle {
         val parents = buildParents(root)
 
         var rootFs: Double? = null
@@ -351,6 +379,7 @@ object CssCascade {
                 }
                 val entries = mutableListOf<Triple<CssSpecificity, Int, CssRule>>()
                 for (r in stylesheet.rules) {
+                    if (r.media != null && !mediaMatches(r.media, viewportWidth)) continue
                     var best: CssSpecificity? = null
                     for (cx in r.selectors) {
                         if (matchAt(cx, cx.compounds.size - 1, node, parents)) {

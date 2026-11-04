@@ -5,9 +5,9 @@ import nia.engine.html.DomNode
 
 /**
  * Layout v3 (R0084): caja rectangular en coordenadas del documento.
- * Limitaciones v3: sin width/height fijados, sin float/flex (tablas en v3),
- * medicion monoespaciada (avance = fontSize/2), overflow permitido
- * (las palabras no se parten).
+ * Limitaciones v4: sin width/height fijados, sin float (tablas en v3,
+ * flex/grid en v4), medicion monoespaciada (avance = fontSize/2), overflow
+ * permitido (las palabras no se parten).
  */
 class LayoutBox(val x: Double, val y: Double, val width: Double, val height: Double)
 
@@ -89,6 +89,21 @@ class LayoutResult internal constructor(
  * colgroup a display none, el contenido de bloque de una celda no se
  * estructura (una tabla anidada se mide como texto inline) y filas/celdas
  * fuera de tabla se tratan como inline.
+ *
+ * v4 (R0090, RES-0050) - flexbox, grid y responsive (T032 v2):
+ * display:flex coloca los items (medidos como contenido inline, ancho
+ * natural de una linea) en la direccion principal con flex-direction
+ * row/row-reverse/column/column-reverse, flex-wrap wrap solo horizontal
+ * por ancho preferido mas gap, justify-content flex-start/center/flex-end/
+ * space-between/space-around/space-evenly, align-items stretch/flex-start/
+ * center/flex-end, gap como column-gap/row-gap en px y flex-grow reparte
+ * el espacio libre. display:grid coloca los items en las columnas de
+ * grid-template-columns (px/em/rem/% del contenedor, fr del espacio libre,
+ * auto al ancho preferido) con filas implicitas del alto del contenido y
+ * gap. @media min-width/max-width se evalua en CssCascade.compute contra
+ * el viewport (default 360). Exclusiones v2: sin flex-shrink/order/basis
+ * ni align-self, sin grid-template-rows ni areas, el contenido de bloque
+ * de un item no se estructura (se mide como texto inline).
  */
 object LayoutEngine {
 
@@ -122,6 +137,7 @@ object LayoutEngine {
 
         private val lenRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))(px|em|rem|%)$")
         private val numRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))$")
+        private val frRegex = Regex("^(\\d+(\\.\\d+)?|\\.\\d+)fr$")
 
         private class W(val node: DomNode.Text, val text: String, val fs: Double, val lh: Double, var startX: Double)
 
@@ -148,7 +164,7 @@ object LayoutEngine {
         private fun buildParents(node: DomNode) {
             if (node is DomNode.Element) {
                 val d = styleOf(node, "display")
-                val v = if (d == "none" || d == "block" || d == "inline" || d == "table" || d == "table-row" || d == "table-row-group" || d == "table-cell") d else defaultDisplay(node.name)
+                val v = if (d == "none" || d == "block" || d == "inline" || d == "table" || d == "table-row" || d == "table-row-group" || d == "table-cell" || d == "flex" || d == "grid") d else defaultDisplay(node.name)
                 displays[node] = v
                 if (v == "none") noneElements.add(node)
             }
@@ -285,6 +301,32 @@ object LayoutEngine {
             return lineY - y
         }
 
+        /** Alto de una secuencia inline sin dibujar (espejo de layoutInlineRun). */
+        private fun measureInlineHeight(run: List<DomNode>, width: Double): Double {
+            val words = mutableListOf<W>()
+            for (fg in run) collectText(fg, words)
+            var x = 0.0
+            var curLh = 0.0
+            var has = false
+            var h = 0.0
+            for (w in words) {
+                val ww = textWidth(w.text, w.fs)
+                val sp = w.fs / 2
+                if (has && x + sp + ww > width) {
+                    h += curLh
+                    x = 0.0
+                    curLh = 0.0
+                    has = false
+                }
+                if (has) x += sp
+                x += ww
+                if (w.lh > curLh) curLh = w.lh
+                has = true
+            }
+            if (has) h += curLh
+            return h
+        }
+
         private class TableGrid(val width: Double, val height: Double)
 
         /** Filas de la tabla: pares (tr, celdas) aplanando thead/tbody/tfoot en orden del documento. */
@@ -312,9 +354,12 @@ object LayoutEngine {
         }
 
         /** Ancho natural de una linea del contenido inline de la celda (medicion monoespaciada). */
-        private fun naturalWidthOf(cell: DomNode.Element): Double {
+        private fun naturalWidthOf(cell: DomNode.Element): Double = naturalWidthOfRun(cell.children.toList())
+
+        /** Ancho natural de una linea de una secuencia inline (items de flex/grid). */
+        private fun naturalWidthOfRun(run: List<DomNode>): Double {
             val words = mutableListOf<W>()
-            collectText(cell, words)
+            for (fg in run) collectText(fg, words)
             var w = 0.0
             for (i in words.indices) {
                 if (i > 0) w += words[i].fs / 2
@@ -394,6 +439,273 @@ object LayoutEngine {
             return TableGrid(acc - x, curY - y)
         }
 
+        /** Item de flex/grid: nodo, run inline, cromo y ancho preferido (outer). */
+        private class FGItem(
+            val node: DomNode,
+            val run: List<DomNode>,
+            val el: DomNode.Element?,
+            val ml: Double, val mr: Double, val mt: Double, val mb: Double,
+            val pl: Double, val pr: Double, val pt: Double, val pb: Double,
+            val bl: Double, val br: Double, val bt: Double, val bb: Double,
+            val prefW: Double
+        )
+
+        /** Items del contenedor flex/grid: Text no-ws -> item anonimo sin cromo; Element non-none -> item con cromo. */
+        private fun itemsOf(container: DomNode): List<FGItem> {
+            val items = mutableListOf<FGItem>()
+            for (child in childrenOf(container)) {
+                if (child is DomNode.Text) {
+                    if (isWsOnly(child.data)) continue
+                    items.add(FGItem(child, listOf(child), null, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, naturalWidthOfRun(listOf(child))))
+                    continue
+                }
+                if (child !is DomNode.Element) continue
+                if (displayOf(child) == "none") continue
+                val fs = fontSizeOf(child)
+                val ml = boxLen(child, "margin-left", 0.0, fs)
+                val mr = boxLen(child, "margin-right", 0.0, fs)
+                val mt = boxLen(child, "margin-top", 0.0, fs)
+                val mb = boxLen(child, "margin-bottom", 0.0, fs)
+                val pl = boxLen(child, "padding-left", 0.0, fs)
+                val pr = boxLen(child, "padding-right", 0.0, fs)
+                val pt = boxLen(child, "padding-top", 0.0, fs)
+                val pb = boxLen(child, "padding-bottom", 0.0, fs)
+                val bl = boxLen(child, "border-left-width", 0.0, fs)
+                val br = boxLen(child, "border-right-width", 0.0, fs)
+                val bt = boxLen(child, "border-top-width", 0.0, fs)
+                val bb = boxLen(child, "border-bottom-width", 0.0, fs)
+                val style = parseLen(styleOf(child, "width"), fs, 0.0)
+                val pref = (style ?: naturalWidthOfRun(child.children.toList())) + ml + mr + pl + pr + bl + br
+                items.add(FGItem(child, child.children.toList(), child, ml, mr, mt, mb, pl, pr, pt, pb, bl, br, bt, bb, pref))
+            }
+            return items
+        }
+
+        /** Layout flex: filas horizontales por prefW+gap (wrap), justify/align/grow; devuelve el alto. */
+        private fun layoutFlex(container: DomNode.Element, x: Double, y: Double, contentW: Double): Double {
+            val fs = fontSizeOf(container)
+            val dir = (styleOf(container, "flex-direction") ?: "row").trim()
+            if (dir == "column" || dir == "column-reverse") return flexColumn(container, x, y, contentW, dir)
+            val items = itemsOf(container)
+            if (items.isEmpty()) return 0.0
+            val wrap = styleOf(container, "flex-wrap") == "wrap"
+            val justify = styleOf(container, "justify-content") ?: "flex-start"
+            val align = styleOf(container, "align-items") ?: "stretch"
+            val gap = parseLen(styleOf(container, "column-gap") ?: styleOf(container, "gap"), fs, contentW) ?: 0.0
+            val rowGap = parseLen(styleOf(container, "row-gap") ?: styleOf(container, "gap"), fs, contentW) ?: 0.0
+            val lines = mutableListOf<MutableList<FGItem>>()
+            var line = mutableListOf<FGItem>()
+            var cursor = 0.0
+            for (fg in items) {
+                if (line.isNotEmpty() && wrap && cursor + gap + fg.prefW > contentW) {
+                    lines.add(line)
+                    line = mutableListOf()
+                    cursor = 0.0
+                }
+                if (line.isNotEmpty()) cursor += gap
+                cursor += fg.prefW
+                line.add(fg)
+            }
+            if (line.isNotEmpty()) lines.add(line)
+            val reverse = dir == "row-reverse"
+            var yy = y
+            for (ln in lines) {
+                val cross = flexPlaceRow(ln, yy, contentW, justify, align, gap, reverse)
+                yy += cross + rowGap
+            }
+            return yy - y - rowGap
+        }
+
+        /** Coloca una linea flex horizontal y devuelve su cross (outer maximo con margenes). */
+        private fun flexPlaceRow(
+            line: List<FGItem>, y: Double, contentW: Double,
+            justify: String, align: String, gap: Double, reverse: Boolean
+        ): Double {
+            val n = line.size
+            val mains = DoubleArray(n)
+            val grows = DoubleArray(n)
+            var base = 0.0
+            var gSum = 0.0
+            for (k in line.indices) {
+                mains[k] = line[k].prefW
+                base += line[k].prefW
+                if (k > 0) base += gap
+                val e = line[k].el
+                val g = if (e != null) (styleOf(e, "flex-grow")?.toDoubleOrNull() ?: 0.0) else 0.0
+                if (g > 0.0) {
+                    grows[k] = g
+                    gSum += g
+                }
+            }
+            val free = contentW - base
+            if (free > 0.0 && gSum > 0.0) {
+                for (k in line.indices) mains[k] += free * grows[k] / gSum
+                base = contentW
+            }
+            var free2 = contentW - base
+            if (free2 < 0.0) free2 = 0.0
+            val stepBetween = if (n > 1) free2 / (n - 1) else 0.0
+            val around = free2 / n
+            val evenly = free2 / (n + 1)
+            var px = 0.0
+            when (justify) {
+                "center" -> px = free2 / 2
+                "flex-end" -> px = free2
+                "space-around" -> px = around / 2
+                "space-evenly" -> px = evenly
+            }
+            val heights = DoubleArray(n)
+            val innerWs = DoubleArray(n)
+            var lineCross = 0.0
+            for (k in line.indices) {
+                val fg = line[k]
+                var innerW = mains[k] - fg.ml - fg.mr - fg.pl - fg.pr - fg.bl - fg.br
+                if (innerW < 0.0) innerW = 0.0
+                innerWs[k] = innerW
+                heights[k] = measureInlineHeight(fg.run, innerW)
+                val outer = heights[k] + fg.pt + fg.pb + fg.bt + fg.bb + fg.mt + fg.mb
+                if (outer > lineCross) lineCross = outer
+            }
+            for (k in line.indices) {
+                val fg = line[k]
+                var ix = px
+                if (reverse) ix = contentW - (ix + mains[k])
+                val own = heights[k] + fg.pt + fg.pb + fg.bt + fg.bb
+                val boxCross = if (align == "stretch") lineCross - fg.mt - fg.mb else own
+                val offY = when (align) {
+                    "center" -> (lineCross - own - fg.mt - fg.mb) / 2
+                    "flex-end" -> lineCross - own - fg.mt - fg.mb
+                    else -> 0.0
+                }
+                layoutInlineRun(fg.run, ix + fg.ml + fg.bl + fg.pl, y + offY + fg.mt + fg.bt + fg.pt, innerWs[k], alignOf(fg.node))
+                val e = fg.el
+                if (e != null) blockBoxes[e] = LayoutBox(ix + fg.ml, y + offY + fg.mt, mains[k] - fg.ml - fg.mr, boxCross)
+                px += mains[k] + gap
+                if (justify == "space-between" && n > 1) px += stepBetween
+                if (justify == "space-around") px += around
+                if (justify == "space-evenly") px += evenly
+            }
+            return lineCross
+        }
+
+        /** Columna flex: items apilados en el eje vertical (stretch al ancho); column-reverse espeja. */
+        private fun flexColumn(container: DomNode.Element, x: Double, y: Double, contentW: Double, dir: String): Double {
+            val items = itemsOf(container)
+            if (items.isEmpty()) return 0.0
+            val fs = fontSizeOf(container)
+            val align = styleOf(container, "align-items") ?: "stretch"
+            val stretch = align == "stretch"
+            val gap = parseLen(styleOf(container, "row-gap") ?: styleOf(container, "gap"), fs, contentW) ?: 0.0
+            val n = items.size
+            val ys = DoubleArray(n)
+            val mains = DoubleArray(n)
+            val innerWs = DoubleArray(n)
+            val boxWs = DoubleArray(n)
+            val hs = DoubleArray(n)
+            var yy = 0.0
+            for (k in 0 until n) {
+                val fg = items[k]
+                val itemW = if (stretch) contentW else fg.prefW
+                var innerW = itemW - fg.ml - fg.mr - fg.pl - fg.pr - fg.bl - fg.br
+                if (innerW < 0.0) innerW = 0.0
+                val h = measureInlineHeight(fg.run, innerW)
+                val main = h + fg.pt + fg.pb + fg.bt + fg.bb + fg.mt + fg.mb
+                ys[k] = yy
+                mains[k] = main
+                innerWs[k] = innerW
+                boxWs[k] = itemW - fg.ml - fg.mr
+                hs[k] = h
+                yy += main + gap
+            }
+            val total = yy - gap
+            for (k in 0 until n) {
+                val fg = items[k]
+                var iy = ys[k]
+                if (dir == "column-reverse") iy = total - (iy + mains[k])
+                layoutInlineRun(fg.run, x + fg.ml + fg.bl + fg.pl, y + iy + fg.mt + fg.bt + fg.pt, innerWs[k], alignOf(fg.node))
+                val e = fg.el
+                if (e != null) blockBoxes[e] = LayoutBox(x + fg.ml, y + iy + fg.mt, boxWs[k], hs[k] + fg.pt + fg.pb + fg.bt + fg.bb)
+            }
+            return total
+        }
+
+        /** Layout grid: columnas de grid-template-columns (px/em/rem/%/fr/auto), filas implicitas; devuelve el alto. */
+        private fun layoutGrid(container: DomNode.Element, x: Double, y: Double, contentW: Double): Double {
+            val items = itemsOf(container)
+            if (items.isEmpty()) return 0.0
+            val fs = fontSizeOf(container)
+            val rawTracks = wordsOf(styleOf(container, "grid-template-columns") ?: "")
+            val nCols = if (rawTracks.size < 1) 1 else rawTracks.size
+            val colGap = parseLen(styleOf(container, "column-gap") ?: styleOf(container, "gap"), fs, contentW) ?: 0.0
+            val rowGap = parseLen(styleOf(container, "row-gap") ?: styleOf(container, "gap"), fs, contentW) ?: 0.0
+            val colW = DoubleArray(nCols)
+            val isFr = BooleanArray(nCols)
+            val isAuto = BooleanArray(nCols)
+            val frVals = DoubleArray(nCols)
+            var sumFr = 0.0
+            for (c in 0 until nCols) {
+                val t = if (c < rawTracks.size) rawTracks[c] else "auto"
+                val fr = frRegex.find(t)
+                if (fr != null) {
+                    isFr[c] = true
+                    frVals[c] = fr.groupValues[1].toDouble()
+                    sumFr += frVals[c]
+                } else {
+                    val fixed = parseLen(t, fs, contentW)
+                    if (t == "auto" || fixed == null) {
+                        isAuto[c] = true
+                    } else {
+                        colW[c] = fixed
+                    }
+                }
+            }
+            for (k in items.indices) {
+                val c = k % nCols
+                if (isAuto[c] && items[k].prefW > colW[c]) colW[c] = items[k].prefW
+            }
+            var base = colGap * (nCols - 1)
+            for (c in 0 until nCols) if (!isFr[c]) base += colW[c]
+            val free = contentW - base
+            if (free > 0.0 && sumFr > 0.0) {
+                for (c in 0 until nCols) if (isFr[c]) colW[c] = free * frVals[c] / sumFr
+            }
+            val colX = DoubleArray(nCols)
+            var acc = x
+            for (c in 0 until nCols) {
+                colX[c] = acc
+                acc += colW[c] + colGap
+            }
+            val nRows = (items.size + nCols - 1) / nCols
+            val rowH = DoubleArray(nRows)
+            val innerWs = DoubleArray(items.size)
+            for (k in items.indices) {
+                val fg = items[k]
+                val c = k % nCols
+                var innerW = colW[c] - fg.ml - fg.mr - fg.pl - fg.pr - fg.bl - fg.br
+                if (innerW < 0.0) innerW = 0.0
+                innerWs[k] = innerW
+                val h = measureInlineHeight(fg.run, innerW)
+                val outer = h + fg.pt + fg.pb + fg.bt + fg.bb + fg.mt + fg.mb
+                if (outer > rowH[k / nCols]) rowH[k / nCols] = outer
+            }
+            val rowY = DoubleArray(nRows)
+            var accY = y
+            for (r in 0 until nRows) {
+                rowY[r] = accY
+                accY += rowH[r] + rowGap
+            }
+            val totalH = accY - y - rowGap
+            for (k in items.indices) {
+                val fg = items[k]
+                val c = k % nCols
+                val r = k / nCols
+                layoutInlineRun(fg.run, colX[c] + fg.ml + fg.bl + fg.pl, rowY[r] + fg.mt + fg.bt + fg.pt, innerWs[k], alignOf(fg.node))
+                val e = fg.el
+                if (e != null) blockBoxes[e] = LayoutBox(colX[c] + fg.ml, rowY[r] + fg.mt, colW[c] - fg.ml - fg.mr, rowH[r] - fg.mt - fg.mb)
+            }
+            return totalH
+        }
+
         private fun layoutContainer(node: DomNode, x: Double, y: Double, width: Double): Double {
             val align = alignOf(node)
             var cur = y
@@ -434,6 +746,32 @@ object LayoutEngine {
                         val grid = layoutTable(child, x + ml + bl + pl, cur + mt + bt + pt, cw)
                         val bh = grid.height + pt + pb + bt + bb
                         blockBoxes[child] = LayoutBox(x + ml, cur + mt, grid.width + bl + br + pl + pr, bh)
+                        cur += mt + bh + mb
+                        continue
+                    }
+                    if (d == "flex" || d == "grid") {
+                        if (run.isNotEmpty()) {
+                            cur += layoutInlineRun(run.toList(), x, cur, width, align)
+                            run.clear()
+                        }
+                        val fs = fontSizeOf(child)
+                        val mt = boxLen(child, "margin-top", width, fs)
+                        val mr = boxLen(child, "margin-right", width, fs)
+                        val mb = boxLen(child, "margin-bottom", width, fs)
+                        val ml = boxLen(child, "margin-left", width, fs)
+                        val pt = boxLen(child, "padding-top", width, fs)
+                        val pr = boxLen(child, "padding-right", width, fs)
+                        val pb = boxLen(child, "padding-bottom", width, fs)
+                        val pl = boxLen(child, "padding-left", width, fs)
+                        val bt = boxLen(child, "border-top-width", width, fs)
+                        val br = boxLen(child, "border-right-width", width, fs)
+                        val bb = boxLen(child, "border-bottom-width", width, fs)
+                        val bl = boxLen(child, "border-left-width", width, fs)
+                        var cw = width - ml - mr - bl - br - pl - pr
+                        if (cw < 0.0) cw = 0.0
+                        val ch = if (d == "flex") layoutFlex(child, x + ml + bl + pl, cur + mt + bt + pt, cw) else layoutGrid(child, x + ml + bl + pl, cur + mt + bt + pt, cw)
+                        val bh = ch + pt + pb + bt + bb
+                        blockBoxes[child] = LayoutBox(x + ml, cur + mt, width - ml - mr, bh)
                         cur += mt + bh + mb
                         continue
                     }
