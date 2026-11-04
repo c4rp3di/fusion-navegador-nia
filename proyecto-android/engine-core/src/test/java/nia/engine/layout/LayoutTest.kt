@@ -12,6 +12,8 @@ import kotlin.test.assertNull
  * Tests del layout v2 (R0023): espejo validado del gemelo TS.
  * v1 (T015) + margin/padding/border (border-box, % contra contenedor,
  * em/rem contra la fuente del elemento).
+ * v3 (R0084, RES-0047): tablas HTML (T032 v1) - reftests de columnas,
+ * filas, estirado de celdas y exclusiones documentadas.
  */
 class LayoutTest {
 
@@ -433,5 +435,212 @@ class LayoutTest {
         val r = lay(doc(el("body", emptyMap(), listOf(p))), "p{padding:0.25em}", 200.0)
         assertBox("frag", r.fragmentsOf(t)[0], 4.0, 4.0, 8.0, 19.2)
         assertBox("p", r.boxOf(p), 0.0, 0.0, 200.0, 27.2)
+    }
+    @Test
+    fun tablaUnaCelda() {
+        val td = el("td", emptyMap(), listOf(tx("x")))
+        val tr = el("tr", emptyMap(), listOf(td))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(tr))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 8.0, 19.2)
+        assertBox("tr", r.boxOf(tr), 0.0, 0.0, 8.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun tablaColumnasPorContenido() {
+        val td1 = el("td", emptyMap(), listOf(tx("abc")))
+        val td2 = el("td", emptyMap(), listOf(tx("ab")))
+        val tr = el("tr", emptyMap(), listOf(td1, td2))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(tr))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertBox("td1", r.boxOf(td1), 0.0, 0.0, 24.0, 19.2)
+        assertBox("td2", r.boxOf(td2), 24.0, 0.0, 16.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 40.0, 19.2)
+    }
+
+    @Test
+    fun tablaFilasApilan() {
+        val td1 = el("td", emptyMap(), listOf(tx("a")))
+        val td2 = el("td", emptyMap(), listOf(tx("b")))
+        val tr1 = el("tr", emptyMap(), listOf(td1))
+        val tr2 = el("tr", emptyMap(), listOf(td2))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(tr1, tr2))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertBox("td1", r.boxOf(td1), 0.0, 0.0, 8.0, 19.2)
+        assertBox("td2", r.boxOf(td2), 0.0, 19.2, 8.0, 19.2)
+        assertBox("tr2", r.boxOf(tr2), 0.0, 19.2, 8.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 8.0, 38.4)
+    }
+
+    @Test
+    fun celdaMultilineaNatural() {
+        val w = tx("a b")
+        val td = el("td", emptyMap(), listOf(w))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertBox("fa", r.fragmentsOf(w)[0], 0.0, 0.0, 8.0, 19.2)
+        assertBox("fb", r.fragmentsOf(w)[1], 16.0, 0.0, 8.0, 19.2)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 24.0, 19.2)
+    }
+
+    @Test
+    fun celdaAnchoFijoSeEnvuelve() {
+        val w = tx("aaaa bbbb")
+        val td = el("td", emptyMap(), listOf(w))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "td{width:32px}", 200.0)
+        assertBox("f1", r.fragmentsOf(w)[0], 0.0, 0.0, 32.0, 19.2)
+        assertBox("f2", r.fragmentsOf(w)[1], 0.0, 19.2, 32.0, 19.2)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 32.0, 38.4)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 32.0, 38.4)
+    }
+
+    @Test
+    fun tablaAnchoFijoDistribuye() {
+        val td1 = el("td", emptyMap(), listOf(tx("a")))
+        val td2 = el("td", emptyMap(), listOf(tx("b")))
+        val tr = el("tr", emptyMap(), listOf(td1, td2))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(tr))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "table{width:200px}", 200.0)
+        assertBox("td1", r.boxOf(td1), 0.0, 0.0, 100.0, 19.2)
+        assertBox("td2", r.boxOf(td2), 100.0, 0.0, 100.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 200.0, 19.2)
+    }
+
+    @Test
+    fun tablaAnchoPct() {
+        val td1 = el("td", emptyMap(), listOf(tx("a")))
+        val td2 = el("td", emptyMap(), listOf(tx("b")))
+        val tr = el("tr", emptyMap(), listOf(td1, td2))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(tr))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "table{width:50%}", 200.0)
+        assertBox("td1", r.boxOf(td1), 0.0, 0.0, 50.0, 19.2)
+        assertBox("td2", r.boxOf(td2), 50.0, 0.0, 50.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 100.0, 19.2)
+    }
+
+    @Test
+    fun tablaPadding() {
+        val w = tx("a")
+        val td = el("td", emptyMap(), listOf(w))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "table{padding:10px}", 200.0)
+        assertBox("frag", r.fragmentsOf(w)[0], 10.0, 10.0, 8.0, 19.2)
+        assertBox("td", r.boxOf(td), 10.0, 10.0, 8.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 28.0, 39.2)
+    }
+
+    @Test
+    fun celdaPaddingBorde() {
+        val w = tx("a")
+        val td = el("td", emptyMap(), listOf(w))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "td{padding:4px;border-width:2px}", 200.0)
+        assertBox("frag", r.fragmentsOf(w)[0], 6.0, 6.0, 8.0, 19.2)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 20.0, 31.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 20.0, 31.2)
+    }
+
+    @Test
+    fun tablaTheadTbodyTfoot() {
+        val h = el("td", emptyMap(), listOf(tx("H")))
+        val a = el("td", emptyMap(), listOf(tx("a")))
+        val f = el("td", emptyMap(), listOf(tx("f")))
+        val t = el("table", emptyMap(), listOf(
+            el("thead", emptyMap(), listOf(el("tr", emptyMap(), listOf(h)))),
+            el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(a)))),
+            el("tfoot", emptyMap(), listOf(el("tr", emptyMap(), listOf(f))))
+        ))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertBox("H", r.boxOf(h), 0.0, 0.0, 8.0, 19.2)
+        assertBox("a", r.boxOf(a), 0.0, 19.2, 8.0, 19.2)
+        assertBox("f", r.boxOf(f), 0.0, 38.4, 8.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 0.0, 8.0, 57.6)
+    }
+
+    @Test
+    fun captionYColgroupSeSaltan() {
+        val td = el("td", emptyMap(), listOf(tx("x")))
+        val cap = el("caption", emptyMap(), listOf(tx("T")))
+        val cg = el("colgroup", emptyMap(), listOf(el("col"), el("col")))
+        val t = el("table", emptyMap(), listOf(cap, cg, el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertNull(r.boxOf(cap), "caption sin caja")
+        assertNull(r.boxOf(cg.children[0] as DomNode.Element), "col sin caja")
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun celdaEstiradaALaFila() {
+        val w = tx("aa bb")
+        val td1 = el("td", emptyMap(), listOf(w))
+        val td2 = el("td", emptyMap(), listOf(tx("b")))
+        val tr = el("tr", emptyMap(), listOf(td1, td2))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(tr))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "td:first-child{width:16px}", 200.0)
+        assertBox("fa", r.fragmentsOf(w)[0], 0.0, 0.0, 16.0, 19.2)
+        assertBox("fb", r.fragmentsOf(w)[1], 0.0, 19.2, 16.0, 19.2)
+        assertBox("td1", r.boxOf(td1), 0.0, 0.0, 16.0, 38.4)
+        assertBox("td2", r.boxOf(td2), 16.0, 0.0, 8.0, 38.4)
+    }
+
+    @Test
+    fun tablaEntreParrafos() {
+        val p1 = el("p", emptyMap(), listOf(tx("a")))
+        val p2 = el("p", emptyMap(), listOf(tx("b")))
+        val td = el("td", emptyMap(), listOf(tx("x")))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val b = el("body", emptyMap(), listOf(p1, t, p2))
+        val r = lay(doc(b), "", 200.0)
+        assertBox("p1", r.boxOf(p1), 0.0, 0.0, 200.0, 19.2)
+        assertBox("table", r.boxOf(t), 0.0, 19.2, 8.0, 19.2)
+        assertBox("p2", r.boxOf(p2), 0.0, 38.4, 200.0, 19.2)
+        assertVal("body h", r.boxOf(b)?.height, 57.6)
+    }
+
+    @Test
+    fun tablaMargin() {
+        val td = el("td", emptyMap(), listOf(tx("a")))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val b = el("body", emptyMap(), listOf(t))
+        val r = lay(doc(b), "table{margin:10px}", 200.0)
+        assertBox("table", r.boxOf(t), 10.0, 10.0, 8.0, 19.2)
+        assertVal("body h", r.boxOf(b)?.height, 39.2)
+    }
+
+    @Test
+    fun tdFueraDeTablaInline() {
+        val w = tx("x")
+        val td = el("td", emptyMap(), listOf(w))
+        val b = el("body", emptyMap(), listOf(td))
+        val r = lay(doc(b), "", 200.0)
+        assertBox("frag", r.fragmentsOf(w)[0], 0.0, 0.0, 8.0, 19.2)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun tablaAnidadaMideComoTexto() {
+        val wa = tx("a")
+        val wb = tx("b")
+        val innerTd = el("td", emptyMap(), listOf(wb))
+        val inner = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(innerTd))))))
+        val td = el("td", emptyMap(), listOf(wa, inner))
+        val t = el("table", emptyMap(), listOf(el("tbody", emptyMap(), listOf(el("tr", emptyMap(), listOf(td))))))
+        val r = lay(doc(el("body", emptyMap(), listOf(t))), "", 200.0)
+        assertBox("fa", r.fragmentsOf(wa)[0], 0.0, 0.0, 8.0, 19.2)
+        assertBox("fb", r.fragmentsOf(wb)[0], 16.0, 0.0, 8.0, 19.2)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 24.0, 19.2)
+        assertBox("inner", r.boxOf(inner), 16.0, 0.0, 8.0, 19.2)
+    }
+
+    @Test
+    fun displayTablePorCss() {
+        val td = el("td", emptyMap(), listOf(tx("x")))
+        val tr = el("tr", emptyMap(), listOf(td))
+        val dv = el("div", emptyMap(), listOf(tr))
+        val r = lay(doc(el("body", emptyMap(), listOf(dv))), "div{display:table}", 200.0)
+        assertBox("td", r.boxOf(td), 0.0, 0.0, 8.0, 19.2)
+        assertBox("div", r.boxOf(dv), 0.0, 0.0, 8.0, 19.2)
     }
 }

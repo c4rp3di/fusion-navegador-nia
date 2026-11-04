@@ -4,8 +4,8 @@ import nia.engine.css.CssComputedStyle
 import nia.engine.html.DomNode
 
 /**
- * Layout v2 (R0023): caja rectangular en coordenadas del documento.
- * Limitaciones v2: sin width/height fijados, sin float/flex/tablas,
+ * Layout v3 (R0084): caja rectangular en coordenadas del documento.
+ * Limitaciones v3: sin width/height fijados, sin float/flex (tablas en v3),
  * medicion monoespaciada (avance = fontSize/2), overflow permitido
  * (las palabras no se parten).
  */
@@ -75,6 +75,20 @@ class LayoutResult internal constructor(
  * fontSize (por linea se usa el maximo de sus palabras). Alineacion
  * heredada left/center/right. Los textos solo con espacios se ignoran;
  * el whitespace colapsa a un espacio.
+ *
+ * v3 (R0084, RES-0047) - tablas HTML (T032 v1): table es un display propio
+ * (por tag o por CSS, con table-row/table-row-group/table-cell);
+ * thead/tbody/tfoot se aplanan y cada tr aporta una fila de celdas td/th.
+ * Ancho de columna = maximo del preferido de sus celdas (width px/em/rem/%
+ * de la tabla, o ancho natural de una linea del contenido inline, mas el
+ * padding y border horizontales de la celda); la tabla estira a su width
+ * declarado repartiendo el resto a partes iguales y sin width queda en su
+ * ancho natural. Cada celda fluye su contenido inline con la misma
+ * envoltura greedy y se estira al alto de su fila. Exclusiones v1: sin
+ * colspan/rowspan, sin border-collapse/border-spacing, caption/col/
+ * colgroup a display none, el contenido de bloque de una celda no se
+ * estructura (una tabla anidada se mide como texto inline) y filas/celdas
+ * fuera de tabla se tratan como inline.
  */
 object LayoutEngine {
 
@@ -134,7 +148,7 @@ object LayoutEngine {
         private fun buildParents(node: DomNode) {
             if (node is DomNode.Element) {
                 val d = styleOf(node, "display")
-                val v = if (d == "none" || d == "block" || d == "inline") d else defaultDisplay(node.name)
+                val v = if (d == "none" || d == "block" || d == "inline" || d == "table" || d == "table-row" || d == "table-row-group" || d == "table-cell") d else defaultDisplay(node.name)
                 displays[node] = v
                 if (v == "none") noneElements.add(node)
             }
@@ -144,8 +158,15 @@ object LayoutEngine {
             }
         }
 
-        private fun defaultDisplay(name: String): String =
-            if (name.lowercase() in blockTags) "block" else "inline"
+        private fun defaultDisplay(name: String): String {
+            val n = name.lowercase()
+            if (n == "table") return "table"
+            if (n == "tr") return "table-row"
+            if (n == "thead" || n == "tbody" || n == "tfoot") return "table-row-group"
+            if (n == "td" || n == "th") return "table-cell"
+            if (n == "caption" || n == "col" || n == "colgroup") return "none"
+            return if (n in blockTags) "block" else "inline"
+        }
 
         private fun displayOf(el: DomNode.Element): String = displays[el] ?: defaultDisplay(el.name)
 
@@ -264,6 +285,115 @@ object LayoutEngine {
             return lineY - y
         }
 
+        private class TableGrid(val width: Double, val height: Double)
+
+        /** Filas de la tabla: pares (tr, celdas) aplanando thead/tbody/tfoot en orden del documento. */
+        private fun rowsOf(table: DomNode.Element): List<Pair<DomNode.Element, List<DomNode.Element>>> {
+            val rows = mutableListOf<Pair<DomNode.Element, List<DomNode.Element>>>()
+            fun walk(n: DomNode) {
+                for (c in childrenOf(n)) {
+                    if (c is DomNode.Element) {
+                        val dc = displayOf(c)
+                        if (dc == "table") continue
+                        if (dc == "table-row") {
+                            val cells = mutableListOf<DomNode.Element>()
+                            for (k in c.children) {
+                                if (k is DomNode.Element && displayOf(k) == "table-cell") cells.add(k)
+                            }
+                            if (cells.isNotEmpty()) rows.add(c to cells)
+                        } else {
+                            walk(c)
+                        }
+                    }
+                }
+            }
+            walk(table)
+            return rows
+        }
+
+        /** Ancho natural de una linea del contenido inline de la celda (medicion monoespaciada). */
+        private fun naturalWidthOf(cell: DomNode.Element): Double {
+            val words = mutableListOf<W>()
+            collectText(cell, words)
+            var w = 0.0
+            for (i in words.indices) {
+                if (i > 0) w += words[i].fs / 2
+                w += textWidth(words[i].text, words[i].fs)
+            }
+            return w
+        }
+
+        /** Preferido de la celda: width declarado (px/em/rem/% de la tabla) o natural, mas el cromo horizontal. */
+        private fun preferredWidthOf(cell: DomNode.Element, tableW: Double): Double {
+            val fs = fontSizeOf(cell)
+            val chrome = boxLen(cell, "padding-left", tableW, fs) +
+                boxLen(cell, "padding-right", tableW, fs) +
+                boxLen(cell, "border-left-width", tableW, fs) +
+                boxLen(cell, "border-right-width", tableW, fs)
+            val style = parseLen(styleOf(cell, "width"), fs, tableW)
+            return (style ?: naturalWidthOf(cell)) + chrome
+        }
+
+        /** Layout de la tabla: columnas por maximo preferido, filas apiladas, celdas estiradas al alto de fila. */
+        private fun layoutTable(table: DomNode.Element, x: Double, y: Double, contentW: Double): TableGrid {
+            val rows = rowsOf(table)
+            if (rows.isEmpty()) return TableGrid(0.0, 0.0)
+            var nCols = 0
+            for (r in rows) if (r.second.size > nCols) nCols = r.second.size
+            if (nCols == 0) return TableGrid(0.0, 0.0)
+            val cols = DoubleArray(nCols)
+            for (r in rows) {
+                val cells = r.second
+                for (ci in cells.indices) {
+                    val pref = preferredWidthOf(cells[ci], contentW)
+                    if (pref > cols[ci]) cols[ci] = pref
+                }
+            }
+            var natural = 0.0
+            for (c in cols) natural += c
+            val fs = fontSizeOf(table)
+            val styleW = parseLen(styleOf(table, "width"), fs, contentW)
+            val tableW = if (styleW != null && styleW > natural) styleW else natural
+            val extra = if (tableW > natural) (tableW - natural) / nCols else 0.0
+            val colX = DoubleArray(nCols)
+            var acc = x
+            for (ci in 0 until nCols) {
+                cols[ci] += extra
+                colX[ci] = acc
+                acc += cols[ci]
+            }
+            var curY = y
+            for (r in rows) {
+                val tr = r.first
+                val cells = r.second
+                var rowH = 0.0
+                val cellH = DoubleArray(cells.size)
+                for (ci in cells.indices) {
+                    val cell = cells[ci]
+                    val cfs = fontSizeOf(cell)
+                    val pt = boxLen(cell, "padding-top", cols[ci], cfs)
+                    val pb = boxLen(cell, "padding-bottom", cols[ci], cfs)
+                    val pl = boxLen(cell, "padding-left", cols[ci], cfs)
+                    val pr = boxLen(cell, "padding-right", cols[ci], cfs)
+                    val bt = boxLen(cell, "border-top-width", cols[ci], cfs)
+                    val bb = boxLen(cell, "border-bottom-width", cols[ci], cfs)
+                    val bl = boxLen(cell, "border-left-width", cols[ci], cfs)
+                    val br = boxLen(cell, "border-right-width", cols[ci], cfs)
+                    var innerW = cols[ci] - pl - pr - bl - br
+                    if (innerW < 0.0) innerW = 0.0
+                    val h = layoutInlineRun(cell.children.toList(), colX[ci] + bl + pl, curY + bt + pt, innerW, alignOf(cell))
+                    cellH[ci] = h + pt + pb + bt + bb
+                    if (cellH[ci] > rowH) rowH = cellH[ci]
+                }
+                for (ci in cells.indices) {
+                    blockBoxes[cells[ci]] = LayoutBox(colX[ci], curY, cols[ci], rowH)
+                }
+                blockBoxes[tr] = LayoutBox(x, curY, acc - x, rowH)
+                curY += rowH
+            }
+            return TableGrid(acc - x, curY - y)
+        }
+
         private fun layoutContainer(node: DomNode, x: Double, y: Double, width: Double): Double {
             val align = alignOf(node)
             var cur = y
@@ -277,8 +407,34 @@ object LayoutEngine {
                 if (child is DomNode.Element) {
                     val d = displayOf(child)
                     if (d == "none") continue
-                    if (d == "inline") {
+                    if (d == "inline" || d == "table-cell" || d == "table-row" || d == "table-row-group") {
                         run.add(child)
+                        continue
+                    }
+                    if (d == "table") {
+                        if (run.isNotEmpty()) {
+                            cur += layoutInlineRun(run.toList(), x, cur, width, align)
+                            run.clear()
+                        }
+                        val fs = fontSizeOf(child)
+                        val mt = boxLen(child, "margin-top", width, fs)
+                        val mr = boxLen(child, "margin-right", width, fs)
+                        val mb = boxLen(child, "margin-bottom", width, fs)
+                        val ml = boxLen(child, "margin-left", width, fs)
+                        val pt = boxLen(child, "padding-top", width, fs)
+                        val pr = boxLen(child, "padding-right", width, fs)
+                        val pb = boxLen(child, "padding-bottom", width, fs)
+                        val pl = boxLen(child, "padding-left", width, fs)
+                        val bt = boxLen(child, "border-top-width", width, fs)
+                        val br = boxLen(child, "border-right-width", width, fs)
+                        val bb = boxLen(child, "border-bottom-width", width, fs)
+                        val bl = boxLen(child, "border-left-width", width, fs)
+                        var cw = width - ml - mr - bl - br - pl - pr
+                        if (cw < 0.0) cw = 0.0
+                        val grid = layoutTable(child, x + ml + bl + pl, cur + mt + bt + pt, cw)
+                        val bh = grid.height + pt + pb + bt + bb
+                        blockBoxes[child] = LayoutBox(x + ml, cur + mt, grid.width + bl + br + pl + pr, bh)
+                        cur += mt + bh + mb
                         continue
                     }
                     if (run.isNotEmpty()) {
