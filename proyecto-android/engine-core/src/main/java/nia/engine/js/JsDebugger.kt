@@ -11,17 +11,19 @@ import java.util.concurrent.TimeUnit
  * Snapshot de una pausa del debugger (T028, RES-0034): solo datos, sin
  * objetos vivos del motor. Los scopes van del mas interno al global con
  * el dump canonico de JsRuntime por binding (nombres ordenados); los
- * scopes vacios se omiten.
+ * scopes vacios se omiten. El stack (T028 v4) va del frame mas interno
+ * al global con formato "nombre linea".
  */
 class DebugSnapshot(
     val line: Int,
     val reason: String,
     val scopes: List<String>,
-    val depth: Int
+    val depth: Int,
+    val stack: List<String> = emptyList()
 ) {
     override fun toString(): String =
         "DebugSnapshot(line=" + line + ",reason=" + reason + ",depth=" + depth +
-            ",scopes=" + scopes.joinToString(";") + ")"
+            ",scopes=" + scopes.joinToString(";") + ",stack=" + stack.joinToString(";") + ")"
 }
 
 /**
@@ -51,6 +53,10 @@ class DebugSnapshot(
  * es verdadera; un throw de la condicion NO pausa, documentado) y el
  * watchpoint pausa cuando el dump canonico de la expresion cambia
  * entre sentencias (la primera observacion fija la linea base).
+ * T028 v4 (R0086, RES-0048): el snapshot gana el call stack real de
+ * la pila de llamadas sincronas que mantiene el interprete (frames
+ * "nombre linea" del mas interno al global) y el evento del inspector
+ * publica el payload stack.
  * Sin UI (la integracion con DevTools llega en otra fase).
  */
 class JsDebugger(
@@ -206,7 +212,7 @@ class JsDebugger(
             }
             e = e.parent
         }
-        val snap = DebugSnapshot(line, reason, scopes, depth)
+        val snap = DebugSnapshot(line, reason, scopes, depth, stackOf(line))
         lastSnapshot = snap
         if (session != null && context != null) {
             val payload = LinkedHashMap<String, String>()
@@ -214,9 +220,25 @@ class JsDebugger(
             payload["reason"] = reason
             payload["depth"] = depth.toString()
             payload["scopes"] = scopes.joinToString(";")
+            payload["stack"] = snap.stack.joinToString(";")
             session.custom(context, "debugger", EventLevel.DEBUG, payload)
         }
         throw JsAbort(JsAbortReason.DEBUG_PAUSE)
+    }
+
+    /** Call stack (T028 v4): frames "nombre linea" del mas interno al
+     * global sobre la pila de llamadas sincronas del interprete; la
+     * linea de cada frame es la sentencia del llamador en curso y la
+     * del mas interno la de la pausa. */
+    private fun stackOf(line: Int): List<String> {
+        val frames = JsInterpreter.callStack()
+        val out = ArrayList<String>(frames.size + 1)
+        for (i in frames.indices.reversed()) {
+            val at = if (i == frames.size - 1) line else lineOf(frames[i + 1].callStart)
+            out.add((frames[i].name ?: "(anonymous)") + " " + at)
+        }
+        out.add("(global) " + if (frames.isEmpty()) line else lineOf(frames[0].callStart))
+        return out
     }
 
     /** Linea 1-based del offset dado sobre los inicios de linea precomputados. */
@@ -283,6 +305,9 @@ internal sealed class DebugCmd {
  * watchpoint cuando el dump canonico de la expresion cambia entre
  * sentencias; la primera observacion fija la linea base sin pausa).
  *
+ * T028 v4 (R0086, RES-0048): el snapshot de la pausa gana el call stack
+ * real (frames "nombre linea" del mas interno al global) y el evento
+ * del inspector publica el payload stack.
  * Exclusiones v3: sin pausa dentro de runners async/generators,
  * inspect/condiciones/watchpoints pueden mutar el entorno (efectos de
  * un REPL real, documentado), una sesion por programa (sin reattach) y
@@ -596,7 +621,7 @@ class DebugSession(
             }
             e = e.parent
         }
-        return DebugSnapshot(line, reason, scopes, depth)
+        return DebugSnapshot(line, reason, scopes, depth, stackOf(line))
     }
 
     /** Evento del inspector en la pausa (redactado en la ingesta, como v1). */
@@ -607,8 +632,24 @@ class DebugSession(
             payload["reason"] = snap.reason
             payload["depth"] = snap.depth.toString()
             payload["scopes"] = snap.scopes.joinToString(";")
+            payload["stack"] = snap.stack.joinToString(";")
             session.custom(context, "debugger", EventLevel.DEBUG, payload)
         }
+    }
+
+    /** Call stack (T028 v4): frames "nombre linea" del mas interno al
+     * global sobre la pila de llamadas sincronas del interprete; la
+     * linea de cada frame es la sentencia del llamador en curso y la
+     * del mas interno la de la pausa. */
+    private fun stackOf(line: Int): List<String> {
+        val frames = JsInterpreter.callStack()
+        val out = ArrayList<String>(frames.size + 1)
+        for (i in frames.indices.reversed()) {
+            val at = if (i == frames.size - 1) line else lineOf(frames[i + 1].callStart)
+            out.add((frames[i].name ?: "(anonymous)") + " " + at)
+        }
+        out.add("(global) " + if (frames.isEmpty()) line else lineOf(frames[0].callStart))
+        return out
     }
 
     /** Profundidad de pila: fronteras fnScope de la cadena de Env. */

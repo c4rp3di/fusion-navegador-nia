@@ -19,6 +19,8 @@ import nia.engine.inspector.InspectorSession
  * activo y desmontaje del hook al terminar. La API es PROPIA del motor:
  * las expectativas vienen del diseno de la ficha RES-0034 (pausa
  * inmediata sin bloquear, reanudacion fuera de v1).
+ * T028 v4 (R0086, RES-0048): call stack real en la pausa (frames
+ * "nombre linea" del mas interno al global) en ambas APIs.
  */
 class JsDebuggerTest {
 
@@ -688,6 +690,153 @@ class JsDebuggerTest {
             p = esperaPausa(s, n)
             assertEquals(3, p.line)
             assertEquals("watchpoint", p.reason)
+            n = n + 1L
+            s.resume()
+            done(s)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun callStackAnidadoConBreakpoint() {
+        val d = JsDebugger(
+            "function f() {\nvar x = 1;\n}\nfunction g() {\nf();\n}\ng();"
+        ).breakOn(2)
+        d.evaluate()
+        val s = snap(d)
+        assertEquals(2, s.line)
+        assertEquals(listOf("f 2", "g 5", "(global) 7"), s.stack)
+        assertEquals(2, s.depth)
+    }
+
+    @Test
+    fun callStackEnTopLevelSoloGlobal() {
+        val d = JsDebugger("var a = 1;\nvar b = 2;").breakOn(2)
+        d.evaluate()
+        val s = snap(d)
+        assertEquals(listOf("(global) 2"), s.stack)
+        assertEquals(1, s.depth)
+    }
+
+    @Test
+    fun callStackArrowAnonimo() {
+        val d = JsDebugger(
+            "var h = (x) => {\nvar y = x;\nreturn y;\n}\nh(1);"
+        ).breakOn(2)
+        d.evaluate()
+        val s = snap(d)
+        assertEquals(listOf("(anonymous) 2", "(global) 5"), s.stack)
+    }
+
+    @Test
+    fun callStackMetodoDeClase() {
+        val d = JsDebugger(
+            "class C {\nm(v) {\nvar w = v;\nreturn w;\n}\n}\nnew C().m(7);"
+        ).breakOn(3)
+        d.evaluate()
+        val s = snap(d)
+        assertEquals(listOf("m 3", "(global) 7"), s.stack)
+    }
+
+    @Test
+    fun callStackRecursionConBreakpointCondicional() {
+        val d = JsDebugger(
+            "function f(n) {\nvar k = n;\nif (n > 1) {\nreturn f(n - 1);\n}\nreturn k;\n}\nf(3);"
+        ).breakOn(6, "k == 1")
+        d.evaluate()
+        val s = snap(d)
+        assertEquals(listOf("f 6", "f 4", "f 4", "(global) 8"), s.stack)
+        assertEquals(2, s.depth)
+    }
+
+    @Test
+    fun snapshotToStringIncluyeElStack() {
+        val d = JsDebugger("function f() {\nvar x = 1;\n}\nf();").breakOn(2)
+        d.evaluate()
+        val s = snap(d)
+        assertTrue(s.toString().contains("stack=f 2;(global) 4"))
+    }
+
+    @Test
+    fun sesionStackConStepOverEntreFunciones() {
+        val s = DebugSession(
+            "function f() {\nvar x = 1;\nvar y = 2;\n}\nfunction g() {\nf();\nvar z = 3;\n}\ng();"
+        ).breakOn(2).start()
+        var n = 0L
+        try {
+            var p = esperaPausa(s, n)
+            assertEquals(listOf("f 2", "g 6", "(global) 9"), p.stack)
+            n = n + 1L
+            s.stepOver()
+            p = esperaPausa(s, n)
+            assertEquals(3, p.line)
+            assertEquals(listOf("f 3", "g 6", "(global) 9"), p.stack)
+            n = n + 1L
+            s.stepOver()
+            p = esperaPausa(s, n)
+            assertEquals(7, p.line)
+            assertEquals(listOf("g 7", "(global) 9"), p.stack)
+            n = n + 1L
+            s.resume()
+            val r = done(s)
+            assertFalse(r.interrupted)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun sesionStackConWatchpointDentroDeFuncion() {
+        val s = DebugSession(
+            "function f() {\nvar x = 1;\nx = 2;\nvar y = 3;\n}\nf();"
+        ).watch("x").start()
+        var n = 0L
+        try {
+            var p = esperaPausa(s, n)
+            assertEquals("watchpoint", p.reason)
+            assertEquals(3, p.line)
+            assertEquals(listOf("f 3", "(global) 6"), p.stack)
+            n = n + 1L
+            s.resume()
+            p = esperaPausa(s, n)
+            assertEquals(4, p.line)
+            assertEquals(listOf("f 4", "(global) 6"), p.stack)
+            n = n + 1L
+            s.resume()
+            done(s)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun sesionInspectNoTocaElStackDeLaPausa() {
+        val s = DebugSession(
+            "function f() {\nvar x = 1;\nvar y = 2;\n}\nf();"
+        ).breakOn(3).start()
+        var n = 0L
+        try {
+            val p = esperaPausa(s, n)
+            n = n + 1L
+            assertEquals("1", s.inspect("x"))
+            assertEquals(listOf("f 3", "(global) 5"), p.stack)
+            assertEquals(listOf("f 3", "(global) 5"), s.lastSnapshot?.stack)
+            s.resume()
+            done(s)
+        } finally {
+            liberar(s)
+        }
+    }
+
+    @Test
+    fun sesionStackEnTopLevelSoloGlobal() {
+        val s = DebugSession("var a = 1;\nvar b = 2;").breakOn(2).start()
+        var n = 0L
+        try {
+            val p = esperaPausa(s, n)
+            assertEquals(listOf("(global) 2"), p.stack)
+            assertEquals(1, p.depth)
             n = n + 1L
             s.resume()
             done(s)

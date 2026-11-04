@@ -23,6 +23,8 @@ import nia.engine.net.FetchTransport
 import nia.engine.net.TransportFailure
 import nia.engine.net.TransportResult
 import nia.contracts.CancellationToken
+import nia.engine.js.DebugSession
+import nia.engine.js.JsInterpreter
 
 /**
  * T017 v2 (R0041, RES-0027): panel DevTools propio sobre el modelo del
@@ -45,6 +47,9 @@ import nia.contracts.CancellationToken
  * del motor (NetworkPanel sobre FetchManager, redaccion de secretos en
  * la ingesta) alimentado por una demo determinista sin red en el
  * dispositivo.
+ * T028 v4 (R0086, RES-0048): seccion DEBUGGER del reporte: la sesion de
+ * debug del motor (DebugSession con reanudacion real) sobre una demo
+ * determinista sin red, con el call stack real de la pausa.
  */
 class DevToolsActivity : Activity() {
 
@@ -108,6 +113,9 @@ class DevToolsActivity : Activity() {
         sb.append('\n')
         sb.append("== RED (").append(net.count()).append(" entradas, secretos redactados) ==").append('\n')
         sb.append(net.summary())
+        sb.append('\n')
+        sb.append("== DEBUGGER (demo determinista, reanudacion real) ==").append('\n')
+        sb.append(demoDebugger())
         val sel = DevToolsState.selectedNodeId
         if (sel != null) {
             val h = model.handleWithNodeId(sel)
@@ -142,6 +150,30 @@ class DevToolsActivity : Activity() {
         panel.fetch(FetchRequest(2, "GET", "http://demo.local/falta?token=demo", emptyMap(), null))
         panel.fetch(FetchRequest(3, "GET", "http://demo.local/roto", emptyMap(), null))
         return panel
+    }
+
+    /** Demo del debugger (T028 v4): DebugSession con reanudacion real
+     * sobre un programa fijo, sin red en el dispositivo. */
+    private fun demoDebugger(): String {
+        val src = "function f() {\n  var x = 1\n}\nfunction g() {\n  f()\n}\ng()"
+        val s = DebugSession(src).breakOn(2).start()
+        val sb = StringBuilder()
+        try {
+            val p = s.awaitPause()
+            if (p != null) {
+                sb.append("pausa en linea ").append(p.line).append(" (").append(p.reason).append(")\n")
+                sb.append("stack (interno primero):\n")
+                for (fr in p.stack) sb.append("  ").append(fr).append('\n')
+                s.resume()
+            }
+            if (s.awaitDone()) {
+                val r = s.result
+                if (r != null) sb.append("resultado: ").append(JsInterpreter.dumpResult(r)).append('\n')
+            }
+        } finally {
+            s.stop()
+        }
+        return sb.toString()
     }
 
     private fun appendNodeReport(sb: StringBuilder, doc: DomDocument, model: DevToolsModel, handle: DomHandle) {

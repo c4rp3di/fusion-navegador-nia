@@ -427,24 +427,29 @@ object JsInterpreter {
     }
 
     private fun runFunBody(f: JsFun, thisArg: JsValue, args: List<JsValue>): JsValue {
-        val env = Env(f.env, true)
-        if (!f.isArrow) {
-            env.declare("this", thisArg)
-            if (f.name != null) env.declare(f.name, f)
+        callFrames.addLast(JsCallFrame(f.name, curStmtStart))
+        try {
+            val env = Env(f.env, true)
+            if (!f.isArrow) {
+                env.declare("this", thisArg)
+                if (f.name != null) env.declare(f.name, f)
+            }
+            for (j in f.params.indices) {
+                val p = f.params[j]
+                var v: JsValue = if (j < args.size) args[j] else JsUndefined
+                if (v is JsUndefined && p.def != null) v = evalExpr(p.def, env)
+                if (p.pat != null) bindDecl(p.pat, v, "let", env) else env.declare(p.name, v)
+            }
+            if (f.isArrow && f.bodyExpr != null) return evalExpr(f.bodyExpr, env)
+            val b = f.body
+            if (b == null) return JsUndefined
+            hoist(b.statements, env)
+            val c = runBlockStatements(b.statements, env, emptyList())
+            if (c.type == CType.RETURN) return c.value ?: JsUndefined
+            return JsUndefined
+        } finally {
+            callFrames.removeLast()
         }
-        for (j in f.params.indices) {
-            val p = f.params[j]
-            var v: JsValue = if (j < args.size) args[j] else JsUndefined
-            if (v is JsUndefined && p.def != null) v = evalExpr(p.def, env)
-            if (p.pat != null) bindDecl(p.pat, v, "let", env) else env.declare(p.name, v)
-        }
-        if (f.isArrow && f.bodyExpr != null) return evalExpr(f.bodyExpr, env)
-        val b = f.body
-        if (b == null) return JsUndefined
-        hoist(b.statements, env)
-        val c = runBlockStatements(b.statements, env, emptyList())
-        if (c.type == CType.RETURN) return c.value ?: JsUndefined
-        return JsUndefined
     }
 
     private fun evalArgs(argExprs: List<JsExpr>, env: Env): List<JsValue> {
@@ -751,6 +756,7 @@ object JsInterpreter {
 
     private fun runStatement(s: JsStmt, env: Env, labels: List<String>): Completion {
         JsQuotas.tick()
+        curStmtStart = s.start
         val dbgHook = debugHook
         if (dbgHook != null) dbgHook(s, env)
         when (s) {
@@ -1947,6 +1953,21 @@ object JsInterpreter {
      * null cuando no hay debugger activo.
      */
     internal var debugHook: ((JsStmt, Env) -> Unit)? = null
+
+    // ---- Call stack del debugger (T028 v4, RES-0048) ----
+
+    /** Frame de llamada activa (T028 v4): nombre de la funcion y offset
+     * de la sentencia del llamador en curso (lo fija runStatement). */
+    internal class JsCallFrame(val name: String?, val callStart: Int)
+
+    /** Offset de la sentencia en curso; lo leen los frames de llamada. */
+    private var curStmtStart = -1
+
+    /** Pila de llamadas sincronas activas; vacia en top-level. */
+    private val callFrames = ArrayDeque<JsCallFrame>()
+
+    /** Copia del call stack activo (mas interno primero) para el debugger. */
+    internal fun callStack(): List<JsCallFrame> = callFrames.toList()
 
     /**
      * Evalua una expresion en el entorno pausado del debugger (T028 v2):
