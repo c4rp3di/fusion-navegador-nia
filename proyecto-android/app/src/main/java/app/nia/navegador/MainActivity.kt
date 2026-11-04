@@ -8,6 +8,11 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.TextView
+import nia.contracts.WallClock
+import nia.engine.media.MediaEngine
+import nia.engine.media.MediaSource
+import nia.engine.media.MediaState
 
 /**
  * NIA (T016, R0021): la actividad delega en PaintView, que renderiza la
@@ -25,10 +30,23 @@ import android.widget.LinearLayout
  * text/html) lee el archivo y PaintView lo parsea con el motor (los <style>
  * del documento se suman al CSS de la demo); Guardar (ACTION_CREATE_DOCUMENT)
  * escribe el HTML fuente cargado, no el DOM mutado (exclusion v1).
+ *
+ * T036 v1 (R0093, RES-0051): audio con el nucleo propio MediaEngine
+ * (nia.engine.media, estados y seek contra reloj) sobre el MediaPlayer de
+ * plataforma via PlatformMediaBackend (sin dependencias nuevas). Botones
+ * Audio (SAF audio/*), Audio URL (demo https), Play/Pausa y seek -10s/+10s
+ * con posicion y estado en un TextView. Exclusiones v1: solo audio (sin
+ * video), sin audio-element del DOM ni HTMLMediaElement JS (T039), sin subs
+ * ni fullscreen (v2+).
  */
 class MainActivity : Activity() {
 
     private lateinit var frame: FrameLayout
+    private lateinit var mediaText: TextView
+    private val mediaClock = object : WallClock {
+        override fun nowMillis(): Long = System.currentTimeMillis()
+    }
+    private val media = MediaEngine(PlatformMediaBackend(this), mediaClock)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +63,16 @@ class MainActivity : Activity() {
         abrir.text = "Abrir"
         val guardar = Button(this)
         guardar.text = "Guardar"
+        val audio = Button(this)
+        audio.text = "Audio"
+        val audioUrl = Button(this)
+        audioUrl.text = "Audio URL"
+        val playPause = Button(this)
+        playPause.text = "Play/Pausa"
+        val menos10 = Button(this)
+        menos10.text = "-10s"
+        val mas10 = Button(this)
+        mas10.text = "+10s"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -56,6 +84,11 @@ class MainActivity : Activity() {
         buttons.addView(demo)
         buttons.addView(abrir)
         buttons.addView(guardar)
+        buttons.addView(audio)
+        buttons.addView(audioUrl)
+        buttons.addView(playPause)
+        buttons.addView(menos10)
+        buttons.addView(mas10)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -76,6 +109,26 @@ class MainActivity : Activity() {
             i.putExtra(Intent.EXTRA_TITLE, "pagina.html")
             startActivityForResult(i, REQUEST_GUARDAR)
         }
+        audio.setOnClickListener {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.setType("audio/*")
+            startActivityForResult(i, REQUEST_AUDIO)
+        }
+        audioUrl.setOnClickListener {
+            media.load(MediaSource.Remote(DEMO_AUDIO_URL), autoplay = true)
+        }
+        playPause.setOnClickListener { media.playPause() }
+        menos10.setOnClickListener { media.seekBy(-10000) }
+        mas10.setOnClickListener { media.seekBy(10000) }
+        mediaText = TextView(this)
+        frame.addView(mediaText, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START
+        ))
+        media.addListener { refreshMedia() }
+        refreshMedia()
         setContentView(frame)
     }
 
@@ -97,10 +150,26 @@ class MainActivity : Activity() {
             } catch (e: java.io.IOException) {
             }
         }
+        if (requestCode == REQUEST_AUDIO && resultCode == RESULT_OK) {
+            media.load(MediaSource.Local(uri.toString()), autoplay = true)
+        }
+    }
+
+    /** T036 v1: posicion/duracion/estado del nucleo multimedia en la UI
+     * (se re-agenda mientras se reproduce). */
+    private fun refreshMedia() {
+        val texto = "" + media.position() / 1000 + "s / " + media.duration() / 1000 +
+            "s - " + media.state().name.lowercase()
+        mediaText.text = texto
+        if (media.state() == MediaState.PLAYING) {
+            mediaText.postDelayed(this::refreshMedia, 500)
+        }
     }
 
     companion object {
         private const val REQUEST_ABRIR = 41
         private const val REQUEST_GUARDAR = 42
+        private const val REQUEST_AUDIO = 43
+        private const val DEMO_AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
     }
 }
