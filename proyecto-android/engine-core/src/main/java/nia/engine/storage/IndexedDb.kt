@@ -219,6 +219,25 @@ class IdbDatabase internal constructor(
         }
         return total
     }
+
+    /** Stores comprometidos para persistencia (T033 v3, RES-0044). */
+    internal fun storesSnapshot(): Map<String, Map<String, String>> {
+        val out = LinkedHashMap<String, Map<String, String>>()
+        for ((name, data) in stores) {
+            out[name] = LinkedHashMap(data)
+        }
+        return out
+    }
+
+    /** Restaura stores persistidos (T033 v3); sustituye el contenido. */
+    internal fun restoreStores(data: Map<String, Map<String, String>>, paths: Map<String, String?>) {
+        stores.clear()
+        for ((name, entries) in data) {
+            stores[name] = LinkedHashMap(entries)
+        }
+        keyPaths.clear()
+        keyPaths.putAll(paths)
+    }
 }
 
 /**
@@ -318,4 +337,38 @@ class IndexedDb(private val quotaBytes: Long = 10_000_000L) {
         is Origin.Tuple -> origin.scheme + "://" + origin.host + ":" + origin.port
         is Origin.Opaque -> "opaque[" + origin.reason + "]"
     }
+
+    /** Snapshot plano de todas las bases para persistencia (T033 v3, RES-0044). */
+    internal fun snapshotDatabases(): List<IdbDbSnapshot> {
+        val out = ArrayList<IdbDbSnapshot>()
+        for ((key, p) in partitions) {
+            for (db in p.dbs.values) {
+                out.add(IdbDbSnapshot(key, db.name, db.version, db.storesSnapshot(), LinkedHashMap(db.keyPaths)))
+            }
+        }
+        return out
+    }
+
+    /** Particion por clave compuesta de persistencia (T033 v3). */
+    internal fun ensurePartition(key: String): Partition =
+        partitions.getOrPut(key) { Partition(quotaBytes) }
+
+    /** Restaura bases persistidas con merge por particion (T033 v3). */
+    internal fun restoreDatabases(snapshots: List<IdbDbSnapshot>) {
+        for (s in snapshots) {
+            val p = ensurePartition(s.partitionKey)
+            val db = p.dbs.getOrPut(s.name) { IdbDatabase(s.name, s.version, p) }
+            db.version = s.version
+            db.restoreStores(s.stores, s.keyPaths)
+        }
+    }
 }
+
+/** Snapshot de una base para la persistencia en disco (T033 v3, RES-0044). */
+internal class IdbDbSnapshot(
+    internal val partitionKey: String,
+    internal val name: String,
+    internal val version: Long,
+    internal val stores: Map<String, Map<String, String>>,
+    internal val keyPaths: Map<String, String?>,
+)

@@ -54,6 +54,15 @@ class StorageArea(
         return total
     }
 
+    /** Entradas del area para persistencia (T033 v3, RES-0044). */
+    internal fun entriesSnapshot(): Map<String, String> = LinkedHashMap(values)
+
+    /** Restaura entradas persistidas (T033 v3); preserva el orden de insercion. */
+    internal fun restoreEntries(entries: Map<String, String>) {
+        values.clear()
+        values.putAll(entries)
+    }
+
     companion object {
 
         internal fun utf8Bytes(s: String): Long = s.toByteArray(Charsets.UTF_8).size.toLong()
@@ -115,4 +124,22 @@ class StorageManager(private val defaultQuotaBytes: Long = 5_000_000L) {
         is Origin.Tuple -> origin.scheme + "://" + origin.host + ":" + origin.port
         is Origin.Opaque -> "opaque[" + origin.reason + "]"
     }
+
+    /** Snapshot de todas las areas para persistencia (T033 v3, RES-0044). */
+    internal fun snapshotAreas(): List<StorageAreaSnapshot> =
+        areas.values.map { StorageAreaSnapshot(it.scope, it.partitionKey, it.entriesSnapshot()) }
+
+    /** Restaura areas persistidas con merge por partitionKey (T033 v3). */
+    internal fun restoreAreas(snapshots: List<StorageAreaSnapshot>) {
+        for (s in snapshots) {
+            areas.getOrPut(s.partitionKey) { StorageArea(s.scope, s.partitionKey, defaultQuotaBytes) }.restoreEntries(s.entries)
+        }
+    }
 }
+
+/** Snapshot de un area para la persistencia en disco (T033 v3, RES-0044). */
+internal class StorageAreaSnapshot(
+    internal val scope: StorageScope,
+    internal val partitionKey: String,
+    internal val entries: Map<String, String>,
+)
