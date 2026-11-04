@@ -153,6 +153,8 @@ jobs:
             engine-core/src/test/java/nia/engine/profile/ProfileTest.kt \
             engine-core/src/main/java/nia/engine/profile/Fire.kt \
             engine-core/src/test/java/nia/engine/profile/FireTest.kt \
+            engine-core/src/main/java/nia/engine/qa/SiteMatrix.kt \
+            engine-core/src/test/java/nia/engine/qa/SiteMatrixTest.kt \
             engine-core/src/main/java/nia/engine/torrent/Bencode.kt \
             engine-core/src/main/java/nia/engine/torrent/Torrent.kt \
             engine-core/src/test/java/nia/engine/torrent/TorrentTest.kt \

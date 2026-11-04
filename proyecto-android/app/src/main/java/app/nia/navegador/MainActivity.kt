@@ -37,6 +37,7 @@ import nia.engine.net.TransportResult
 import nia.engine.profile.BrowserProfile
 import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
+import nia.engine.qa.GithubGmailMatrix
 import nia.engine.torrent.Benc
 import nia.engine.torrent.Bencode
 import nia.engine.torrent.MagnetParser
@@ -140,6 +141,14 @@ import java.util.concurrent.Executors
  * error seguros, sin credenciales). Boton Subs OS: demo del flujo
  * buscar, descargar y pista con un transporte falso enlatado SIN
  * red; la red real usa HttpTransport con la Api-Key del usuario.
+ *
+ * T038 v1 (R0118, RES-0062): matriz P7 GitHub/Gmail del nucleo
+ * (ADR-012): catalogo fechado de acciones objetivo (repo, issue,
+ * login, bandeja, hilo, busqueda, redaccion y leidos) ejecutadas
+ * contra un corpus enlatado con transporte falso SIN red, con
+ * limites fechados y las acciones excluidas reservadas al smoke
+ * real (T067). Boton Matriz GH/Gmail: corre las acciones completas
+ * y muestra el informe.
  */
 class MainActivity : Activity() {
 
@@ -216,6 +225,8 @@ class MainActivity : Activity() {
         subsTorrentBtn.text = "Subs torrent"
         val subsOsBtn = Button(this)
         subsOsBtn.text = "Subs OS"
+        val matrizBtn = Button(this)
+        matrizBtn.text = "Matriz GH/Gmail"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -247,6 +258,7 @@ class MainActivity : Activity() {
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
         buttons.addView(subsOsBtn)
+        buttons.addView(matrizBtn)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -339,6 +351,9 @@ class MainActivity : Activity() {
         }
         subsOsBtn.setOnClickListener {
             runSubsOsDemo()
+        }
+        matrizBtn.setOnClickListener {
+            runMatrizDemo()
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -709,6 +724,43 @@ class MainActivity : Activity() {
         }
     }
 
+    /** T038 v1: demo de la matriz GitHub/Gmail SIN red (transporte falso
+     * enlatado): corre las acciones completas del corpus y muestra el
+     * informe con el resumen de limites fechados. */
+    private fun runMatrizDemo() {
+        val matriz = GithubGmailMatrix(TransporteMatriz(), mediaClock)
+        val builder = StringBuilder()
+        for (r in matriz.correr()) {
+            if (builder.isNotEmpty()) builder.append('\n')
+            builder.append(r.action.id).append(' ').append(if (r.ok) "OK" else "FALLO")
+                .append(' ').append(r.detail)
+        }
+        builder.append('\n').append(matriz.resumen())
+        AlertDialog.Builder(this)
+            .setTitle("Matriz GH/Gmail")
+            .setMessage(builder.toString())
+            .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
+    /** Transporte falso de la demo Matriz GH/Gmail: respuestas enlatadas
+     * del corpus SIN red (el smoke con red real es T067). */
+    private class TransporteMatriz : FetchTransport {
+        override fun fetch(request: FetchRequest, token: CancellationToken): TransportResult {
+            val cuerpo = when {
+                request.url.contains("issue-42/c1") -> C1_DEMO
+                request.url.contains("issue-42/c2") -> C2_DEMO
+                request.url.contains("/gh/session") -> SESSION_DEMO
+                request.url.contains("/gm/hilo-7") -> HILO_DEMO
+                request.url.contains("/gm/search") -> BUSQUEDA_GM_DEMO
+                else -> ""
+            }
+            return TransportResult.Success(
+                FetchResponse(200, emptyMap(), cuerpo.toByteArray(Charsets.UTF_8))
+            )
+        }
+    }
+
     companion object {
         private const val REQUEST_ABRIR = 41
         private const val REQUEST_GUARDAR = 42
@@ -721,5 +773,10 @@ class MainActivity : Activity() {
         private const val BUSQUEDA_DEMO = "{\"total\":2,\"data\":[{\"id\":\"111\",\"type\":\"subtitle\",\"attributes\":{\"language\":\"es\",\"release\":\"Gran.Hotel.S01E01\",\"files\":[{\"file_id\":9001,\"cd_number\":1}]}},{\"id\":\"222\",\"type\":\"subtitle\",\"attributes\":{\"language\":\"en\",\"release\":\"Gran.Hotel.S01E01.720p\",\"files\":[{\"file_id\":9002,\"cd_number\":1}]}}]}"
         private const val DESCARGA_DEMO = "{\"link\":\"https://cdn.demo/gran-hotel.srt\",\"file_name\":\"gran-hotel.srt\"}"
         private const val SRT_DEMO = "1\n00:00:01,000 --> 00:00:04,000\nGran hotel\n"
+        private const val C1_DEMO = "Ana:Funciona en mi movil"
+        private const val C2_DEMO = "Luis:Revisado, merge"
+        private const val SESSION_DEMO = "OK"
+        private const val HILO_DEMO = "Ana:Presupuesto Q4"
+        private const val BUSQUEDA_GM_DEMO = "1"
     }
 }
