@@ -795,6 +795,11 @@ class JsDebuggerTest {
         try {
             var p = esperaPausa(s, n)
             assertEquals("watchpoint", p.reason)
+            assertEquals(2, p.line)
+            assertEquals(listOf("f 2", "(global) 6"), p.stack)
+            n = n + 1L
+            s.resume()
+            p = esperaPausa(s, n)
             assertEquals(3, p.line)
             assertEquals(listOf("f 3", "(global) 6"), p.stack)
             n = n + 1L
