@@ -13,18 +13,27 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import nia.contracts.CancellationToken
 import nia.contracts.WallClock
+import nia.contracts.valueOrNull
 import nia.engine.media.MediaEngine
 import nia.engine.media.MediaSource
 import nia.engine.download.DownloadEngine
 import nia.engine.download.DownloadSink
 import nia.engine.download.DownloadState
 import nia.engine.media.MediaState
+import nia.engine.media.OpenSubtitlesClient
+import nia.engine.media.OpenSubtitlesConfig
 import nia.engine.media.SubtitleFormatException
 import nia.engine.media.SubtitleManager
 import nia.engine.media.SubtitleParser
 import nia.engine.media.SubtitleTrack
 import nia.engine.media.TorrentSubtitles
+import nia.engine.net.FetchManager
+import nia.engine.net.FetchRequest
+import nia.engine.net.FetchResponse
+import nia.engine.net.FetchTransport
+import nia.engine.net.TransportResult
 import nia.engine.profile.BrowserProfile
 import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
@@ -122,6 +131,15 @@ import java.util.concurrent.Executors
  * seleccion de las pistas del torrent sintetico y las enchufa al
  * overlay de subs existente. Exclusiones v1: sin estilos de cue, sin
  * deteccion de codificacion y sin subs remotos (T050).
+ *
+ * T050 v1 (R0116, RES-0061, ADR-017): proveedor OpenSubtitles de
+ * nucleo puro JVM sobre FetchManager (transporte inyectable): busqueda
+ * por consulta e idiomas, descarga del archivo y cuenta configurable
+ * (apiKey siempre; usuario y clave opcionales con login Bearer
+ * perezoso); las credenciales nunca salen del proceso (mensajes de
+ * error seguros, sin credenciales). Boton Subs OS: demo del flujo
+ * buscar, descargar y pista con un transporte falso enlatado SIN
+ * red; la red real usa HttpTransport con la Api-Key del usuario.
  */
 class MainActivity : Activity() {
 
@@ -196,6 +214,8 @@ class MainActivity : Activity() {
         streamDemo.text = "Stream torrent"
         val subsTorrentBtn = Button(this)
         subsTorrentBtn.text = "Subs torrent"
+        val subsOsBtn = Button(this)
+        subsOsBtn.text = "Subs OS"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -226,6 +246,7 @@ class MainActivity : Activity() {
         buttons.addView(torrentDemo)
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
+        buttons.addView(subsOsBtn)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -315,6 +336,9 @@ class MainActivity : Activity() {
         }
         subsTorrentBtn.setOnClickListener {
             runSubsTorrentDemo()
+        }
+        subsOsBtn.setOnClickListener {
+            runSubsOsDemo()
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -622,6 +646,29 @@ class MainActivity : Activity() {
         return TorrentSubtitles.load(sesion)
     }
 
+    /** T050 v1: demo del proveedor OpenSubtitles SIN red (transporte
+     * falso enlatado): busca por consulta e idiomas, descarga la
+     * primera pista y la enchufa al overlay de subs. */
+    private fun runSubsOsDemo() {
+        val config = OpenSubtitlesConfig(apiKey = "demo", baseUrl = "http://subs-demo/api/v1")
+        val cliente = OpenSubtitlesClient(config, FetchManager(TransporteSubsOs()))
+        val hits = cliente.buscar("gran hotel", listOf("es", "en")).valueOrNull
+        if (hits == null || hits.isEmpty()) {
+            downloadText.text = "subs os: sin resultados"
+            return
+        }
+        val pista = cliente.descargar(hits[0].fileId).valueOrNull
+        if (pista == null) {
+            downloadText.text = "subs os: descarga fallida"
+            return
+        }
+        subs = SubtitleTrack(SubtitleParser.parse(pista.contenido))
+        refreshMedia()
+        downloadText.text = "subs os: " + hits.size + " resultados - " +
+            pista.nombre + " (" + hits[0].idioma + ") - cue 1.5s: " +
+            (subs?.textAt(1500L) ?: "nada")
+    }
+
     private fun wavSintetico(total: Int): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         out.write("RIFF".toByteArray(Charsets.US_ASCII))
@@ -645,6 +692,23 @@ class MainActivity : Activity() {
         return out.toByteArray()
     }
 
+    /** Transporte falso de la demo Subs OS: respuestas enlatadas del
+     * proveedor OpenSubtitles SIN red (la app real usa HttpTransport
+     * con la Api-Key del usuario; las credenciales nunca se loguean). */
+    private class TransporteSubsOs : FetchTransport {
+        override fun fetch(request: FetchRequest, token: CancellationToken): TransportResult {
+            val cuerpo = when {
+                request.url.contains("/subtitles") -> BUSQUEDA_DEMO
+                request.url.contains("/download") -> DESCARGA_DEMO
+                request.url.contains("gran-hotel.srt") -> SRT_DEMO
+                else -> "{}"
+            }
+            return TransportResult.Success(
+                FetchResponse(200, emptyMap(), cuerpo.toByteArray(Charsets.UTF_8))
+            )
+        }
+    }
+
     companion object {
         private const val REQUEST_ABRIR = 41
         private const val REQUEST_GUARDAR = 42
@@ -654,5 +718,8 @@ class MainActivity : Activity() {
         private const val REQUEST_SUBS = 46
         private const val DEMO_AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
         private const val DEMO_DOWNLOAD_URL = "https://raw.githubusercontent.com/c4rp3di/fusion-navegador-nia/main/README.md"
+        private const val BUSQUEDA_DEMO = "{\"total\":2,\"data\":[{\"id\":\"111\",\"type\":\"subtitle\",\"attributes\":{\"language\":\"es\",\"release\":\"Gran.Hotel.S01E01\",\"files\":[{\"file_id\":9001,\"cd_number\":1}]}},{\"id\":\"222\",\"type\":\"subtitle\",\"attributes\":{\"language\":\"en\",\"release\":\"Gran.Hotel.S01E01.720p\",\"files\":[{\"file_id\":9002,\"cd_number\":1}]}}]}"
+        private const val DESCARGA_DEMO = "{\"link\":\"https://cdn.demo/gran-hotel.srt\",\"file_name\":\"gran-hotel.srt\"}"
+        private const val SRT_DEMO = "1\n00:00:01,000 --> 00:00:04,000\nGran hotel\n"
     }
 }

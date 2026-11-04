@@ -147,6 +147,8 @@ jobs:
             engine-core/src/test/java/nia/engine/media/SubtitlesTest.kt \
             engine-core/src/main/java/nia/engine/media/TorrentSubtitles.kt \
             engine-core/src/test/java/nia/engine/media/TorrentSubtitlesTest.kt \
+            engine-core/src/main/java/nia/engine/media/OpenSubtitles.kt \
+            engine-core/src/test/java/nia/engine/media/OpenSubtitlesTest.kt \
             engine-core/src/main/java/nia/engine/profile/Profile.kt \
             engine-core/src/test/java/nia/engine/profile/ProfileTest.kt \
             engine-core/src/main/java/nia/engine/profile/Fire.kt \
