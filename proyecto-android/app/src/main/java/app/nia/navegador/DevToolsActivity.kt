@@ -15,6 +15,14 @@ import nia.engine.devtools.StyleCause
 import nia.engine.dom.DomDocument
 import nia.engine.dom.DomHandle
 import nia.engine.html.DomNode
+import nia.engine.devtools.NetworkPanel
+import nia.engine.net.FetchManager
+import nia.engine.net.FetchRequest
+import nia.engine.net.FetchResponse
+import nia.engine.net.FetchTransport
+import nia.engine.net.TransportFailure
+import nia.engine.net.TransportResult
+import nia.contracts.CancellationToken
 
 /**
  * T017 v2 (R0041, RES-0027): panel DevTools propio sobre el modelo del
@@ -33,6 +41,10 @@ import nia.engine.html.DomNode
  * DevToolsState.userCss y el reporte re-renderiza sobre la demo mas las
  * reglas del usuario (los errores de parseo se cuentan, no rompen nada);
  * Restaurar limpia la edicion. La pagina pintada re-renderiza al volver.
+ * T017 v5 (R0082, RES-0046): seccion RED del reporte: el panel de red
+ * del motor (NetworkPanel sobre FetchManager, redaccion de secretos en
+ * la ingesta) alimentado por una demo determinista sin red en el
+ * dispositivo.
  */
 class DevToolsActivity : Activity() {
 
@@ -92,6 +104,10 @@ class DevToolsActivity : Activity() {
                 sb.append("(parse: ").append(userSheet.errors.size).append(" error(es) ignorados)").append('\n')
             }
         }
+        val net = demoNetwork()
+        sb.append('\n')
+        sb.append("== RED (").append(net.count()).append(" entradas, secretos redactados) ==").append('\n')
+        sb.append(net.summary())
         val sel = DevToolsState.selectedNodeId
         if (sel != null) {
             val h = model.handleWithNodeId(sel)
@@ -104,6 +120,28 @@ class DevToolsActivity : Activity() {
             }
         }
         return sb.toString()
+    }
+
+    /** Panel de red de la demo (v5): fake determinista, sin red en el device. */
+    private fun demoNetwork(): NetworkPanel {
+        val transport = object : FetchTransport {
+            override fun fetch(request: FetchRequest, token: CancellationToken): TransportResult {
+                return when (request.url) {
+                    "http://demo.local/datos" -> TransportResult.Success(
+                        FetchResponse(200, mapOf("content-type" to "text/plain"), "datos de la demo".toByteArray())
+                    )
+                    "http://demo.local/falta" -> TransportResult.Success(
+                        FetchResponse(404, emptyMap(), ByteArray(0))
+                    )
+                    else -> TransportResult.Failure(TransportFailure.NETWORK)
+                }
+            }
+        }
+        val panel = NetworkPanel(FetchManager(transport))
+        panel.fetch(FetchRequest(1, "GET", "http://demo.local/datos", mapOf("Authorization" to "Bearer demo"), null))
+        panel.fetch(FetchRequest(2, "GET", "http://demo.local/falta?token=demo", emptyMap(), null))
+        panel.fetch(FetchRequest(3, "GET", "http://demo.local/roto", emptyMap(), null))
+        return panel
     }
 
     private fun appendNodeReport(sb: StringBuilder, doc: DomDocument, model: DevToolsModel, handle: DomHandle) {

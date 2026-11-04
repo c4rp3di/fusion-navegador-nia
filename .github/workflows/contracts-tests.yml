@@ -120,7 +120,9 @@ jobs:
             engine-core/src/main/java/nia/engine/modules/ModuleRegistry.kt \
             engine-core/src/test/java/nia/engine/modules/ModuleRegistryTest.kt \
             engine-core/src/main/java/nia/engine/devtools/DevToolsModel.kt \
+            engine-core/src/main/java/nia/engine/devtools/NetworkPanel.kt \
             engine-core/src/test/java/nia/engine/devtools/DevToolsModelTest.kt \
+            engine-core/src/test/java/nia/engine/devtools/NetworkPanelTest.kt \
             engine-core/src/main/java/nia/engine/net/Fetch.kt \
             engine-core/src/main/java/nia/engine/net/HttpCache.kt \
             engine-core/src/test/java/nia/engine/net/FetchManagerTest.kt \
