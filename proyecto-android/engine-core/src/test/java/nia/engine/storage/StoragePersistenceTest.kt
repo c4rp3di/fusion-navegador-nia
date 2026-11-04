@@ -256,7 +256,8 @@ class StoragePersistenceTest {
         val e = assertFailsWith<StoragePersistence.PersistenceException> {
             StoragePersistence(dir).load(m, IndexedDb())
         }
-        assertTrue(e.message != null && e.message.contains("cabecera"))
+        val mensaje = e.message
+        assertTrue(mensaje != null && mensaje.contains("cabecera"))
         assertEquals(1, m.partitionCount())
         assertEquals("v", m.area(StorageScope.LOCAL, site, origin).getItem("k"))
     }
