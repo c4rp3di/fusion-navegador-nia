@@ -7,6 +7,8 @@ import kotlin.test.assertEquals
  * Tests del parser CSS v2 (R0023): espejo validado del gemelo TS.
  * v1 (T014) + combinadores de hermanos +/~ y pseudo-clases estaticas
  * (:first-child, :last-child, :only-child, :nth-child(an+b)).
+ * v3 (R0090, RES-0050): @media soportado y guardado por regla; el skip de
+ * @-rules sin soporte se prueba con @import.
  */
 class CssParserTest {
 
@@ -59,10 +61,16 @@ class CssParserTest {
 
     @Test
     fun atRuleSeSalta() {
-        val s = CssStylesheet.parse("@media screen{p{color:red}}p{color:blue}")
+        val s = CssStylesheet.parse("@import x;p{color:blue}")
         assertEquals(listOf("unsupported-at-rule"), s.errors, "errores")
         assertEquals(1, s.rules.size, "reglas")
         assertEquals(listOf("color" to "blue"), s.rules[0].declarations, "decls")
+        val m = CssStylesheet.parse("@media screen{p{color:red}}p{color:blue}")
+        assertEquals(emptyList<String>(), m.errors, "errores media")
+        assertEquals(2, m.rules.size, "reglas media")
+        assertEquals("screen", m.rules[0].media, "query")
+        assertEquals(listOf("color" to "red"), m.rules[0].declarations, "decls media")
+        assertEquals(null, m.rules[1].media, "sin query")
     }
 
     @Test
