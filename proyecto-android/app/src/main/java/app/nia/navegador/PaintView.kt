@@ -69,10 +69,10 @@ class PaintView(context: Context) : View(context) {
 
     private val viewport = 360.0
 
-    private var document: DomDocument
-    private var devtoolsModel: DevToolsModel
-    private var root: DomNode
-    private var rootDoc: DomNode.Document
+    private var document: DomDocument = DomDocument.parse(DemoPage.HTML)
+    private var devtoolsModel: DevToolsModel = DevToolsModel(document, DemoPage.CSS)
+    private var root: DomNode = document.nodeOf(document.rootHandle())
+    private var rootDoc: DomNode.Document = root as DomNode.Document
     private lateinit var scene: PaintScene
     private var layout: LayoutResult? = null
     private var loadedHtml: String = DemoPage.HTML
@@ -110,7 +110,7 @@ class PaintView(context: Context) : View(context) {
     private val screenLoc = IntArray(2)
 
     init {
-        load(DemoPage.HTML)
+        rebuild()
     }
 
     /** T035 v1 (SAF): parsea el HTML dado y re-renderiza; los <style> del
@@ -379,7 +379,7 @@ class PaintView(context: Context) : View(context) {
     private val a11yProvider = object : AccessibilityNodeProvider() {
 
         override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
-            if (virtualViewId == AccessibilityNodeProvider.HOST_ID || virtualViewId == View.NO_ID) {
+            if (virtualViewId == View.NO_ID) {
                 return AccessibilityNodeInfo.obtain(this@PaintView)
             }
             val h = handleById(virtualViewId) ?: return null
@@ -422,12 +422,12 @@ class PaintView(context: Context) : View(context) {
             } else {
                 info.setParent(this@PaintView)
             }
-            for (k in childrenOrEmpty(h)) info.addChildId(this@PaintView, k.nodeId)
+            for (k in childrenOrEmpty(h)) info.addChild(this@PaintView, k.nodeId)
             return info
         }
 
         override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
-            if (virtualViewId == AccessibilityNodeProvider.HOST_ID) return false
+            if (virtualViewId == View.NO_ID) return false
             val h = handleById(virtualViewId) ?: return false
             val n = document.nodeOf(h)
             val input = n as? DomNode.Element
