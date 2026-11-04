@@ -25,10 +25,29 @@ import nia.engine.net.TransportFailure
  * espejo del gate de FetchManager donde la cancelacion gana al fallo de
  * red). Un item QUEUED cancelado pasa directo a CANCELLED sin correr.
  *
- * Limitaciones v1: sin reanudacion (Range) ni reintentos, sin apertura
- * del archivo (v2), sin gestor de descargas persistente (T047 monta el
- * torrent sobre esta frontera) y una cancelacion sobre un estado
- * terminal se ignora (devuelve false).
+ * T046 v2 (R0124, RES-0065): reanudacion y reintentos.
+ *
+ * - DownloadTransport.open gana startByte: 0 pide la fuente desde el
+ *   principio y N pide la cabecera Range bytes=N- ; DownloadOpen.Opened
+ *   informa el byte de arranque REAL del stream (206 = N, 200 = 0: el
+ *   servidor ignoro el Range) y el total COMPLETO de la descarga.
+ * - ReopenableSink es un sink que sabe reposicionarse: reopen(N)
+ *   devuelve un NUEVO sink posicionado en el byte N (0 trunca y
+ *   escribe desde cero; en la app SAF wt trunca y wa continua).
+ * - Reintentos opt-in por constructor: maxRetries (0 por defecto, el
+ *   comportamiento v1) reintenta SOLO fallos transitorios de apertura
+ *   y de lectura (NETWORK y DNS); TLS_INVALID nunca se reintenta
+ *   (politica de certificado, no un fallo transitorio) y la
+ *   cancelacion gana SIEMPRE al reintento. Los mensajes de error no
+ *   cambian por reintentar.
+ * - resume(id) re-encola un item FAILED con bytes en su sitio y sink
+ *   reabrible: sigue desde el byte que fallo con Range y, si el
+ *   servidor responde 200, reinicia desde cero truncando el destino.
+ *   Fuera de ese contrato devuelve false.
+ *
+ * Limitaciones v2: sin gestor de descargas persistente (T047 monta el
+ * torrent sobre esta frontera), sin Range multiple y una cancelacion
+ * sobre un estado terminal se ignora (devuelve false).
  */
 
 enum class DownloadState { QUEUED, RUNNING, COMPLETED, CANCELLED, FAILED }
@@ -49,12 +68,16 @@ interface DownloadStream {
 }
 
 sealed class DownloadOpen {
-    data class Opened(val stream: DownloadStream, val totalBytes: Long) : DownloadOpen()
+    data class Opened(
+        val stream: DownloadStream,
+        val totalBytes: Long,
+        val startByte: Long
+    ) : DownloadOpen()
     data class Failed(val kind: TransportFailure) : DownloadOpen()
 }
 
 interface DownloadTransport {
-    fun open(url: String, token: nia.contracts.CancellationToken): DownloadOpen
+    fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen
 }
 
 /** Destino de los bytes; close se llama siempre al terminar. */
@@ -63,22 +86,33 @@ interface DownloadSink {
     fun close()
 }
 
+/**
+ * T046 v2: sink reabrible para reanudar. reopen(startByte) devuelve un
+ * NUEVO sink posicionado en ese byte del destino (0 = truncado y
+ * escribe desde cero); el motor cierra el sink anterior SIEMPRE.
+ */
+interface ReopenableSink : DownloadSink {
+    fun reopen(startByte: Long): DownloadSink
+}
+
 class DownloadEngine(
     private val transport: DownloadTransport,
     private val executor: Executor = Executor { task -> task.run() },
     private val maxConcurrent: Int = 2,
     private val chunkSize: Int = 8192,
-    private val clock: WallClock = SystemWallClock()
+    private val clock: WallClock = SystemWallClock(),
+    private val maxRetries: Int = 0
 ) {
     init {
         require(maxConcurrent >= 1) { "maxConcurrent >= 1" }
         require(chunkSize >= 1) { "chunkSize >= 1" }
+        require(maxRetries >= 0) { "maxRetries >= 0" }
     }
 
     private class Entry(
         val url: String,
-        val sink: DownloadSink,
-        val cts: CancellationTokenSource,
+        var sink: DownloadSink,
+        var cts: CancellationTokenSource,
         var state: DownloadState,
         var bytes: Long,
         var total: Long,
@@ -119,6 +153,9 @@ class DownloadEngine(
         }
     }
 
+    private fun retryable(kind: TransportFailure): Boolean =
+        kind == TransportFailure.NETWORK || kind == TransportFailure.DNS
+
     /** Encola una descarga; devuelve su id monotomico. */
     fun enqueue(url: String, sink: DownloadSink): Long {
         val entry = Entry(url, sink, CancellationTokenSource(clock), DownloadState.QUEUED, 0L, -1L, null)
@@ -156,6 +193,27 @@ class DownloadEngine(
         }
     }
 
+    /**
+     * T046 v2: reanuda un item FAILED con bytes y sink reabrible;
+     * vuelve a QUEUED con token nuevo y sigue desde el byte que fallo.
+     * Devuelve false fuera de ese contrato.
+     */
+    fun resume(id: Long): Boolean {
+        synchronized(lock) {
+            val entry = items[id] ?: return false
+            if (entry.state != DownloadState.FAILED) return false
+            if (entry.bytes <= 0L) return false
+            if (entry.sink !is ReopenableSink) return false
+            entry.cts = CancellationTokenSource(clock)
+            entry.state = DownloadState.QUEUED
+            entry.error = null
+            notifyLocked(id, entry)
+            queue.add(id)
+            scheduleNextLocked()
+            return true
+        }
+    }
+
     /** Programa descargas mientras haya hueco (llamar con el lock). */
     private fun scheduleNextLocked() {
         while (running < maxConcurrent && queue.isNotEmpty()) {
@@ -167,7 +225,12 @@ class DownloadEngine(
         }
     }
 
-    /** Corre un item: abre, lee por chunks consultando el token y termina. */
+    /**
+     * T046 v2: corre un item con intentos. Cada intento abre el
+     * transporte desde el byte actual (Range), escribe por chunks
+     * consultando el token y reintenta los fallos transitorios hasta
+     * agotar maxRetries; la cancelacion gana SIEMPRE al reintento.
+     */
     private fun runItem(id: Long) {
         val entry: Entry
         synchronized(lock) {
@@ -181,47 +244,105 @@ class DownloadEngine(
             entry = e
             notifyLocked(id, e)
         }
-        when (val opened = transport.open(entry.url, entry.cts.token)) {
-            is DownloadOpen.Failed ->
-                finish(id, entry, DownloadState.FAILED, failureMessage(opened.kind))
-            is DownloadOpen.Opened -> {
-                synchronized(lock) {
-                    if (opened.totalBytes >= 0) entry.total = opened.totalBytes
+        var attempt = 0
+        var firstOpen = true
+        var done = false
+        while (!done) {
+            val cancelReason = entry.cts.token.reason()
+            if (cancelReason != null) {
+                finish(id, entry, DownloadState.CANCELLED, "cancelada: " + cancelReason)
+                break
+            }
+            val startAt = synchronized(lock) { entry.bytes }
+            when (val opened = transport.open(entry.url, startAt, entry.cts.token)) {
+                is DownloadOpen.Failed -> {
+                    if (retryable(opened.kind) && attempt < maxRetries) {
+                        attempt += 1
+                        continue
+                    }
+                    finish(id, entry, DownloadState.FAILED, failureMessage(opened.kind))
+                    done = true
                 }
-                val stream = opened.stream
-                var cancelled: String? = null
-                var ioFailed = false
-                try {
-                    val buffer = ByteArray(chunkSize)
-                    while (true) {
-                        val reason = entry.cts.token.reason()
-                        if (reason != null) {
-                            cancelled = "cancelada: " + reason
-                            break
+                is DownloadOpen.Opened -> {
+                    synchronized(lock) {
+                        if (opened.totalBytes >= 0) entry.total = opened.totalBytes
+                    }
+                    if (opened.startByte != startAt) {
+                        // el servidor ignoro el Range (o salto raro):
+                        // reiniciar desde cero truncando el destino.
+                        val reabrible = entry.sink as? ReopenableSink
+                        if (reabrible == null) {
+                            finish(id, entry, DownloadState.FAILED, "reanudacion no soportada por el destino")
+                            done = true
+                        } else {
+                            closeQuietly(entry)
+                            entry.sink = reabrible.reopen(0L)
+                            synchronized(lock) {
+                                entry.bytes = 0L
+                            }
                         }
-                        val n = stream.read(buffer)
-                        if (n < 0) break
-                        if (n == 0) continue
-                        entry.sink.write(buffer, n)
-                        synchronized(lock) {
-                            entry.bytes += n
-                            notifyLocked(id, entry)
+                    } else if (startAt > 0L && firstOpen) {
+                        // arranque de un item reanudado: el sink estaba
+                        // cerrado desde el FAILED; reabrir en startAt.
+                        val reabrible = entry.sink as? ReopenableSink
+                        if (reabrible == null) {
+                            finish(id, entry, DownloadState.FAILED, "reanudacion no soportada por el destino")
+                            done = true
+                        } else {
+                            entry.sink = reabrible.reopen(startAt)
                         }
                     }
-                } catch (e: java.io.IOException) {
-                    val reason = entry.cts.token.reason()
-                    if (reason != null) cancelled = "cancelada: " + reason else ioFailed = true
-                } finally {
-                    try {
-                        stream.close()
-                    } catch (e: java.io.IOException) {
+                    if (!done) {
+                        firstOpen = false
+                        val stream = opened.stream
+                        var cancelled: String? = null
+                        var ioFailed = false
+                        try {
+                            val buffer = ByteArray(chunkSize)
+                            while (true) {
+                                val reason = entry.cts.token.reason()
+                                if (reason != null) {
+                                    cancelled = "cancelada: " + reason
+                                    break
+                                }
+                                val n = stream.read(buffer)
+                                if (n < 0) break
+                                if (n == 0) continue
+                                entry.sink.write(buffer, n)
+                                synchronized(lock) {
+                                    entry.bytes += n
+                                    notifyLocked(id, entry)
+                                }
+                            }
+                        } catch (e: java.io.IOException) {
+                            val reason = entry.cts.token.reason()
+                            if (reason != null) cancelled = "cancelada: " + reason else ioFailed = true
+                        } finally {
+                            try {
+                                stream.close()
+                            } catch (e: java.io.IOException) {
+                            }
+                        }
+                        val cancelledReason = cancelled
+                        when {
+                            cancelledReason != null -> {
+                                finish(id, entry, DownloadState.CANCELLED, cancelledReason)
+                                done = true
+                            }
+                            ioFailed -> {
+                                if (attempt < maxRetries) {
+                                    attempt += 1
+                                    continue
+                                }
+                                finish(id, entry, DownloadState.FAILED, "io")
+                                done = true
+                            }
+                            else -> {
+                                finish(id, entry, DownloadState.COMPLETED, null)
+                                done = true
+                            }
+                        }
                     }
-                }
-                val cancelledReason = cancelled
-                when {
-                    cancelledReason != null -> finish(id, entry, DownloadState.CANCELLED, cancelledReason)
-                    ioFailed -> finish(id, entry, DownloadState.FAILED, "io")
-                    else -> finish(id, entry, DownloadState.COMPLETED, null)
                 }
             }
         }

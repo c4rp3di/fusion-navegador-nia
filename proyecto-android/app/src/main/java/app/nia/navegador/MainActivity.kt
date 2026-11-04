@@ -2,7 +2,9 @@ package app.nia.navegador
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.SurfaceHolder
@@ -13,6 +15,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import nia.contracts.CancellationToken
 import nia.contracts.WallClock
 import nia.contracts.valueOrNull
@@ -21,6 +24,7 @@ import nia.engine.media.MediaSource
 import nia.engine.download.DownloadEngine
 import nia.engine.download.DownloadSink
 import nia.engine.download.DownloadState
+import nia.engine.download.ReopenableSink
 import nia.engine.media.MediaState
 import nia.engine.media.OpenSubtitlesClient
 import nia.engine.media.OpenSubtitlesConfig
@@ -89,6 +93,15 @@ import java.util.concurrent.Executors
  * descargas con la lista de items y su progreso en un TextView.
  * Exclusiones v1: sin reanudacion, sin reintentos y sin apertura del
  * archivo descargado (v2).
+ *
+ * T046 v2 (R0124, RES-0065): reanudacion con Range y reintentos en el
+ * nucleo (la app corre con maxRetries = 1): PlatformDownloadTransport
+ * pide la cabecera Range y acepta 206 y 200, el sink reabrible
+ * DescargaReabrible reposiciona el destino SAF (wt trunca desde cero,
+ * wa continua al final) y el boton Abrir descarga abre con ACTION_VIEW
+ * y FLAG_GRANT_READ_URI_PERMISSION el Uri de la ultima descarga
+ * completada (aviso si no hay ninguna o ninguna app puede abrirlo).
+ * Exclusiones v2: sin gestor persistente de descargas entre sesiones.
  *
  * T036 v2 (R0102, RES-0055): video local (SAF de video) sobre SurfaceView
  * (el backend conecta la Surface al MediaPlayer), boton Fullscreen que
@@ -171,8 +184,11 @@ class MainActivity : Activity() {
     private val videoBackend = PlatformMediaBackend(this)
     private val media = MediaEngine(videoBackend, mediaClock)
     private val downloadPool = Executors.newFixedThreadPool(2)
-    private val downloads = DownloadEngine(PlatformDownloadTransport(), downloadPool, maxConcurrent = 2)
+    private val downloads = DownloadEngine(PlatformDownloadTransport(), downloadPool, maxConcurrent = 2, maxRetries = 1)
     private lateinit var downloadText: TextView
+    private var downloadUri: Uri? = null
+    private var downloadId = -1L
+    private var descargaCompletadaUri: Uri? = null
     private lateinit var videoView: SurfaceView
     private lateinit var subtitleText: TextView
     private var subs: SubtitleTrack? = null
@@ -210,6 +226,8 @@ class MainActivity : Activity() {
         descargar.text = "Descargar"
         val cancelarDl = Button(this)
         cancelarDl.text = "Cancelar descargas"
+        val abrirDl = Button(this)
+        abrirDl.text = "Abrir descarga"
         val video = Button(this)
         video.text = "Video"
         val fullscreen = Button(this)
@@ -258,6 +276,7 @@ class MainActivity : Activity() {
         buttons.addView(mas10)
         buttons.addView(descargar)
         buttons.addView(cancelarDl)
+        buttons.addView(abrirDl)
         buttons.addView(video)
         buttons.addView(fullscreen)
         buttons.addView(subsBtn)
@@ -386,6 +405,21 @@ class MainActivity : Activity() {
                 }
             }
         }
+        abrirDl.setOnClickListener {
+            val uriAbierta = descargaCompletadaUri
+            if (uriAbierta == null) {
+                Toast.makeText(this, "sin descarga completada", Toast.LENGTH_SHORT).show()
+            } else {
+                val i = Intent(Intent.ACTION_VIEW)
+                i.setDataAndType(uriAbierta, "application/octet-stream")
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try {
+                    startActivity(i)
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(this, "sin app que abra la descarga", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         mediaText = TextView(this)
         frame.addView(mediaText, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -399,7 +433,12 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.END
         ))
-        downloads.addListener { downloadText.post { refreshDownloads() } }
+        downloads.addListener { item ->
+            if (item.id == downloadId && item.state == DownloadState.COMPLETED) {
+                descargaCompletadaUri = downloadUri
+            }
+            downloadText.post { refreshDownloads() }
+        }
         videoView = SurfaceView(this)
         videoView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
@@ -467,22 +506,8 @@ class MainActivity : Activity() {
             refreshMedia()
         }
         if (requestCode == REQUEST_DOWNLOAD && resultCode == RESULT_OK) {
-            val stream = try {
-                contentResolver.openOutputStream(uri)
-            } catch (e: java.io.IOException) {
-                null
-            } ?: return
-            downloads.enqueue(DEMO_DOWNLOAD_URL, object : DownloadSink {
-                override fun write(bytes: ByteArray, length: Int) {
-                    stream.write(bytes, 0, length)
-                }
-                override fun close() {
-                    try {
-                        stream.close()
-                    } catch (e: java.io.IOException) {
-                    }
-                }
-            })
+            downloadUri = uri
+            downloadId = downloads.enqueue(DEMO_DOWNLOAD_URL, DescargaReabrible(uri, 0L))
         }
     }
 
@@ -513,6 +538,37 @@ class MainActivity : Activity() {
             else builder.append('?')
         }
         downloadText.text = builder.toString()
+    }
+
+    /** T046 v2: sink reabrible sobre el documento SAF elegido al
+     * descargar: wt trunca y escribe desde cero y wa posiciona al
+     * final para reanudar; reopen devuelve un sink NUEVO sobre el
+     * mismo Uri. Si el destino no se puede abrir, el primer write
+     * falla como IOException y la descarga queda FAILED (honesto). */
+    private inner class DescargaReabrible(
+        private val uri: Uri,
+        private val startByte: Long
+    ) : ReopenableSink {
+        private var stream: java.io.OutputStream? = abrir()
+        private fun abrir(): java.io.OutputStream? = try {
+            contentResolver.openOutputStream(uri, if (startByte > 0L) "wa" else "wt")
+        } catch (e: java.io.IOException) {
+            null
+        }
+        override fun write(bytes: ByteArray, length: Int) {
+            val s = stream ?: throw java.io.IOException("destino cerrado")
+            s.write(bytes, 0, length)
+        }
+        override fun close() {
+            val s = stream
+            stream = null
+            try {
+                s?.close()
+            } catch (e: java.io.IOException) {
+            }
+        }
+        override fun reopen(startByteReanudar: Long): DownloadSink =
+            DescargaReabrible(uri, startByteReanudar)
     }
 
     /** T044 v1: estado del perfil activo en la UI (modo y motores). */

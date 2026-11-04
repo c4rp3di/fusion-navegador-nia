@@ -15,6 +15,12 @@ import nia.engine.net.TransportFailure
  * progreso, cola con maxConcurrent, cancelacion cooperativa (QUEUED,
  * RUNNING y durante la apertura) y fallos tipificados. El executor
  * capturado deja ver la cola sin hilos: nada corre hasta runOne().
+ *
+ * T046 v2 (R0124, RES-0065): espejo del gemelo TS de reanudacion
+ * Range (206 y servidor que ignora el Range), reintentos opt-in con
+ * maxRetries (TLS nunca se reintenta, la cancelacion gana), resume
+ * con su contrato (FAILED + bytes + sink reabrible) y el
+ * comportamiento v1 por defecto sin reintentos.
  */
 class DownloadEngineTest {
 
@@ -39,19 +45,21 @@ class DownloadEngineTest {
         private val chunks: List<Int>,
         private val total: Long = chunks.sum().toLong(),
         private val failWith: TransportFailure? = null,
-        var onOpen: (() -> Unit)? = null
+        var onOpen: ((Long) -> Unit)? = null
     ) : DownloadTransport {
         var opened = 0
         var lastStream: FakeStream? = null
-        override fun open(url: String, token: nia.contracts.CancellationToken): DownloadOpen {
+        var lastStartByte = 0L
+        override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
             opened += 1
+            lastStartByte = startByte
             val kind = failWith
             if (kind != null) return DownloadOpen.Failed(kind)
             val stream = FakeStream(chunks)
             lastStream = stream
             val hook = onOpen
-            if (hook != null) hook()
-            return DownloadOpen.Opened(stream, total)
+            if (hook != null) hook(startByte)
+            return DownloadOpen.Opened(stream, total, startByte)
         }
     }
 
@@ -236,8 +244,8 @@ class DownloadEngineTest {
     @Test
     fun lecturaQueLanzaIOExceptionDejaFailed() {
         val transport = object : DownloadTransport {
-            override fun open(url: String, token: nia.contracts.CancellationToken): DownloadOpen =
-                DownloadOpen.Opened(BrokenStream(), 10L)
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen =
+                DownloadOpen.Opened(BrokenStream(), 10L, startByte)
         }
         val engine = DownloadEngine(transport, syncExecutor)
         val sink = FakeSink()
@@ -395,5 +403,283 @@ class DownloadEngineTest {
         assertEquals(DownloadState.COMPLETED, engine.status(2)?.state)
         assertEquals(20, sinkA.bytes)
         assertEquals(30, sinkB.bytes)
+    }
+
+    /** T046 v2: stream que rompe en la lectura rompeEn (indice 0): los
+     * chunks anteriores quedan escritos y la falla es IOException. */
+    private class StreamQueRompe(chunks: List<Int>, private val rompeEn: Int) : DownloadStream {
+        private val base = FakeStream(chunks)
+        override fun read(buffer: ByteArray): Int {
+            if (base.index == rompeEn) throw java.io.IOException("io")
+            return base.read(buffer)
+        }
+        override fun close() { base.close() }
+    }
+
+    /** T046 v2: registro compartido de los sinks reabribles de un item. */
+    private class TallerDescargas {
+        val reopens = ArrayList<Long>()
+        val bytes = ArrayList<Int>()
+    }
+
+    /** T046 v2: sink reabrible de prueba: reopen registra el byte y
+     * devuelve un sink NUEVO que escribe en el mismo registro. */
+    private class FakeReopenSink(private val taller: TallerDescargas) : ReopenableSink {
+        override fun write(bytes: ByteArray, length: Int) {
+            taller.bytes.add(length)
+        }
+        override fun close() {
+        }
+        override fun reopen(startByte: Long): DownloadSink {
+            taller.reopens.add(startByte)
+            return FakeReopenSink(taller)
+        }
+    }
+
+    @Test
+    fun resumeReanudaDesdeElByteConRange() {
+        val startBytes = ArrayList<Long>()
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                startBytes.add(startByte)
+                return if (calls == 1) {
+                    DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(30)), 60L, 30L)
+                }
+            }
+        }
+        val taller = TallerDescargas()
+        val engine = DownloadEngine(transport, syncExecutor)
+        val id = engine.enqueue("https://a.test/res1", FakeReopenSink(taller))
+        assertEquals(DownloadState.FAILED, engine.status(id)?.state)
+        assertEquals(30, taller.bytes.sum())
+        assertTrue(engine.resume(id))
+        assertEquals(DownloadState.COMPLETED, engine.status(id)?.state)
+        assertEquals(60L, engine.status(id)?.bytesDownloaded)
+        assertEquals(60L, engine.status(id)?.totalBytes)
+        assertEquals("0,30", startBytes.joinToString(","))
+        assertEquals("30", taller.reopens.joinToString(","))
+    }
+
+    @Test
+    fun resumeReiniciaDesdeCeroSiElServidorIgnoraRange() {
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                return if (calls == 1) {
+                    DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(10, 20, 30)), 60L, 0L)
+                }
+            }
+        }
+        val taller = TallerDescargas()
+        val engine = DownloadEngine(transport, syncExecutor)
+        val id = engine.enqueue("https://a.test/res2", FakeReopenSink(taller))
+        assertEquals(DownloadState.FAILED, engine.status(id)?.state)
+        assertTrue(engine.resume(id))
+        assertEquals(DownloadState.COMPLETED, engine.status(id)?.state)
+        assertEquals(60L, engine.status(id)?.bytesDownloaded)
+        assertEquals("0", taller.reopens.joinToString(","))
+        assertEquals(90, taller.bytes.sum())
+    }
+
+    @Test
+    fun resumeRechazaItemsFueraDelContrato() {
+        val ok = DownloadEngine(FakeTransport(listOf(5)), syncExecutor)
+        val idOk = ok.enqueue("https://a.test/c1", FakeSink())
+        assertEquals(DownloadState.COMPLETED, ok.status(idOk)?.state)
+        assertFalse(ok.resume(idOk))
+        assertFalse(ok.resume(999))
+        val dns = DownloadEngine(FakeTransport(listOf(5), failWith = TransportFailure.DNS), syncExecutor)
+        val idDns = dns.enqueue("https://a.test/c2", FakeSink())
+        assertEquals(DownloadState.FAILED, dns.status(idDns)?.state)
+        assertFalse(dns.resume(idDns))
+        val transport = object : DownloadTransport {
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen =
+                DownloadOpen.Opened(StreamQueRompe(listOf(10, 20), 1), 20L, startByte)
+        }
+        val plano = DownloadEngine(transport, syncExecutor)
+        val idPlano = plano.enqueue("https://a.test/c3", FakeSink())
+        assertEquals(DownloadState.FAILED, plano.status(idPlano)?.state)
+        assertEquals(10L, plano.status(idPlano)?.bytesDownloaded)
+        assertFalse(plano.resume(idPlano))
+    }
+
+    @Test
+    fun resumeNotificaQueuedYCorreHastaCompletar() {
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                return if (calls == 1) {
+                    DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(30)), 60L, 30L)
+                }
+            }
+        }
+        val engine = DownloadEngine(transport, syncExecutor)
+        val notifs = ArrayList<DownloadItem>()
+        engine.addListener { item -> notifs.add(item) }
+        val id = engine.enqueue("https://a.test/rn", FakeReopenSink(TallerDescargas()))
+        assertEquals(DownloadState.FAILED, engine.status(id)?.state)
+        assertTrue(engine.resume(id))
+        assertEquals(DownloadState.COMPLETED, engine.status(id)?.state)
+        assertEquals(
+            "RUNNING:0,RUNNING:10,RUNNING:30,FAILED:30,QUEUED:30,RUNNING:30,RUNNING:60,COMPLETED:60",
+            notifs.joinToString(",") { it.state.name + ":" + it.bytesDownloaded }
+        )
+    }
+
+    @Test
+    fun reintentoContinuaConElMismoSinkConRange() {
+        val startBytes = ArrayList<Long>()
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                startBytes.add(startByte)
+                return if (calls == 1) {
+                    DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(30)), 60L, 30L)
+                }
+            }
+        }
+        val taller = TallerDescargas()
+        val engine = DownloadEngine(transport, syncExecutor, maxRetries = 1)
+        engine.enqueue("https://a.test/re1", FakeReopenSink(taller))
+        assertEquals(DownloadState.COMPLETED, engine.status(1)?.state)
+        assertEquals(60L, engine.status(1)?.bytesDownloaded)
+        assertEquals("0,30", startBytes.joinToString(","))
+        assertEquals("", taller.reopens.joinToString(","))
+        assertEquals(60, taller.bytes.sum())
+    }
+
+    @Test
+    fun reintentoConServidorQueIgnoraRangeTruncaDesdeCero() {
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                return if (calls == 1) {
+                    DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(10, 20, 30)), 60L, 0L)
+                }
+            }
+        }
+        val taller = TallerDescargas()
+        val engine = DownloadEngine(transport, syncExecutor, maxRetries = 1)
+        engine.enqueue("https://a.test/re2", FakeReopenSink(taller))
+        assertEquals(DownloadState.COMPLETED, engine.status(1)?.state)
+        assertEquals(60L, engine.status(1)?.bytesDownloaded)
+        assertEquals("0", taller.reopens.joinToString(","))
+        assertEquals(90, taller.bytes.sum())
+    }
+
+    @Test
+    fun reintentosAgotadosTerminanFailed() {
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                return DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, startByte)
+            }
+        }
+        val engine = DownloadEngine(transport, syncExecutor, maxRetries = 1)
+        val sink = FakeSink()
+        engine.enqueue("https://a.test/re3", sink)
+        assertEquals(DownloadState.FAILED, engine.status(1)?.state)
+        assertEquals("io", engine.status(1)?.lastError)
+        assertEquals(2, transport.calls)
+        assertEquals(60, sink.bytes)
+        assertEquals(60L, engine.status(1)?.bytesDownloaded)
+        assertTrue(sink.closed)
+    }
+
+    @Test
+    fun tlsNoSeReintenta() {
+        val transport = FakeTransport(listOf(5), failWith = TransportFailure.TLS_INVALID)
+        val engine = DownloadEngine(transport, syncExecutor, maxRetries = 2)
+        engine.enqueue("https://a.test/tls", FakeSink())
+        assertEquals(DownloadState.FAILED, engine.status(1)?.state)
+        assertEquals("TLS invalido: conexion rechazada", engine.status(1)?.lastError)
+        assertEquals(1, transport.opened)
+    }
+
+    @Test
+    fun cancelacionDuranteElReintentoGana() {
+        lateinit var engine: DownloadEngine
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                if (calls == 2) engine.cancel(1)
+                return if (calls == 1) {
+                    DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(30)), 60L, 30L)
+                }
+            }
+        }
+        val sink = FakeSink()
+        engine = DownloadEngine(transport, syncExecutor, maxRetries = 1)
+        engine.enqueue("https://a.test/cr", sink)
+        assertEquals(DownloadState.CANCELLED, engine.status(1)?.state)
+        assertEquals(2, transport.calls)
+        assertEquals(30, sink.bytes)
+        assertTrue(sink.closed)
+    }
+
+    @Test
+    fun openFallidoSeReintentaHastaCompletar() {
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                return when (calls) {
+                    1 -> DownloadOpen.Failed(TransportFailure.NETWORK)
+                    2 -> DownloadOpen.Failed(TransportFailure.DNS)
+                    else -> DownloadOpen.Opened(FakeStream(listOf(50)), 50L, startByte)
+                }
+            }
+        }
+        val engine = DownloadEngine(transport, syncExecutor, maxRetries = 2)
+        engine.enqueue("https://a.test/or", FakeSink())
+        assertEquals(DownloadState.COMPLETED, engine.status(1)?.state)
+        assertEquals(50L, engine.status(1)?.bytesDownloaded)
+        assertEquals(3, transport.calls)
+    }
+
+    @Test
+    fun sinReintentosPorDefectoMantieneV1() {
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                return DownloadOpen.Opened(StreamQueRompe(listOf(10, 20, 30), 2), 60L, startByte)
+            }
+        }
+        val engine = DownloadEngine(transport, syncExecutor)
+        val sink = FakeSink()
+        engine.enqueue("https://a.test/v1", sink)
+        assertEquals(DownloadState.FAILED, engine.status(1)?.state)
+        assertEquals("io", engine.status(1)?.lastError)
+        assertEquals(1, transport.calls)
+        assertEquals(30, sink.bytes)
+        assertTrue(sink.closed)
+    }
+
+    @Test
+    fun maxRetriesNegativoRechaza() {
+        assertFailsWith<IllegalArgumentException> {
+            DownloadEngine(FakeTransport(listOf(5)), syncExecutor, maxRetries = -1)
+        }
     }
 }

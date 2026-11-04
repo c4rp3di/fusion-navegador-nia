@@ -15,18 +15,26 @@ import nia.engine.net.TransportFailure
  * HttpURLConnection, la misma pila de HttpTransport de T011 v2 (asi
  * sirve en CI y en el dispositivo con el permiso INTERNET). Politicas
  * fijas: TLS SIEMPRE valida cadena y hostname por defecto (nunca un
- * TrustManager que acepte todo), el Content-Length informa el total,
- * la cancelacion cooperativa desconecta el socket para desbloquear la
- * lectura (la suscripcion vive hasta que el stream se cierra) y los
- * fallos se mapean a TransportFailure. Un estado distinto de 200 falla
- * como red en v1 (sin cuerpo ni reintentos). Sin dependencias nuevas.
+ * TrustManager que acepte todo), la cancelacion cooperativa desconecta
+ * el socket para desbloquear la lectura (la suscripcion vive hasta que
+ * el stream se cierra) y los fallos se mapean a TransportFailure. Sin
+ * dependencias nuevas.
+ *
+ * T046 v2 (R0124, RES-0065): reanudacion Range. Un startByte mayor que
+ * cero pide la cabecera Range: bytes=N- ; el estado 206 (Partial
+ * Content) abre el stream en ese byte y el total COMPLETO se computa
+ * como el Content-Length del resto mas el startByte, y un 200 tras
+ * pedir un rango significa que el servidor ignoro el Range: el stream
+ * empieza en cero y el motor decide truncar y reiniciar. Cualquier otro
+ * estado falla como red (sin cuerpo; los reintentos y la cancelacion
+ * son del motor).
  */
 class PlatformDownloadTransport(
     private val connectTimeoutMillis: Int = 10_000,
     private val readTimeoutMillis: Int = 10_000
 ) : DownloadTransport {
 
-    override fun open(url: String, token: nia.contracts.CancellationToken): DownloadOpen {
+    override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
         val connection = try {
             URL(url).openConnection() as HttpURLConnection
         } catch (e: IOException) {
@@ -37,6 +45,9 @@ class PlatformDownloadTransport(
             connection.readTimeout = readTimeoutMillis
             connection.instanceFollowRedirects = false
             connection.requestMethod = "GET"
+            if (startByte > 0L) {
+                connection.setRequestProperty("Range", "bytes=" + startByte + "-")
+            }
             val unsubscribe = token.onCancel {
                 connection.disconnect()
             }
@@ -52,12 +63,14 @@ class PlatformDownloadTransport(
                 unsubscribe()
                 return DownloadOpen.Failed(TransportFailure.NETWORK)
             }
-            if (status != 200) {
+            if (status != 200 && status != 206) {
                 unsubscribe()
                 connection.disconnect()
                 return DownloadOpen.Failed(TransportFailure.NETWORK)
             }
-            val total = connection.contentLengthLong
+            val startAt = if (status == 206) startByte else 0L
+            val restLength = connection.contentLengthLong
+            val total = if (status == 206 && restLength >= 0L) startByte + restLength else restLength
             val stream = try {
                 connection.inputStream
             } catch (e: IOException) {
@@ -76,7 +89,7 @@ class PlatformDownloadTransport(
                         connection.disconnect()
                     }
                 }
-            }, total)
+            }, total, startAt)
         } catch (e: IOException) {
             connection.disconnect()
             return DownloadOpen.Failed(TransportFailure.NETWORK)
