@@ -1778,7 +1778,8 @@ object JsInterpreter {
         source: String,
         doc: DomDocument,
         limits: JsLimits,
-        fetch: JsFetchApi? = null
+        fetch: JsFetchApi? = null,
+        storage: JsStorageApi? = null
     ): JsEvalResult {
         val parse = JsParser.parse(source)
         val genv = Env(null, true)
@@ -1792,6 +1793,7 @@ object JsInterpreter {
         JsDomBindings.install(genv, doc)
         keepAliveRunners = false
         if (fetch != null) fetch.install(genv)
+        if (storage != null) storage.install(genv)
         var last: JsValue = JsUndefined
         var thrown: JsValue? = null
         var aborted: JsAbortReason? = null
