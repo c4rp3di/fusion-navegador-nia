@@ -1,6 +1,7 @@
 package app.nia.navegador
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
@@ -23,6 +24,8 @@ import nia.engine.media.SubtitleFormatException
 import nia.engine.media.SubtitleParser
 import nia.engine.media.SubtitleTrack
 import nia.engine.profile.BrowserProfile
+import nia.engine.profile.DataFire
+import nia.engine.profile.FireLevel
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -78,6 +81,12 @@ import java.util.concurrent.Executors
  * storage particionado e IndexedDB (aislados entre perfiles); el normal
  * persiste en disco y el incognito vive solo en memoria. Botones Incognito
  * y Wipe perfil con el estado del perfil activo en un TextView.
+ *
+ * T045 v1 (R0106, RES-0057): Fire con niveles SESION y TOTAL (ADR-019)
+ * sobre el perfil activo: DataFire (nia.engine.profile) borra el
+ * sessionStorage o TODO el estado con conteo (incluido el archivo
+ * persistido en disco) con confirmacion explicita (AlertDialog).
+ * Botones Fire sesion y Fire total; marcadores nunca por defecto.
  */
 class MainActivity : Activity() {
 
@@ -141,6 +150,10 @@ class MainActivity : Activity() {
         incognitoBtn.text = "Incognito"
         val wipePerfil = Button(this)
         wipePerfil.text = "Wipe perfil"
+        val fireSesion = Button(this)
+        fireSesion.text = "Fire sesion"
+        val fireTotal = Button(this)
+        fireTotal.text = "Fire total"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -166,6 +179,8 @@ class MainActivity : Activity() {
         buttons.addView(subsMas)
         buttons.addView(incognitoBtn)
         buttons.addView(wipePerfil)
+        buttons.addView(fireSesion)
+        buttons.addView(fireTotal)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -234,6 +249,18 @@ class MainActivity : Activity() {
         wipePerfil.setOnClickListener {
             profile?.wipe()
             refreshProfile()
+        }
+        fireSesion.setOnClickListener {
+            confirmar("Fire sesion", "Borrar el sessionStorage del perfil activo? (cookies, cache, storage LOCAL e IndexedDB sobreviven)") {
+                profile?.let { DataFire.apply(FireLevel.SESION, it) }
+                refreshProfile()
+            }
+        }
+        fireTotal.setOnClickListener {
+            confirmar("Fire total", "Borrar TODO el estado del perfil activo (cookies, cache, storage, IndexedDB y el archivo persistido)?") {
+                profile?.let { DataFire.apply(FireLevel.TOTAL, it) }
+                refreshProfile()
+            }
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -389,6 +416,16 @@ class MainActivity : Activity() {
             " - cookies " + p.cookies.count() +
             " - particiones storage " + p.storage.partitionCount() +
             " - idb " + p.idb.partitionCount()
+    }
+
+    /** T045 v1 (R0106, RES-0057): confirmacion explicita de ADR-019 para Fire. */
+    private fun confirmar(titulo: String, mensaje: String, accion: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setMessage(mensaje)
+            .setPositiveButton("Si") { _, _ -> accion() }
+            .setNegativeButton("No", null)
+            .show()
     }
 
     companion object {

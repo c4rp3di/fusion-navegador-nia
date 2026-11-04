@@ -152,6 +152,15 @@ class StoragePersistence(private val dir: File) {
         return Persisted(areas.size, entries, dbs.size)
     }
 
+    /**
+     * T045 v1 (R0106, RES-0057): borra el archivo persistido del disco
+     * (Fire total de ADR-019); devuelve true si existia y se borro.
+     */
+    fun delete(): Boolean {
+        val f = File(dir, fileName)
+        return f.exists() && f.delete()
+    }
+
     private fun expectFields(parts: List<String>, n: Int, line: Int) {
         if (parts.size != n) {
             throw PersistenceException("campos inesperados en linea " + (line + 1) + ": " + parts.size + " en vez de " + n)

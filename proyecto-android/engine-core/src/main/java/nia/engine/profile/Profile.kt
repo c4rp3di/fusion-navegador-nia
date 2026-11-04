@@ -78,6 +78,13 @@ class BrowserProfile private constructor(
         idb.clearAll()
     )
 
+    /**
+     * T045 v1 (R0106, RES-0057): borra el archivo persistido del disco
+     * (Fire total de ADR-019). El incognito no tiene disco: responde
+     * false siempre.
+     */
+    fun deletePersisted(): Boolean = persistence?.delete() ?: false
+
     companion object {
 
         /**
