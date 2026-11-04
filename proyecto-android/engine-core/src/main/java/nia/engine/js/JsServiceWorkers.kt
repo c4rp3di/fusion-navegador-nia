@@ -33,7 +33,7 @@ package nia.engine.js
  * respuesta no corrompe el cache).
  *
  * Exclusiones v2: sin hilos ni tiempos reales (el SW no tiene timers),
- * scope como prefijo de URL completa sin normalizar (el renderer real lo
+ * scope por prefijo sin normalizar, URL completa o path relativo (el
  * derivara de la navegacion), respondWith sincrono (sin promises en el
  * handler), sin push/sync/backgroundFetch del spec, una sesion de cuotas
  * por motor (paridad con v1) y los caches viven en memoria (la
@@ -203,8 +203,9 @@ class JsServiceWorkers(private val limits: JsLimits = JsLimits()) {
 
     /**
      * Intercepcion de una peticion (host o fetch JS): busca el SW ACTIVE
-     * cuyo scope (prefijo de URL) casa y es mas largo, invoca onfetch con
-     * un evento {request: {method, url}, respondWith} y devuelve la
+     * cuyo scope casa y es mas largo (URL completa por prefijo o path
+     * relativo contra el path de la URL), invoca onfetch con un evento
+     * {request: {method, url}, respondWith} y devuelve la
      * respuesta comprometida; sin SW/handler o sin respondWith pasa al
      * transporte (None); un throw del handler rechaza el fetch y TERMINA
      * el SW. respondWith es sincrono (documentado): string = estado 200
@@ -212,11 +213,13 @@ class JsServiceWorkers(private val limits: JsLimits = JsLimits()) {
      */
     fun intercept(method: String, url: String): Intercept {
         var best: ServiceWorker? = null
-        var bestScope = ""
+        var bestLen = 0
         for ((scope, sw) in workers) {
-            if (sw.state == SwState.ACTIVE && url.startsWith(scope) && (best == null || scope.length > bestScope.length)) {
+            if (sw.state != SwState.ACTIVE) continue
+            val len = scopeMatch(url, scope)
+            if (len > bestLen) {
                 best = sw
-                bestScope = scope
+                bestLen = len
             }
         }
         val sw = best
@@ -255,6 +258,29 @@ class JsServiceWorkers(private val limits: JsLimits = JsLimits()) {
         }
         val r = sw.response
         return if (sw.responded && r != null) Intercept.Responded(r.first, r.second) else Intercept.None
+    }
+
+    /**
+     * Longitud del prefijo de url que casa el scope (0 = no casa): un
+     * scope URL completa casa por prefijo; un scope relativo (que empieza
+     * por '/') casa contra el path de la URL (el scope '/app' cubre
+     * 'http://x/app/datos': prefijo del path, como los scopes del spec).
+     * Gana el casamiento mas largo.
+     */
+    private fun scopeMatch(url: String, scope: String): Int {
+        if (url.startsWith(scope)) return scope.length
+        if (scope.startsWith("/") && !scope.startsWith("//")) {
+            val start = pathStart(url)
+            if (start >= 0 && url.startsWith(scope, start)) return start + scope.length
+        }
+        return 0
+    }
+
+    /** Indice del path dentro de la URL (tras '://'); -1 sin esquema o sin path. */
+    private fun pathStart(url: String): Int {
+        val scheme = url.indexOf("://")
+        if (scheme < 0) return -1
+        return url.indexOf('/', scheme + 3)
     }
 
     /** Termina el SW desde el host: false si ya estaba terminado. */
