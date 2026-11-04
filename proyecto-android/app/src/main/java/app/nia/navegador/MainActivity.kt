@@ -21,8 +21,10 @@ import nia.engine.download.DownloadSink
 import nia.engine.download.DownloadState
 import nia.engine.media.MediaState
 import nia.engine.media.SubtitleFormatException
+import nia.engine.media.SubtitleManager
 import nia.engine.media.SubtitleParser
 import nia.engine.media.SubtitleTrack
+import nia.engine.media.TorrentSubtitles
 import nia.engine.profile.BrowserProfile
 import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
@@ -31,6 +33,8 @@ import nia.engine.torrent.Bencode
 import nia.engine.torrent.MagnetParser
 import nia.engine.torrent.PieceSource
 import nia.engine.torrent.PumpResult
+import nia.engine.torrent.TorrentFile
+import nia.engine.torrent.TorrentMeta
 import nia.engine.torrent.TorrentParser
 import nia.engine.torrent.TorrentSession
 import nia.engine.torrent.TorrentStream
@@ -107,6 +111,17 @@ import java.util.concurrent.Executors
  * en cacheDir y lo carga en el reproductor (MediaSource.Local): el
  * archivo parcial reproducible del titulo de T048, servido por
  * TorrentStream sobre las piezas verificadas de la sesion.
+ *
+ * T049 v1 (R0114, RES-0060): subtitulos locales e incluidos. Parser
+ * ASS/SSA en SubtitleParser (seccion [Events] con Format y Dialogue,
+ * Text obligatoriamente el ultimo campo, centesimos, etiquetas entre
+ * llaves fuera y \N como salto), SubtitleManager de seleccion
+ * multi-pista con el desfase delegado a la seleccionada y
+ * TorrentSubtitles que carga del torrent los archivos srt/vtt/ass/ssa
+ * ya legibles via TorrentStream; boton Subs torrent que cicla la
+ * seleccion de las pistas del torrent sintetico y las enchufa al
+ * overlay de subs existente. Exclusiones v1: sin estilos de cue, sin
+ * deteccion de codificacion y sin subs remotos (T050).
  */
 class MainActivity : Activity() {
 
@@ -123,6 +138,7 @@ class MainActivity : Activity() {
     private lateinit var videoView: SurfaceView
     private lateinit var subtitleText: TextView
     private var subs: SubtitleTrack? = null
+    private var subsTorrent: SubtitleManager? = null
     private var fullscreenOn = false
     private var profile: BrowserProfile? = null
     private lateinit var profileText: TextView
@@ -178,6 +194,8 @@ class MainActivity : Activity() {
         torrentDemo.text = "Torrent demo"
         val streamDemo = Button(this)
         streamDemo.text = "Stream torrent"
+        val subsTorrentBtn = Button(this)
+        subsTorrentBtn.text = "Subs torrent"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -207,6 +225,7 @@ class MainActivity : Activity() {
         buttons.addView(fireTotal)
         buttons.addView(torrentDemo)
         buttons.addView(streamDemo)
+        buttons.addView(subsTorrentBtn)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -293,6 +312,9 @@ class MainActivity : Activity() {
         }
         streamDemo.setOnClickListener {
             runStreamDemo()
+        }
+        subsTorrentBtn.setOnClickListener {
+            runSubsTorrentDemo()
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -534,6 +556,70 @@ class MainActivity : Activity() {
         downloadText.text = "stream: " + meta.name + " - legibles " +
             stream.readableBytes() + "/" + stream.length +
             " - prefijo en cache para el reproductor"
+    }
+
+    /** T049 v1 (R0114, RES-0060): demo de subtitulos incluidos en el
+     * torrent: cicla la seleccion entre las pistas legibles del torrent
+     * sintetico y enchufa la activa al overlay de subs (los botones
+     * Subs -0.5s y +0.5s siguen moviendo el desfase de la pista). */
+    private fun runSubsTorrentDemo() {
+        var gestor = subsTorrent
+        if (gestor == null) {
+            gestor = crearGestorSubsTorrent()
+            subsTorrent = gestor
+        }
+        val nombres = gestor.nombres()
+        if (nombres.isEmpty()) {
+            downloadText.text = "subs torrent: sin pistas legibles"
+            return
+        }
+        val actual = nombres.indexOf(gestor.selected() ?: "")
+        val siguiente = nombres[(actual + 1) % nombres.size]
+        gestor.select(siguiente)
+        subs = gestor.selectedTrack()
+        refreshMedia()
+        downloadText.text = "subs torrent: " + nombres.size + " pistas - " + siguiente +
+            " - cue 1.5s: " + (gestor.textAt(1500L) ?: "nada")
+    }
+
+    /** Torrent sintetico multi-archivo (video + srt + ass) bombeado a
+     * DONE y cargado con TorrentSubtitles: los subs INCLUIDOS en el
+     * torrent, nombre de pista = ruta del archivo. */
+    private fun crearGestorSubsTorrent(): SubtitleManager {
+        val video = ByteArray(24) { (it + 1).toByte() }
+        val srt = ("1\n00:00:01,000 --> 00:00:04,000\nHello\n\n" +
+            "2\n00:00:05,000 --> 00:00:06,500\nBye\n").toByteArray(Charsets.UTF_8)
+        val ass = ("[Script Info]\nTitle: demo\n\n" +
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+            "Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,Hola {\\i1}mundo{\\i0}\\Ny bienvenido\n" +
+            "Dialogue: 0,0:00:05.00,0:00:06.50,Default,,0,0,0,,Adios\n").toByteArray(Charsets.UTF_8)
+        val contenido = video + srt + ass
+        val crudos = piezasSha1(contenido, 16)
+        val hashes = ArrayList<ByteArray>()
+        var i = 0
+        while (i < crudos.size) {
+            hashes.add(crudos.copyOfRange(i, i + 20))
+            i += 20
+        }
+        val meta = TorrentMeta(
+            "demo-subs", 16L, hashes,
+            listOf(
+                TorrentFile("video.bin", video.size.toLong()),
+                TorrentFile("subs-en.srt", srt.size.toLong()),
+                TorrentFile("subs-es.ass", ass.size.toLong())
+            ),
+            contenido.size.toLong(), ByteArray(20), "", emptyList()
+        )
+        val sesion = TorrentSession(meta, emptySet())
+        val fuente = object : PieceSource {
+            override fun piece(index: Int, length: Int): ByteArray =
+                contenido.copyOfRange(index * 16, index * 16 + length)
+        }
+        var bomba: PumpResult
+        do {
+            bomba = sesion.pump(fuente)
+        } while (bomba == PumpResult.COMPLETED)
+        return TorrentSubtitles.load(sesion)
     }
 
     private fun wavSintetico(total: Int): ByteArray {

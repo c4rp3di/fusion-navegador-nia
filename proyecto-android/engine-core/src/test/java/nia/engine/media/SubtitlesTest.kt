@@ -3,11 +3,15 @@ package nia.engine.media
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * T036 v2 (R0102, RES-0055): espejo del gemelo JS validado offline.
  * Parser WebVTT/SRT puro y pista con desfase, sin Android.
+ * T049 v1 (R0114, RES-0060): ASS/SSA y el gestor multi-pista (espejo
+ * del gemelo TS validado offline).
  */
 class SubtitlesTest {
 
@@ -238,5 +242,148 @@ class SubtitlesTest {
     @Test
     fun dobleFlechaLanza() {
         assertFailsWith<SubtitleFormatException> { SubtitleParser.parse("00:00:01.000 --> 00:00:02.000 --> 00:00:03.000\nA\n") }
+    }
+
+    @Test
+    fun assBasico() {
+        val cues = SubtitleParser.parse(
+            "[Script Info]\nTitle: demo\n\n[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n[Events]\n" +
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+                "Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,Hola\n" +
+                "Dialogue: 0,0:00:05.00,0:00:06.50,Default,,0,0,0,,Adios\n"
+        )
+        assertEquals(2, cues.size)
+        assertEquals(1000L, cues[0].startMs)
+        assertEquals(4000L, cues[0].endMs)
+        assertEquals("Hola", cues[0].text)
+        assertEquals(5000L, cues[1].startMs)
+        assertEquals(6500L, cues[1].endMs)
+        assertEquals("Adios", cues[1].text)
+    }
+
+    @Test
+    fun assCentesimosYComasEnTexto() {
+        val cues = SubtitleParser.parse(
+            "[Script Info]\n\n[Events]\n" +
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+                "Dialogue: 0,0:00:01.50,0:00:02.05,Default,,0,0,0,,Hola, mundo, hoy\n"
+        )
+        assertEquals(1, cues.size)
+        assertEquals(1500L, cues[0].startMs)
+        assertEquals(2050L, cues[0].endMs)
+        assertEquals("Hola, mundo, hoy", cues[0].text)
+    }
+
+    @Test
+    fun assEtiquetasYSaltoDeLinea() {
+        val cues = SubtitleParser.parse(
+            "[Script Info]\n\n[Events]\n" +
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+                "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hola {\\i1}mundo{\\i0}\\Nsegunda linea\n"
+        )
+        assertEquals(1, cues.size)
+        assertEquals("Hola mundo\nsegunda linea", cues[0].text)
+    }
+
+    @Test
+    fun assCrlfYSeccionMayusculas() {
+        val cues = SubtitleParser.parse(
+            "[Script Info]\r\n\r\n[EVENTS]\r\nFORMAT: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n" +
+                "DIALOGUE: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,A\r\n"
+        )
+        assertEquals(1, cues.size)
+        assertEquals(1000L, cues[0].startMs)
+        assertEquals(2000L, cues[0].endMs)
+        assertEquals("A", cues[0].text)
+    }
+
+    @Test
+    fun assSinEventsListaVacia() {
+        assertEquals(0, SubtitleParser.parse("[Script Info]\nTitle: x\n").size)
+    }
+
+    @Test
+    fun assFueraDeEventsIgnorado() {
+        val cues = SubtitleParser.parse(
+            "[Script Info]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Fuera\n\n[Events]\n" +
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+                "Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Dentro\n"
+        )
+        assertEquals(1, cues.size)
+        assertEquals(3000L, cues[0].startMs)
+        assertEquals("Dentro", cues[0].text)
+    }
+
+    @Test
+    fun assFinMenorQueInicioLanza() {
+        assertFailsWith<SubtitleFormatException> {
+            SubtitleParser.parse(
+                "[Script Info]\n\n[Events]\n" +
+                    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+                "Dialogue: 0,0:00:05.00,0:00:01.00,Default,,0,0,0,,A\n"
+            )
+        }
+    }
+
+    @Test
+    fun assDialogueSinFormatLanza() {
+        assertFailsWith<SubtitleFormatException> {
+            SubtitleParser.parse("[Script Info]\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,A\n")
+        }
+    }
+
+    @Test
+    fun assCamposInsuficientesYTextoNoFinalLanza() {
+        assertFailsWith<SubtitleFormatException> {
+            SubtitleParser.parse(
+                "[Script Info]\n\n[Events]\n" +
+                    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+                "Dialogue: 0,0:00:01.00,0:00:02.00,Default\n"
+            )
+        }
+        assertFailsWith<SubtitleFormatException> {
+            SubtitleParser.parse(
+                "[Script Info]\n\n[Events]\nFormat: Layer, Start, End, Text, Effect\n" +
+                    "Dialogue: 0,0:00:01.00,0:00:02.00,A,B,C\n"
+            )
+        }
+    }
+
+    @Test
+    fun gestorSeleccionYTextAt() {
+        val gestor = SubtitleManager()
+        gestor.add("es", "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHola\n")
+        gestor.add("en", "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n")
+        assertEquals(listOf("es", "en"), gestor.nombres())
+        assertNull(gestor.textAt(1500L))
+        assertTrue(gestor.select("es"))
+        assertEquals("Hola", gestor.textAt(1500L))
+        assertTrue(gestor.select("en"))
+        assertEquals("Hello", gestor.textAt(1500L))
+        assertFalse(gestor.select("xx"))
+        assertEquals("en", gestor.selected())
+        assertEquals("Hello", gestor.textAt(1500L))
+    }
+
+    @Test
+    fun gestorOffsetDelega() {
+        val gestor = SubtitleManager()
+        gestor.add("a", "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nA\n")
+        gestor.add("b", "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nB\n")
+        assertTrue(gestor.select("a"))
+        gestor.setOffset(500L)
+        assertEquals(500L, gestor.offset())
+        assertEquals("A", gestor.textAt(1600L))
+        assertNull(gestor.textAt(1200L))
+        assertTrue(gestor.select("b"))
+        assertEquals(0L, gestor.offset())
+        gestor.shift(250L)
+        assertEquals(250L, gestor.offset())
+        assertEquals("B", gestor.textAt(300L))
+        assertTrue(gestor.select("a"))
+        assertEquals(500L, gestor.offset())
+        gestor.add("a", "WEBVTT\n")
+        assertNull(gestor.textAt(1600L))
+        assertFailsWith<SubtitleFormatException> { gestor.add("mala", "1\n2\n") }
     }
 }

@@ -1,4 +1,6 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0110)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0114)
+
+**R0114 (T049 v1, RES-0060):** subtítulos locales e incluidos. El parser gana ASS/SSA (sección `[Events]` con `Format`/`Dialogue`, `Text` obligatoriamente el último campo que absorbe comas, centésimos, etiquetas de estilo fuera y `\N` como salto), `SubtitleManager` hace la selección multi-pista (idiomas) con el desfase delegado a la seleccionada y `TorrentSubtitles` lee del torrent los archivos `srt`/`vtt`/`ass`/`ssa` ya legibles vía `TorrentStream` — los subs incluidos en el torrent. La demo «Subs torrent» carga las pistas del torrent sintético y cicla la selección sobre el overlay de subs. Motor 1379→1398 tests (19 nuevos, espejo del gemelo TS), workflow 113→115 fuentes.
 
 **R0110 (T048 v1, RES-0059):** streaming torrent — archivo parcial reproducible. La sesión conserva los bytes de las piezas verificadas (`pieceData`) y el nuevo `TorrentStream` sirve por rangos un archivo del torrent desde esas piezas: `read` entrega hasta el primer hueco, `readableBytes` el prefijo contiguo e `isRangeReady` consulta un rango completo. La demo «Stream torrent» bombea 3 de 5 piezas de un WAV sintético, escribe el prefijo legible en la caché y lo carga en el reproductor (`MediaSource.Local`). Motor 1360→1379 tests (TorrentStreamTest 19, espejo del gemelo TS), workflow 111→113 fuentes.
 
