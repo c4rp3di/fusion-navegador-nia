@@ -39,9 +39,10 @@ class MediaException(message: String) : Exception(message)
  * El motor ES la autoridad de la posicion: avanza con el reloj al rate
  * actual, se congela en pausa y error, y se clampa a la duracion; el
  * backend recibe las ordenes (start/pause/seekTo/volumen/rate) y notifica
- * preparacion (duracion), fin y error. Exclusiones v1: solo audio, sin
- * elemento audio del DOM ni HTMLMediaElement para JS (T039), sin subs ni
- * fullscreen (v2+), sin tick de progreso (la UI consulta position()).
+ * preparacion (duracion), fin y error. Exclusiones: sin elemento
+ * audio del DOM ni HTMLMediaElement para JS (T039), sin tick de progreso
+ * (la UI consulta position()); subs (SubtitleTrack) y fullscreen de la
+ * UI desde v2 (R0102, RES-0055).
  */
 class MediaEngine(private val backend: MediaBackend, private val clock: WallClock) {
 

@@ -143,6 +143,8 @@ jobs:
             engine-core/src/test/java/nia/engine/storage/StoragePersistenceTest.kt \
             engine-core/src/main/java/nia/engine/media/MediaEngine.kt \
             engine-core/src/test/java/nia/engine/media/MediaEngineTest.kt \
+            engine-core/src/main/java/nia/engine/media/Subtitles.kt \
+            engine-core/src/test/java/nia/engine/media/SubtitlesTest.kt \
             engine-core/src/main/java/nia/engine/download/DownloadEngine.kt \
             engine-core/src/test/java/nia/engine/download/DownloadEngineTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \

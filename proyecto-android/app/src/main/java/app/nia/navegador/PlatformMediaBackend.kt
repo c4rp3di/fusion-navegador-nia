@@ -3,6 +3,7 @@ package app.nia.navegador
 import android.content.Context
 import android.media.MediaPlayer
 import android.net.Uri
+import android.view.Surface
 
 import nia.engine.media.MediaBackend
 import nia.engine.media.MediaSource
@@ -14,14 +15,25 @@ import nia.engine.media.MediaSource
  * la local como URI de SAF (content) o file; prepareAsync notifica al
  * nucleo via onPrepared (duracion), onEnded y onError. La posicion la
  * integra MediaEngine y este backend la aplica en cada seekTo.
+ *
+ * T036 v2 (R0102, RES-0055): video: la Surface se conecta con setSurface
+ * antes o despues de prepare (null la desconecta), sin dependencias
+ * nuevas.
  */
 class PlatformMediaBackend(private val context: Context) : MediaBackend {
 
     private var player: MediaPlayer? = null
+    private var surface: Surface? = null
 
     override var onPrepared: ((Long) -> Unit)? = null
     override var onEnded: (() -> Unit)? = null
     override var onError: ((String) -> Unit)? = null
+
+    /** T036 v2: superficie de video (null la desconecta). */
+    fun setSurface(s: Surface?) {
+        surface = s
+        player?.setSurface(s)
+    }
 
     override fun prepare(source: MediaSource) {
         release()
@@ -36,6 +48,7 @@ class PlatformMediaBackend(private val context: Context) : MediaBackend {
             onError?.invoke("media-error " + what + "/" + extra)
             true
         }
+        surface?.let { mp.setSurface(it) }
         mp.prepareAsync()
         player = mp
     }

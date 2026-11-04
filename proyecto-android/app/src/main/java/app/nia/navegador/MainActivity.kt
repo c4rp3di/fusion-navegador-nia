@@ -4,7 +4,10 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -16,6 +19,9 @@ import nia.engine.download.DownloadEngine
 import nia.engine.download.DownloadSink
 import nia.engine.download.DownloadState
 import nia.engine.media.MediaState
+import nia.engine.media.SubtitleFormatException
+import nia.engine.media.SubtitleParser
+import nia.engine.media.SubtitleTrack
 import java.util.concurrent.Executors
 
 /**
@@ -53,6 +59,15 @@ import java.util.concurrent.Executors
  * descargas con la lista de items y su progreso en un TextView.
  * Exclusiones v1: sin reanudacion, sin reintentos y sin apertura del
  * archivo descargado (v2).
+ *
+ * T036 v2 (R0102, RES-0055): video local (SAF de video) sobre SurfaceView
+ * (el backend conecta la Surface al MediaPlayer), boton Fullscreen que
+ * alterna FLAG_FULLSCREEN de la ventana y subs v1 (ADR-017): parser
+ * SubtitleParser de WebVTT/SRT con pista SubtitleTrack de desfase
+ * manual, cargada por SAF, cuyo cue activo se pinta sobre el video
+ * sincronizado con la posicion del nucleo. Exclusiones v2: subs solo de
+ * archivo externo (los del contenedor, T049), sin estilos de cue y
+ * fullscreen sin rotacion ni PiP.
  */
 class MainActivity : Activity() {
 
@@ -61,10 +76,15 @@ class MainActivity : Activity() {
     private val mediaClock = object : WallClock {
         override fun nowMillis(): Long = System.currentTimeMillis()
     }
-    private val media = MediaEngine(PlatformMediaBackend(this), mediaClock)
+    private val videoBackend = PlatformMediaBackend(this)
+    private val media = MediaEngine(videoBackend, mediaClock)
     private val downloadPool = Executors.newFixedThreadPool(2)
     private val downloads = DownloadEngine(PlatformDownloadTransport(), downloadPool, maxConcurrent = 2)
     private lateinit var downloadText: TextView
+    private lateinit var videoView: SurfaceView
+    private lateinit var subtitleText: TextView
+    private var subs: SubtitleTrack? = null
+    private var fullscreenOn = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,6 +115,16 @@ class MainActivity : Activity() {
         descargar.text = "Descargar"
         val cancelarDl = Button(this)
         cancelarDl.text = "Cancelar descargas"
+        val video = Button(this)
+        video.text = "Video"
+        val fullscreen = Button(this)
+        fullscreen.text = "Fullscreen"
+        val subsBtn = Button(this)
+        subsBtn.text = "Subs"
+        val subsMenos = Button(this)
+        subsMenos.text = "Subs -0.5s"
+        val subsMas = Button(this)
+        subsMas.text = "Subs +0.5s"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -113,6 +143,11 @@ class MainActivity : Activity() {
         buttons.addView(mas10)
         buttons.addView(descargar)
         buttons.addView(cancelarDl)
+        buttons.addView(video)
+        buttons.addView(fullscreen)
+        buttons.addView(subsBtn)
+        buttons.addView(subsMenos)
+        buttons.addView(subsMas)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -145,6 +180,28 @@ class MainActivity : Activity() {
         playPause.setOnClickListener { media.playPause() }
         menos10.setOnClickListener { media.seekBy(-10000) }
         mas10.setOnClickListener { media.seekBy(10000) }
+        video.setOnClickListener {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.setType("video/*")
+            startActivityForResult(i, REQUEST_VIDEO)
+        }
+        fullscreen.setOnClickListener {
+            fullscreenOn = !fullscreenOn
+            if (fullscreenOn) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        }
+        subsBtn.setOnClickListener {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.setType("*/*")
+            startActivityForResult(i, REQUEST_SUBS)
+        }
+        subsMenos.setOnClickListener { subs?.shift(-500L) }
+        subsMas.setOnClickListener { subs?.shift(500L) }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
@@ -173,6 +230,24 @@ class MainActivity : Activity() {
             Gravity.BOTTOM or Gravity.END
         ))
         downloads.addListener { downloadText.post { refreshDownloads() } }
+        videoView = SurfaceView(this)
+        videoView.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                videoBackend.setSurface(holder.surface)
+            }
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+            }
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                videoBackend.setSurface(null)
+            }
+        })
+        frame.addView(videoView, FrameLayout.LayoutParams(480, 320, Gravity.CENTER))
+        subtitleText = TextView(this)
+        frame.addView(subtitleText, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        ))
         refreshMedia()
         setContentView(frame)
     }
@@ -197,6 +272,22 @@ class MainActivity : Activity() {
         }
         if (requestCode == REQUEST_AUDIO && resultCode == RESULT_OK) {
             media.load(MediaSource.Local(uri.toString()), autoplay = true)
+        }
+        if (requestCode == REQUEST_VIDEO && resultCode == RESULT_OK) {
+            media.load(MediaSource.Local(uri.toString()), autoplay = true)
+        }
+        if (requestCode == REQUEST_SUBS && resultCode == RESULT_OK) {
+            val texto = try {
+                contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            } catch (e: java.io.IOException) {
+                null
+            } ?: return
+            subs = try {
+                SubtitleTrack(SubtitleParser.parse(texto))
+            } catch (e: SubtitleFormatException) {
+                null
+            }
+            refreshMedia()
         }
         if (requestCode == REQUEST_DOWNLOAD && resultCode == RESULT_OK) {
             val stream = try {
@@ -224,6 +315,10 @@ class MainActivity : Activity() {
         val texto = "" + media.position() / 1000 + "s / " + media.duration() / 1000 +
             "s - " + media.state().name.lowercase()
         mediaText.text = texto
+        val pista = subs
+        if (pista != null) {
+            subtitleText.text = pista.textAt(media.position()) ?: ""
+        }
         if (media.state() == MediaState.PLAYING) {
             mediaText.postDelayed(this::refreshMedia, 500)
         }
@@ -248,6 +343,8 @@ class MainActivity : Activity() {
         private const val REQUEST_GUARDAR = 42
         private const val REQUEST_AUDIO = 43
         private const val REQUEST_DOWNLOAD = 44
+        private const val REQUEST_VIDEO = 45
+        private const val REQUEST_SUBS = 46
         private const val DEMO_AUDIO_URL = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
         private const val DEMO_DOWNLOAD_URL = "https://raw.githubusercontent.com/c4rp3di/fusion-navegador-nia/main/README.md"
     }
