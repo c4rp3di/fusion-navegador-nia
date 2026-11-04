@@ -325,6 +325,13 @@ class IndexedDb(private val quotaBytes: Long = 10_000_000L) {
 
     fun partitionCount(): Int = partitions.size
 
+    /** T044 v1 (R0104, RES-0056): borra TODAS las particiones; devuelve cuantas. */
+    fun clearAll(): Int {
+        val removed = partitions.size
+        partitions.clear()
+        return removed
+    }
+
     internal fun partition(topSite: Site, origin: Origin): Partition =
         partitions.getOrPut(partitionKey(topSite, origin)) { Partition(quotaBytes) }
 

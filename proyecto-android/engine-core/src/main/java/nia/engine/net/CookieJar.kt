@@ -60,6 +60,13 @@ class CookieJar(private val clock: WallClock) {
 
     fun all(): List<Cookie> = cookies.toList()
 
+    /** T044 v1 (R0104, RES-0056): borra todas las cookies; devuelve cuantas. */
+    fun clear(): Int {
+        val removed = cookies.size
+        cookies.clear()
+        return removed
+    }
+
     /**
      * Almacena la cookie de una respuesta hacia [host]. El que llama
      * entrega UNA cabecera Set-Cookie por llamada. Devuelve false si la

@@ -22,6 +22,10 @@ import nia.engine.media.MediaState
 import nia.engine.media.SubtitleFormatException
 import nia.engine.media.SubtitleParser
 import nia.engine.media.SubtitleTrack
+import nia.engine.profile.BrowserProfile
+import nia.engine.storage.StorageScope
+import nia.engine.url.Origin
+import nia.engine.url.Site
 import java.util.concurrent.Executors
 
 /**
@@ -68,6 +72,12 @@ import java.util.concurrent.Executors
  * sincronizado con la posicion del nucleo. Exclusiones v2: subs solo de
  * archivo externo (los del contenedor, T049), sin estilos de cue y
  * fullscreen sin rotacion ni PiP.
+ *
+ * T044 v1 (R0104, RES-0056): modo incognito (ADR-019) con BrowserProfile
+ * (nia.engine.profile): cada perfil es dueno de sus cookies, cache HTTP,
+ * storage particionado e IndexedDB (aislados entre perfiles); el normal
+ * persiste en disco y el incognito vive solo en memoria. Botones Incognito
+ * y Wipe perfil con el estado del perfil activo en un TextView.
  */
 class MainActivity : Activity() {
 
@@ -85,6 +95,8 @@ class MainActivity : Activity() {
     private lateinit var subtitleText: TextView
     private var subs: SubtitleTrack? = null
     private var fullscreenOn = false
+    private var profile: BrowserProfile? = null
+    private lateinit var profileText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -125,6 +137,10 @@ class MainActivity : Activity() {
         subsMenos.text = "Subs -0.5s"
         val subsMas = Button(this)
         subsMas.text = "Subs +0.5s"
+        val incognitoBtn = Button(this)
+        incognitoBtn.text = "Incognito"
+        val wipePerfil = Button(this)
+        wipePerfil.text = "Wipe perfil"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -148,6 +164,8 @@ class MainActivity : Activity() {
         buttons.addView(subsBtn)
         buttons.addView(subsMenos)
         buttons.addView(subsMas)
+        buttons.addView(incognitoBtn)
+        buttons.addView(wipePerfil)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -202,6 +220,21 @@ class MainActivity : Activity() {
         }
         subsMenos.setOnClickListener { subs?.shift(-500L) }
         subsMas.setOnClickListener { subs?.shift(500L) }
+        incognitoBtn.setOnClickListener {
+            val p = BrowserProfile.incognito(mediaClock)
+            p.cookies.storeFromResponse("example.com", true, "demo=1")
+            p.storage.area(
+                StorageScope.LOCAL,
+                Site("https", "example.com"),
+                Origin.Tuple("https", "example.com", 443)
+            ).setItem("demo", "1")
+            profile = p
+            refreshProfile()
+        }
+        wipePerfil.setOnClickListener {
+            profile?.wipe()
+            refreshProfile()
+        }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
@@ -248,6 +281,13 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         ))
+        profileText = TextView(this)
+        frame.addView(profileText, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.START
+        ))
+        refreshProfile()
         refreshMedia()
         setContentView(frame)
     }
@@ -336,6 +376,19 @@ class MainActivity : Activity() {
             else builder.append('?')
         }
         downloadText.text = builder.toString()
+    }
+
+    /** T044 v1: estado del perfil activo en la UI (modo y motores). */
+    private fun refreshProfile() {
+        val p = profile
+        if (p == null) {
+            profileText.text = "perfil: ninguno"
+            return
+        }
+        profileText.text = "perfil: " + p.kind.name.lowercase() +
+            " - cookies " + p.cookies.count() +
+            " - particiones storage " + p.storage.partitionCount() +
+            " - idb " + p.idb.partitionCount()
     }
 
     companion object {

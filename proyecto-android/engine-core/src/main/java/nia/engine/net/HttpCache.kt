@@ -52,6 +52,13 @@ class HttpCache(private val clock: WallClock) {
 
     fun entryFor(url: String): Entry? = entries[url]
 
+    /** T044 v1 (R0104, RES-0056): borra todas las entradas; devuelve cuantas. */
+    fun clear(): Int {
+        val removed = entries.size
+        entries.clear()
+        return removed
+    }
+
     /** Guarda una respuesta 200; no-store -> null (no se almacena). */
     fun store(url: String, response: FetchResponse): Entry? {
         if (response.status != 200) return null
