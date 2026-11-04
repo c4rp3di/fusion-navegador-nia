@@ -43,9 +43,13 @@ import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
 import nia.engine.qa.GithubGmailMatrix
 import nia.engine.qa.YoutubeMatrix
+import nia.engine.torrent.AnnounceEvent
 import nia.engine.torrent.Benc
 import nia.engine.torrent.Bencode
 import nia.engine.torrent.MagnetParser
+import nia.engine.torrent.PeerConnection
+import nia.engine.torrent.PeerPoolSource
+import nia.engine.torrent.PeerTransport
 import nia.engine.torrent.PieceSource
 import nia.engine.torrent.PumpResult
 import nia.engine.torrent.TorrentFile
@@ -53,6 +57,10 @@ import nia.engine.torrent.TorrentMeta
 import nia.engine.torrent.TorrentParser
 import nia.engine.torrent.TorrentSession
 import nia.engine.torrent.TorrentStream
+import nia.engine.torrent.TrackerAnnounceRequest
+import nia.engine.torrent.TrackerClient
+import nia.engine.torrent.TrackerPeer
+import nia.engine.torrent.TrackerTransport
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -173,6 +181,13 @@ import java.util.concurrent.Executors
  * del elemento multimedia del DOM con codecs de plataforma segun
  * ADR-015) y protegido/directos aparte (T059 y smoke real T067).
  * Boton Matriz YT: corre las acciones completas y muestra el informe.
+ *
+ * T047 v2 (R0126, RES-0066, ADR-016): red del torrent SIN red en la
+ * demo: announce sobre un tracker falso enlatado y piezas servidas
+ * por un peer falso con el protocolo wire completo (handshake,
+ * bitfield, unchoke y bloques, una conexion por pieza);
+ * PeerPoolSource alimenta el pump de TorrentSession hasta DONE con
+ * verificacion SHA-1. Boton Torrent red.
  */
 class MainActivity : Activity() {
 
@@ -248,6 +263,8 @@ class MainActivity : Activity() {
         fireTotal.text = "Fire total"
         val torrentDemo = Button(this)
         torrentDemo.text = "Torrent demo"
+        val torrentRed = Button(this)
+        torrentRed.text = "Torrent red"
         val streamDemo = Button(this)
         streamDemo.text = "Stream torrent"
         val subsTorrentBtn = Button(this)
@@ -287,6 +304,7 @@ class MainActivity : Activity() {
         buttons.addView(fireSesion)
         buttons.addView(fireTotal)
         buttons.addView(torrentDemo)
+        buttons.addView(torrentRed)
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
         buttons.addView(subsOsBtn)
@@ -375,6 +393,9 @@ class MainActivity : Activity() {
         }
         torrentDemo.setOnClickListener {
             runTorrentDemo()
+        }
+        torrentRed.setOnClickListener {
+            runTorrentNetDemo()
         }
         streamDemo.setOnClickListener {
             runStreamDemo()
@@ -633,6 +654,95 @@ class MainActivity : Activity() {
             i += len
         }
         return out.toByteArray()
+    }
+
+    /** T047 v2 (R0126, RES-0066, ADR-016): demo de la red del torrent
+     * SIN red: announce sobre un tracker falso enlatado y piezas
+     * servidas por peers falsos con el protocolo wire completo (una
+     * conexion por pieza); PeerPoolSource alimenta el pump de
+     * TorrentSession hasta DONE con verificacion SHA-1. */
+    private fun runTorrentNetDemo() {
+        val data = ByteArray(40) { (it + 1).toByte() }
+        val info = Benc.BDict(LinkedHashMap())
+        info.entries["name"] = Benc.BStr("red.txt".toByteArray(Charsets.UTF_8))
+        info.entries["piece length"] = Benc.BInt(16)
+        info.entries["pieces"] = Benc.BStr(piezasSha1(data, 16))
+        info.entries["length"] = Benc.BInt(40)
+        val root = Benc.BDict(LinkedHashMap())
+        root.entries["announce"] = Benc.BStr("http://tracker.example/announce".toByteArray(Charsets.UTF_8))
+        root.entries["info"] = info
+        val meta = TorrentParser.parse(Bencode.encode(root))
+        val peerId = "-NIA-0001-0000000000".toByteArray(Charsets.US_ASCII)
+        val tracker = object : TrackerTransport {
+            override fun get(url: String): ByteArray {
+                val r = Benc.BDict(LinkedHashMap())
+                r.entries["interval"] = Benc.BInt(60)
+                r.entries["peers"] = Benc.BStr(byteArrayOf(127, 0, 0, 1, 0x1a, 0xe1.toByte()))
+                return Bencode.encode(r)
+            }
+        }
+        val respuesta = TrackerClient(tracker).announce(
+            meta.trackers[0],
+            TrackerAnnounceRequest(meta.infoHash, peerId, 6881, 0, 0, meta.totalLength, AnnounceEvent.STARTED)
+        )
+        var conexion = 0
+        val peers = object : PeerTransport {
+            override fun connect(peer: TrackerPeer): PeerConnection =
+                conexionGuion(conexion++, data, peerId, meta)
+        }
+        val fuente = PeerPoolSource(respuesta.peers, peers, meta.infoHash, peerId, meta.pieceCount(), 16)
+        val sesion = TorrentSession(meta, emptySet())
+        var bomba: PumpResult
+        do {
+            bomba = sesion.pump(fuente)
+        } while (bomba == PumpResult.COMPLETED)
+        val progreso = sesion.progress()
+        downloadText.text = "torrent red: " + respuesta.peers.size + " peer del announce - piezas " +
+            progreso.completedPieces + "/" + progreso.totalPieces + " - estado " + sesion.state.name
+    }
+
+    /** Guion enlatado de un peer falso para la demo de red del
+     * torrent: handshake valido, bitfield, unchoke y los bloques de
+     * la pieza pedida (una conexion por pieza). */
+    private fun conexionGuion(
+        pieza: Int,
+        data: ByteArray,
+        peerId: ByteArray,
+        meta: TorrentMeta
+    ): PeerConnection {
+        val largoPieza = minOf(16, meta.totalLength.toInt() - pieza * 16)
+        val guion = java.io.ByteArrayOutputStream()
+        guion.write(19)
+        guion.write("BitTorrent protocol".toByteArray(Charsets.US_ASCII))
+        guion.write(ByteArray(8))
+        guion.write(meta.infoHash)
+        guion.write(peerId)
+        wireMensaje(guion, 5, byteArrayOf(0xe0.toByte()))
+        wireMensaje(guion, 1, ByteArray(0))
+        val payload = java.io.ByteArrayOutputStream()
+        wire32(payload, pieza)
+        wire32(payload, 0)
+        payload.write(data.copyOfRange(pieza * 16, pieza * 16 + largoPieza))
+        wireMensaje(guion, 7, payload.toByteArray())
+        val bytes = guion.toByteArray()
+        return object : PeerConnection {
+            override val input: java.io.InputStream = java.io.ByteArrayInputStream(bytes)
+            override val output: java.io.OutputStream = java.io.ByteArrayOutputStream()
+            override fun close() {}
+        }
+    }
+
+    private fun wire32(out: java.io.ByteArrayOutputStream, valor: Int) {
+        out.write((valor shr 24) and 0xff)
+        out.write((valor shr 16) and 0xff)
+        out.write((valor shr 8) and 0xff)
+        out.write(valor and 0xff)
+    }
+
+    private fun wireMensaje(out: java.io.ByteArrayOutputStream, id: Int, payload: ByteArray) {
+        wire32(out, 1 + payload.size)
+        out.write(id)
+        out.write(payload)
     }
 
     /** T048 v1 (R0110, RES-0059): demo de streaming del archivo
