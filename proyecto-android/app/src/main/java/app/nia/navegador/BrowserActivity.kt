@@ -2,8 +2,12 @@ package app.nia.navegador
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.view.Gravity
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -13,11 +17,7 @@ import java.io.File
 import nia.contracts.ErrorCode
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
-import nia.engine.dom.DomDocument
-import nia.engine.dom.DomException
-import nia.engine.dom.DomHandle
 import nia.engine.errors.ErrorPages
-import nia.engine.html.DomNode
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.net.HttpTransport
@@ -26,40 +26,30 @@ import nia.engine.omnibox.OmniboxInput
 import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
 import nia.engine.profile.BrowserProfile
+import nia.engine.themes.NiaTokens
+import app.nia.navegador.ui.NiaProgressBar
+import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v1, RES-0075, R0155, ADR-022): shell de navegacion
- * con omnibox sobre el NavController verificado (T071). La resolucion del
- * input sigue las cinco reglas del ADR (OmniboxInput), la navegacion REAL
- * corre fuera del hilo de UI (HttpTransport contra el perfil normal en
- * cacheDir), el estado y el origen quedan visibles, stop cancela por
- * generaciones, recargar re-navega la pagina actual, back/forward usa el
- * historial del tab y las sugerencias son SIEMPRE locales (marcadores en
- * memoria + historial del tab, sin red ni telemetria).
+ * BrowserActivity (T072 v2, RES-0078, R0168): shell estetico "DDG
+ * ligero" sobre el NavController verificado (T071). El navegador pasa a
+ * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
+ * se pintan con el motor propio: NavPage.html (crudo de la respuesta
+ * final) alimenta PaintView con el CSS del navegador, sin re-fetch.
  *
- * Fallback DNS (ADR-022): si la navegacion implicita de un dominio falla de
- * DNS (ErrorCode.NETWORK con mensaje de DNS, contrato del FetchManager), se
- * OFRECE la busqueda del texto original tras confirmacion, nunca en
- * silencio; cualquier otro fallo muestra su error honesto.
+ * Estetica con los componentes y tokens verificados (T069, ADR-021):
+ * colores por NiaUi en modo AUTO (suelo claro del builtin), omnibox
+ * redondeado con indicador de identidad (https accent, http warn),
+ * progreso visible con NiaProgressBar mientras navega, barra inferior
+ * unica (atras, adelante, recargar, stop, menu) y estado en linea
+ * propia. El panel de identidad se abre como dialogo desde el menu.
  *
- * Paginas de error (T083 v1, RES-0076): todo fallo que no sea una cancelacion o
- * un handle caducado muestra su pagina de error (ErrorPages del motor) con el
- * detalle REDACTADO y la URL de la pagina comprometida sin secretos; TLS nunca
- * ofrece recargar como recuperacion.
- *
- * Pagina de identidad (T084 v1, RES-0077): con cada pagina se pinta el
- * panel de identidad del motor (PanelIdentidad): cifrada o NO cifrada,
- * emisor y validez SOLO si el transporte real los expone (nunca
- * fabricados) y la advertencia de la excepcion HTTP concedida; el panel
- * SIEMPRE recuerda que el cifrado no hace que el sitio sea de confiar.
- *
- * Exclusiones v1 (documentadas en la capability engine.omnibox): sin pintar
- * la pagina (el PaintView del shell llega con el smoke T067-A; aqui se lee
- * el texto del documento), sin gestor de historial global ni persistencia de
- * marcadores (llegan con las sesiones), sin incognito del shell (las
- * sugerencias lo respetan por el motor), motor DuckDuckGo HTML por defecto
- * elegible con los ajustes (T054/T094) y sin event loop del shell
- * (T034/T025).
+ * La resolucion del omnibox, el fallback DNS con confirmacion, las
+ * paginas de error honestas y las sugerencias SIEMPRE locales quedan
+ * como en v1 (ADR-022, T083, T084). Exclusiones v2: sin pestanas
+ * (T073), sin tema conmutable en la UI (T070), sugerencias en dialogo
+ * (no desplegable) y el pintado respeta SOLO lo que el motor
+ * CSS/layout soporta hoy (paginas reales simples, honesto).
  */
 class BrowserActivity : Activity() {
 
@@ -71,9 +61,15 @@ class BrowserActivity : Activity() {
     private val nav by lazy { NavController(HttpTransport(), clock, profile) }
     private val marcadores = BookmarkManager()
 
+    private val colores by lazy { NiaUi.colores(this, NiaTokens.Modo.AUTO) }
+
     private lateinit var omnibox: EditText
+    private lateinit var indicador: TextView
     private lateinit var estado: TextView
-    private lateinit var pagina: TextView
+    private lateinit var progreso: NiaProgressBar
+    private lateinit var pagina: PaintView
+    private lateinit var scroll: ScrollView
+    private var panelIdentidad: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,52 +79,101 @@ class BrowserActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
+        raiz.setBackgroundColor(NiaUi.color(colores.bg))
 
-        val fila1 = LinearLayout(this)
+        val espacio = NiaUi.dp(this, NiaTokens.ESPACIADO[3])
+
+        val filaOmnibox = LinearLayout(this)
+        filaOmnibox.orientation = LinearLayout.HORIZONTAL
+        filaOmnibox.setPadding(espacio, espacio, espacio, 0)
+
+        indicador = TextView(this)
+        indicador.text = "?"
+        indicador.textSize = NiaTokens.TIPOGRAFIA[4].sp.toFloat()
+        indicador.setTextColor(NiaUi.color(colores.fg))
+        val lpIndicador = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        lpIndicador.gravity = Gravity.CENTER_VERTICAL
+        lpIndicador.rightMargin = espacio
+        filaOmnibox.addView(indicador, lpIndicador)
+
         omnibox = EditText(this)
         omnibox.hint = "Busca o escribe una URL"
-        fila1.addView(omnibox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        fila1.addView(boton("Ir") { resolverYnavegar() })
-        fila1.addView(boton("Stop") {
-            nav.invalidateGeneration()
-            estado.text = "navegacion cancelada por generacion"
-        })
-        fila1.addView(boton("Recargar") { recargar() })
-        raiz.addView(fila1)
+        val fondoOmnibox = GradientDrawable()
+        fondoOmnibox.setColor(NiaUi.color(colores.surface))
+        fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
+        omnibox.background = fondoOmnibox
+        omnibox.setTextColor(NiaUi.color(colores.fg))
+        omnibox.setHintTextColor(NiaUi.color(colores.fg))
+        omnibox.setInputType(EditorInfo.TYPE_CLASS_TEXT)
+        omnibox.imeOptions = EditorInfo.IME_ACTION_GO
+        omnibox.setPadding(espacio, espacio / 2, espacio, espacio / 2)
+        omnibox.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_GO) {
+                resolverYnavegar()
+                true
+            } else {
+                false
+            }
+        }
+        filaOmnibox.addView(
+            omnibox,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        raiz.addView(filaOmnibox)
 
-        val fila2 = LinearLayout(this)
-        fila2.addView(boton("Atras") {
-            if (!nav.canGoBack()) {
-                estado.text = "sin historial para atras"
-            } else {
-                navegarOutcome { nav.back() }
-            }
-        })
-        fila2.addView(boton("Adelante") {
-            if (!nav.canGoForward()) {
-                estado.text = "sin historial para adelante"
-            } else {
-                navegarOutcome { nav.forward() }
-            }
-        })
-        fila2.addView(boton("Sugerencias") { mostrarSugerencias() })
-        raiz.addView(fila2)
+        progreso = NiaProgressBar(this, colores)
+        raiz.addView(
+            progreso,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
 
         estado = TextView(this)
         estado.text = "listo"
+        estado.textSize = NiaTokens.TIPOGRAFIA[4].sp.toFloat()
+        estado.setTextColor(NiaUi.color(colores.fg))
+        estado.setPadding(espacio, 0, espacio, 0)
         raiz.addView(estado)
 
-        pagina = TextView(this)
-        pagina.text = ""
-        val scroll = ScrollView(this)
+        pagina = PaintView(this)
+        pagina.loadPagina(paginaNueva(), cssNavegador(), true)
+        scroll = ScrollView(this)
+        scroll.setBackgroundColor(NiaUi.color(colores.bg))
         scroll.addView(
             pagina,
             ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         )
         raiz.addView(
             scroll,
-            LinearLayout.LayoutParams(0, 0, 1f)
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
+
+        val barra = LinearLayout(this)
+        barra.orientation = LinearLayout.HORIZONTAL
+        barra.addView(boton("Atras") {
+            if (!nav.canGoBack()) {
+                estado.text = "sin historial para atras"
+            } else {
+                navegarOutcome { nav.back() }
+            }
+        })
+        barra.addView(boton("Adelante") {
+            if (!nav.canGoForward()) {
+                estado.text = "sin historial para adelante"
+            } else {
+                navegarOutcome { nav.forward() }
+            }
+        })
+        barra.addView(boton("Recargar") { recargar() })
+        barra.addView(boton("Stop") {
+            nav.invalidateGeneration()
+            progreso.setFraccion(0f)
+            estado.text = "navegacion cancelada por generacion"
+        })
+        barra.addView(boton("Menu") { mostrarMenu() })
+        raiz.addView(barra)
 
         setContentView(raiz)
     }
@@ -136,6 +181,8 @@ class BrowserActivity : Activity() {
     private fun boton(etiqueta: String, alPulsar: () -> Unit): Button {
         val b = Button(this)
         b.text = etiqueta
+        b.setTextColor(NiaUi.color(colores.fg))
+        b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         b.setOnClickListener { alPulsar() }
         return b
     }
@@ -164,9 +211,11 @@ class BrowserActivity : Activity() {
 
     private fun navegar(url: String, dominioImplicito: Boolean, textoOriginal: String?) {
         nav.invalidateGeneration()
+        progreso.setFraccion(0.2f)
         Thread {
             val o = nav.navigate(url)
             runOnUiThread {
+                progreso.setFraccion(0f)
                 when (o) {
                     is NavOutcome.Loaded -> pintaPagina(o)
                     is NavOutcome.Failed -> manejaFallo(o, dominioImplicito, textoOriginal)
@@ -177,9 +226,11 @@ class BrowserActivity : Activity() {
 
     private fun navegarOutcome(accion: () -> NavOutcome?) {
         nav.invalidateGeneration()
+        progreso.setFraccion(0.2f)
         Thread {
             val o = accion()
             runOnUiThread {
+                progreso.setFraccion(0f)
                 if (o == null) {
                     estado.text = "sin resultado de navegacion"
                 } else {
@@ -218,7 +269,37 @@ class BrowserActivity : Activity() {
                 linea += " - " + u
             }
             estado.text = linea
+            pagina.loadPagina(
+                "<html><body><h1>" + textoHtml(error.titulo) + "</h1><p>" +
+                    textoHtml(error.mensaje) + "</p><p>" + textoHtml(error.detalleRedactado) + "</p></body></html>",
+                cssNavegador(),
+                true
+            )
+            scroll.scrollTo(0, 0)
         }
+    }
+
+    private fun mostrarMenu() {
+        val opciones = arrayOf("Sugerencias", "Identidad de la pagina", "Demos del motor")
+        AlertDialog.Builder(this)
+            .setTitle("Menu")
+            .setItems(opciones) { _, cual ->
+                when (cual) {
+                    0 -> mostrarSugerencias()
+                    1 -> mostrarIdentidad()
+                    2 -> startActivity(Intent(this, MainActivity::class.java))
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun mostrarIdentidad() {
+        AlertDialog.Builder(this)
+            .setTitle("Identidad")
+            .setMessage(if (panelIdentidad.isEmpty()) "sin pagina cargada" else panelIdentidad)
+            .setPositiveButton("Cerrar", null)
+            .show()
     }
 
     private fun mostrarSugerencias() {
@@ -259,30 +340,34 @@ class BrowserActivity : Activity() {
                 panel.append('\n')
             }
         }
-        pagina.text = textoDe(page.document).take(20000) + "\n--- Identidad ---\n" + panel.toString()
+        panelIdentidad = panel.toString()
+        val cifrada = page.url.startsWith("https")
+        indicador.text = if (cifrada) "https" else "http"
+        indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
+        val html = page.html
+        if (html != null) {
+            pagina.loadPagina(html, cssNavegador(), true)
+            scroll.scrollTo(0, 0)
+        }
     }
 
-    private fun textoDe(doc: DomDocument): String {
-        val sb = StringBuilder()
-        fun recorrer(h: DomHandle) {
-            when (val n = doc.nodeOf(h)) {
-                is DomNode.Text -> {
-                    sb.append(n.data)
-                    sb.append('\n')
-                }
-                is DomNode.Element -> for (k in hijos(doc, h)) recorrer(k)
-                is DomNode.Document -> for (k in hijos(doc, h)) recorrer(k)
-                else -> {}
-            }
-        }
-        recorrer(doc.rootHandle())
-        return sb.toString()
-    }
+    /** Texto seguro para el HTML de la pagina de error (sin <, > ni &). */
+    private fun textoHtml(s: String): String =
+        s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
-    private fun hijos(doc: DomDocument, h: DomHandle): List<DomHandle> =
-        try {
-            doc.childrenOf(h)
-        } catch (e: DomException) {
-            emptyList()
-        }
+    private fun paginaNueva(): String =
+        "<html><body><h1>Navegador NIA</h1>" +
+            "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
+            "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell v1).</p>" +
+            "</body></html>"
+
+    /** CSS del navegador: tokens del tema activo (T069/ADR-021); inputs
+     * con fondo oscuro para que el value pintado sea legible. */
+    private fun cssNavegador(): String =
+        "body{background-color:" + colores.bg + ";color:" + colores.fg + ";font-size:16px;padding:12px}" +
+            "h1{font-size:24px;color:" + colores.accent + "}" +
+            "h2{font-size:20px;color:" + colores.accent + "}" +
+            "p{margin-top:8px}" +
+            "input{display:block;padding:10px;border-width:1px;border-color:" + colores.surface +
+            ";background-color:#23233f;color:#f0eef8;font-size:14px;margin-top:8px}"
 }

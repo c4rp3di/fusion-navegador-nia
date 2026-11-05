@@ -87,6 +87,10 @@ data class NavScript(val ref: String, val output: String)
 /**
  * Pagina comprometida: URL final tras redirecciones, estado, identidad,
  * documento vivo, revision capturada al commit y contadores de carga.
+ *
+ * T072 v2 (R0168, RES-0078): html lleva el crudo de la respuesta final
+ * para que el shell pinte la pagina con el motor sin re-fetch; null si
+ * el llamador no lo conoce.
  */
 data class NavPage(
     val url: String,
@@ -98,7 +102,8 @@ data class NavPage(
     val subresources: List<NavSubresource>,
     val scripts: List<NavScript>,
     val events: List<NavEvent>,
-    val tls: TlsInfo? = null
+    val tls: TlsInfo? = null,
+    val html: String? = null
 )
 
 /**
@@ -236,7 +241,8 @@ class NavController(
         val body = response ?: return NavOutcome.Failed(NavState.NAVIGATING, ErrorCode.UNSUPPORTED, "sin respuesta", null)
         lastState = NavState.PARSING
         events.add(NavEvent(NavState.PARSING, current))
-        val document = DomDocument.parse(String(body.body, Charsets.UTF_8))
+        val fuente = String(body.body, Charsets.UTF_8)
+        val document = DomDocument.parse(fuente)
         val finalUrl: Url = try {
             UrlParser.parse(current)
         } catch (e: UrlParseException) {
@@ -257,7 +263,7 @@ class NavController(
         }
         val committed = NavPage(
             current, body.status, origin, site, document, document.snapshot().revision,
-            ArrayList(), ArrayList(), ArrayList(events), body.seguridad
+            ArrayList(), ArrayList(), ArrayList(events), body.seguridad, fuente
         )
         page = committed
         lastState = NavState.LOADED

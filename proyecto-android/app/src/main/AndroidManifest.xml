@@ -7,14 +7,20 @@
         android:label="Navegador NIA"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
+        <!-- T072 v2 (R0168, RES-0078): el navegador es la pantalla inicial;
+             las demos del motor quedan en MainActivity, abierta del menu. -->
         <activity
-            android:name=".MainActivity"
+            android:name=".BrowserActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
 
         <activity
             android:name=".DevToolsActivity"
@@ -26,10 +32,6 @@
 
         <activity
             android:name=".CatalogoActivity"
-            android:exported="false" />
-
-        <activity
-            android:name=".BrowserActivity"
             android:exported="false" />
     </application>
 

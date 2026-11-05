@@ -68,6 +68,11 @@ import nia.engine.paint.PaintSceneBuilder
  * R0167 (fix smoke T067-A): BaseInputConnection con fullEditor=true
  * para que el IME entregue commitText; con false el IME era dummy y las
  * letras llegaban como KeyEvent que PaintView no procesaba.
+ *
+ * T072 v2 (R0168, RES-0078): modo navegador con loadPagina(html, css,
+ * scroll): CSS de base propio (sin el de la demo), sin notas al pie y
+ * con alto de documento para que el ScrollView del shell desplace la
+ * pagina real pintada por el motor.
  */
 class PaintView(context: Context) : View(context) {
 
@@ -80,6 +85,9 @@ class PaintView(context: Context) : View(context) {
     private lateinit var scene: PaintScene
     private var layout: LayoutResult? = null
     private var loadedHtml: String = DemoPage.HTML
+    private var baseCss: String = DemoPage.CSS
+    private var modoDemo: Boolean = true
+    private var scrollDocumento: Boolean = false
 
     private var builtRevision = -1
 
@@ -121,6 +129,7 @@ class PaintView(context: Context) : View(context) {
      * propio documento se suman al CSS de la demo. */
     fun load(html: String) {
         loadedHtml = html
+        baseCss = DemoPage.CSS
         document = DomDocument.parse(html)
         devtoolsModel = DevToolsModel(document, DemoPage.CSS)
         root = document.nodeOf(document.rootHandle())
@@ -129,6 +138,25 @@ class PaintView(context: Context) : View(context) {
         focusedInput = null
         editor.clear()
         rebuild()
+    }
+
+    /** T072 v2 (R0168): pagina REAL del navegador: CSS de base propio,
+     * sin notas de demo y con alto de documento cuando se pide scroll. */
+    fun loadPagina(html: String, css: String, scroll: Boolean) {
+        loadedHtml = html
+        baseCss = css
+        modoDemo = false
+        scrollDocumento = scroll
+        document = DomDocument.parse(html)
+        devtoolsModel = DevToolsModel(document, css)
+        root = document.nodeOf(document.rootHandle())
+        rootDoc = root as DomNode.Document
+        DevToolsState.selectedNodeId = null
+        focusedInput = null
+        editor.clear()
+        rebuild()
+        requestLayout()
+        invalidate()
     }
 
     /** HTML fuente cargado (SAF: Guardar escribe esto, no el DOM mutado). */
@@ -182,13 +210,31 @@ class PaintView(context: Context) : View(context) {
 
     /** Recalcula cascada+layout+escena con las reglas del usuario (v4). */
     private fun rebuild() {
-        var css = DemoPage.CSS + styleTextOf()
+        var css = baseCss + styleTextOf()
         if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
         val laid = LayoutEngine.layout(rootDoc, computed, viewport)
         layout = laid
         scene = PaintSceneBuilder.build(rootDoc, computed, laid)
         builtRevision = DevToolsState.revision
+    }
+
+    /** T072 v2 (R0168): con scrollDocumento el alto pedido es el del
+     * contenido (escena al ancho real); sin el, la demo queda intacta. */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        if (!scrollDocumento) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            return
+        }
+        val ancho = View.MeasureSpec.getSize(widthMeasureSpec)
+        val escala = ancho / viewport.toFloat()
+        var maximo = 0f
+        for (op in scene.ops) {
+            val fin = op.y + op.height
+            if (fin > maximo) maximo = fin
+        }
+        val alto = (maximo * escala).toInt() + 128
+        setMeasuredDimension(ancho, maxOf(alto, View.MeasureSpec.getSize(heightMeasureSpec)))
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -231,7 +277,7 @@ class PaintView(context: Context) : View(context) {
             )
         }
         val sel = DevToolsState.selectedNodeId
-        if (sel != null) {
+        if (modoDemo && sel != null) {
             val sh = devtoolsModel.handleWithNodeId(sel)
             if (sh != null) {
                 val selNode = document.nodeOf(sh)
@@ -249,8 +295,10 @@ class PaintView(context: Context) : View(context) {
             }
             canvas.drawText("seleccion #" + sel, 24f, height - 80f, footnote)
         }
-        canvas.drawText("dibujo del motor propio · sin WebView", 24f, height - 48f, footnote)
-        canvas.drawText("contracts v$ContractsVersion", 24f, height - 16f, footnote)
+        if (modoDemo) {
+            canvas.drawText("dibujo del motor propio · sin WebView", 24f, height - 48f, footnote)
+            canvas.drawText("contracts v$ContractsVersion", 24f, height - 16f, footnote)
+        }
     }
 
     /** T035 v1 (IME): pinta el value de cada input dentro de su caja del
