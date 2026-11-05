@@ -702,9 +702,6 @@ object JsDomBindings {
         }
     }
 
-    /** Instala el global document        }
-    }
-
     /** Instala el global document con los bindings sobre doc (T022). */
     fun install(genv: Env, doc: DomDocument) {
         val s = Session(doc)
@@ -735,11 +732,11 @@ object JsDomBindings {
             val data = JsRuntime.toStringJs(JsBuiltins.a0(args))
             s.wrap(domOp { doc.createComment(data) })
         })
-        val bodyH = domOp { doc.findFirst("body") }        val bodyH = domOp { doc.findFirst("body") }
+        val bodyH = domOp { doc.findFirst("body") }
         document.props["body"] = JsProp.Value(s.wrapOrNull(bodyH))
-                document.props["nodeType"] = JsProp.Value(JsNum(9.0))
+        document.props["nodeType"] = JsProp.Value(JsNum(9.0))
         document.props["nodeName"] = JsProp.Value(JsStr("#document"))
-genv.declare("document", document)
+        genv.declare("document", document)
     }
 }
 

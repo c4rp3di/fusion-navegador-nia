@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0135)revisión R0138)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0138)
 
 **R0116 (T050 v1, RES-0061):** proveedor OpenSubtitles (ADR-017). `OpenSubtitlesClient` habla con la API REST v1 sobre el `FetchManager` de T011 (transporte inyectable), con cuenta configurable (API key siempre; usuario y contraseña opcionales activan el *login* Bearer perezoso, una sola vez), búsqueda por consulta e idiomas con el query codificado, descarga del archivo (`POST /download` + `GET` del enlace firmado) y un JSON mínimo propio sin dependencias. Las credenciales nunca salen del proceso: los mensajes de error son seguros y no las contienen. La demo «Subs OS» recorre el flujo buscar → descargar → pista con un transporte falso enlatado, sin red. Motor 1398→1412 tests (14 nuevos, espejo del gemelo TS), workflow 115→116 fuentes.
 
