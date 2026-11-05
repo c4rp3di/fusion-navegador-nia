@@ -112,7 +112,7 @@ class BookmarkManagerTest {
         val rNombre = m.addCarpeta("")
         assertEquals("carpeta padre no existe: no.hay", mensajeDe(rPadre))
         assertEquals("nombre no valido: ", mensajeDe(rNombre))
-        assertEquals("root", idsDe(m.hijos("root")))
+        assertEquals("", idsDe(m.hijos("root")))
     }
 
     @Test
