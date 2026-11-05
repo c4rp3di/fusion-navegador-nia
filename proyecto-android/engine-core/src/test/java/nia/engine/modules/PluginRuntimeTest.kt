@@ -28,7 +28,7 @@ class PluginRuntimeTest {
 
     private fun valorDe(r: Outcome<String>): String = if (r is Outcome.Success) r.value else "FALLO"
 
-    private fun mensajeDe(r: Outcome<String>): String = if (r is Outcome.Failure) r.error.message ?: "" else ""
+    private fun mensajeDe(r: Outcome<String>): String = if (r is Outcome.Failure) r.error.safeMessage else ""
 
     private fun entryDe(registry: ModuleRegistry, id: String): String = registry.manifestOf(id)?.entry ?: ""
 
@@ -38,7 +38,7 @@ class PluginRuntimeTest {
         val r = rt.load("x.no-instalado", "nia.onNavigate(function (u) { return 'x'; });")
         assertTrue(r is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (r as Outcome.Failure).error.code)
-        assertEquals("modulo no instalado: x.no-instalado", r.error.message)
+        assertEquals("modulo no instalado: x.no-instalado", r.error.safeMessage)
         assertNull(rt.sessionOf("x.no-instalado"))
     }
 
@@ -64,7 +64,7 @@ class PluginRuntimeTest {
         val r = rt.load("demo.adblock", "nia.onNavigate(function(")
         assertTrue(r is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (r as Outcome.Failure).error.code)
-        assertEquals("entry del modulo demo.adblock es invalido: no compila o lanzo", r.error.message)
+        assertEquals("entry del modulo demo.adblock es invalido: no compila o lanzo", r.error.safeMessage)
         assertNull(rt.sessionOf("demo.adblock"))
     }
 
@@ -74,7 +74,7 @@ class PluginRuntimeTest {
         val r = rt.load("demo.adblock", "throw new Error('x');")
         assertTrue(r is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (r as Outcome.Failure).error.code)
-        assertEquals("entry del modulo demo.adblock es invalido: no compila o lanzo", r.error.message)
+        assertEquals("entry del modulo demo.adblock es invalido: no compila o lanzo", r.error.safeMessage)
         assertNull(rt.sessionOf("demo.adblock"))
     }
 
@@ -166,7 +166,7 @@ class PluginRuntimeTest {
         val f = s.fire(PluginEvent.NAVIGATE, "https://x/")
         assertTrue(f is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (f as Outcome.Failure).error.code)
-        assertEquals("hook de onNavigate del modulo demo.lanza lanzo una excepcion", f.error.message)
+        assertEquals("hook de onNavigate del modulo demo.lanza lanzo una excepcion", f.error.safeMessage)
     }
 
     @Test
@@ -180,7 +180,7 @@ class PluginRuntimeTest {
         val f = s.fire(PluginEvent.NAVIGATE, "https://x/")
         assertTrue(f is Outcome.Failure)
         assertEquals(ErrorCode.DENIED, (f as Outcome.Failure).error.code)
-        assertEquals("plugin descargado", f.error.message)
+        assertEquals("plugin descargado", f.error.safeMessage)
         assertNull(rt.sessionOf("demo.lanza"))
         assertTrue(rt.unload("demo.lanza") is Outcome.Failure)
     }
@@ -282,7 +282,7 @@ class PluginRuntimeTest {
         val u = rt.update("no.cargado", "id = no.cargado\nversion = 1\nentry = p.js", "var x = 1;")
         assertTrue(u is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (u as Outcome.Failure).error.code)
-        assertEquals("plugin no cargado: no.cargado", u.error.message)
+        assertEquals("plugin no cargado: no.cargado", u.error.safeMessage)
     }
 
     @Test
