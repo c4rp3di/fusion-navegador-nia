@@ -18,7 +18,7 @@ import kotlin.test.assertNotNull
  * querySelector/querySelectorAll con los selectores de CssCascade.
  * T024 v2 anade textContent como accessor real (get concatena los textos
  * descendientes, set reemplaza los hijos por un Text), stopImmediatePropagation
- * y listeners de captura del propio objetivo en fase objetivo.
+ * y listeners de captura del propio objetivo en fase objetivo. T022 v2 (R0138) anade el reflejo de nodos (nodeType/nodeName/nodeValue, tagName, id/className y navegacion de solo lectura, mas document.createComment) con expectativas del gemelo TS validado en 2 corridas identicas.
  */
 class JsDomBindingsTest {
 
@@ -454,5 +454,216 @@ class JsDomBindingsTest {
         val kids = doc.childrenOf(p)
         assertEquals(1, kids.size)
         assertEquals("kotlin", doc.textOf(kids[0]))
+    }
+
+
+    @Test
+    fun domNodeTypeElemento() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("1", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.nodeType;", doc)))
+    }
+
+    @Test
+    fun domNodeTypeTexto() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("3", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createTextNode(\"a\").nodeType;", doc)))
+    }
+
+    @Test
+    fun domNodeTypeComentario() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("8", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createComment(\"c\").nodeType;", doc)))
+    }
+
+    @Test
+    fun domNodeTypeDocumento() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("9", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.nodeType;", doc)))
+    }
+
+    @Test
+    fun domNodeNameElemento() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"BODY\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.nodeName;", doc)))
+    }
+
+    @Test
+    fun domNodeNameTexto() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"#text\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createTextNode(\"a\").nodeName;", doc)))
+    }
+
+    @Test
+    fun domNodeNameComentario() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"#comment\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createComment(\"c\").nodeName;", doc)))
+    }
+
+    @Test
+    fun domNodeNameDocumento() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"#document\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.nodeName;", doc)))
+    }
+
+    @Test
+    fun domTagName() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"P\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"p\").tagName;", doc)))
+    }
+
+    @Test
+    fun domNodeValueTexto() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"a\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createTextNode(\"a\").nodeValue;", doc)))
+    }
+
+    @Test
+    fun domNodeValueComentario() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"c\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createComment(\"c\").nodeValue;", doc)))
+    }
+
+    @Test
+    fun domNodeValueElementoNull() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("null", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.nodeValue;", doc)))
+    }
+
+    @Test
+    fun domNodeValueSetTexto() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"b\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var t = document.createTextNode(\"a\"); t.nodeValue = \"b\"; t.nodeValue;", doc)))
+    }
+
+    @Test
+    fun domNodeValueSetComentarioFalla() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"wrong-node-type\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var c = document.createComment(\"c\"); try { c.nodeValue = \"x\"; } catch (e) { e.message; }", doc)))
+    }
+
+    @Test
+    fun domNodeValueSetElementoNoOp() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("null", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.nodeValue = \"x\"; document.body.nodeValue;", doc)))
+    }
+
+    @Test
+    fun domIdGet() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"saludo\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"saludo\").id;", doc)))
+    }
+
+    @Test
+    fun domIdVacio() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createElement(\"div\").id;", doc)))
+    }
+
+    @Test
+    fun domIdSet() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var d = document.createElement(\"div\"); document.body.appendChild(d); d.id = \"nuevo\"; document.getElementById(\"nuevo\") === d;", doc)))
+    }
+
+    @Test
+    fun domClassNameGet() {
+        val doc = DomDocument.parse("<html><body><p class=\"c1\">x</p></body></html>")
+        assertEquals("\"c1\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.querySelector(\"p\").className;", doc)))
+    }
+
+    @Test
+    fun domClassNameVacio() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("\"\"", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createElement(\"div\").className;", doc)))
+    }
+
+    @Test
+    fun domClassNameSet() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("var d = document.createElement(\"div\"); document.body.appendChild(d); d.className = \"item\"; document.querySelector(\".item\") === d;", doc)))
+    }
+
+    @Test
+    fun domParentNode() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"saludo\").parentNode === document.body;", doc)))
+    }
+
+    @Test
+    fun domParentNodeDetached() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createElement(\"div\").parentNode === null;", doc)))
+    }
+
+    @Test
+    fun domFirstChild() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.firstChild === document.body.children()[0];", doc)))
+    }
+
+    @Test
+    fun domFirstChildTextoNull() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createTextNode(\"a\").firstChild === null;", doc)))
+    }
+
+    @Test
+    fun domLastChild() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.lastChild === document.body.children()[1];", doc)))
+    }
+
+    @Test
+    fun domNextSibling() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"saludo\").nextSibling === document.body.children()[1];", doc)))
+    }
+
+    @Test
+    fun domNextSiblingUltimoNull() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.children()[1].nextSibling === null;", doc)))
+    }
+
+    @Test
+    fun domPreviousSibling() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.body.children()[1].previousSibling === document.getElementById(\"saludo\");", doc)))
+    }
+
+    @Test
+    fun domPreviousSiblingPrimeroNull() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.getElementById(\"saludo\").previousSibling === null;", doc)))
+    }
+
+    @Test
+    fun domSiblingsDetachedNull() {
+        val doc = DomDocument.parse("<html><body><p id=\"saludo\">hola</p><p>dos</p></body></html>")
+        assertEquals("true", JsInterpreter.dumpResult(JsInterpreter.evaluateWithDom("document.createElement(\"div\").nextSibling === null && document.createElement(\"div\").previousSibling === null;", doc)))
+    }
+
+    @Test
+    fun domIdVisibleKotlin() {
+        val doc = DomDocument.parse("<html><body><p id=\"q\">x</p></body></html>")
+        JsInterpreter.evaluateWithDom("var d = document.createElement(\"div\"); document.body.appendChild(d); d.id = \"kx\";", doc)
+        val d = assertNotNull(doc.findFirst("div"))
+        assertEquals("kx", doc.attributeOf(d, "id"))
+    }
+
+    @Test
+    fun domClassNameVisibleKotlin() {
+        val doc = DomDocument.parse("<html><body><p id=\"q\">x</p></body></html>")
+        JsInterpreter.evaluateWithDom("document.getElementById(\"q\").className = \"cc\";", doc)
+        val p = assertNotNull(doc.findFirst("p"))
+        assertEquals("cc", doc.attributeOf(p, "class"))
+    }
+
+    @Test
+    fun domNodeValueVisibleKotlin() {
+        val doc = DomDocument.parse("<html><body><p id=\"q\">x</p></body></html>")
+        JsInterpreter.evaluateWithDom("document.getElementById(\"q\").children()[0].nodeValue = \"kotlin\";", doc)
+        val p = assertNotNull(doc.findFirst("p"))
+        assertEquals("kotlin", doc.textOf(doc.childrenOf(p)[0]))
     }
 }

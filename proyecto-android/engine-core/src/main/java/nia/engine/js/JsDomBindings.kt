@@ -27,7 +27,7 @@ import nia.engine.html.DomNode
  * reemplaza los hijos por un unico Text y en Text fija su data),
  * stopImmediatePropagation (corta la lista actual y las fases restantes)
  * y listeners de captura del propio objetivo invocados en fase objetivo
- * antes que los de burbuja. Exclusiones: pseudo-clases dinamicas y
+ * antes que los de burbuja. T022 v2 (R0138, RES-0071): reflejo de nodos en los wrappers (nodeType y nodeName constantes del nodo, nodeValue como accessor con el wrong-node-type tipificado de Comment, tagName del Element, id/className reflejando atributos y navegacion de solo lectura parentNode/firstChild/lastChild/nextSibling/previousSibling) y document.createComment/nodeType/nodeName en el global document. Exclusiones: pseudo-clases dinamicas y
  * document.body fijo al body del parseo.
  */
 object JsDomBindings {
@@ -173,6 +173,19 @@ object JsDomBindings {
         private val ivGet = parseAccessorFun("(function () { return this.__valueGet(); })")
         private val ivSet = parseAccessorFun("(function (v) { this.__valueSet(v); })")
         private val elGet = parseAccessorFun("(function () { return this.__elementsGet(); })")
+        // T022 v2 (RES-0071): accessores del reflejo de nodos, parseados una vez por sesion.
+        private val nvGet = parseAccessorFun("(function () { return this.__nodeValueGet(); })")
+        private val nvSet = parseAccessorFun("(function (v) { this.__nodeValueSet(v); })")
+        private val pnGet = parseAccessorFun("(function () { return this.__parentNodeGet(); })")
+        private val fcGet = parseAccessorFun("(function () { return this.__firstChildGet(); })")
+        private val lcGet = parseAccessorFun("(function () { return this.__lastChildGet(); })")
+        private val nsGet = parseAccessorFun("(function () { return this.__nextSiblingGet(); })")
+        private val psGet = parseAccessorFun("(function () { return this.__previousSiblingGet(); })")
+        private val idGet = parseAccessorFun("(function () { return this.__idGet(); })")
+        private val idSet = parseAccessorFun("(function (v) { this.__idSet(v); })")
+        private val clGet = parseAccessorFun("(function () { return this.__classNameGet(); })")
+        private val clSet = parseAccessorFun("(function (v) { this.__classNameSet(v); })")
+
 
         private fun parseAccessorFun(src: String): JsFun {
             val r = JsInterpreter.evaluate(src)
@@ -304,6 +317,85 @@ object JsDomBindings {
                 JsUndefined
             })
             w.props["textContent"] = JsProp.Accessor(tcGet, tcSet)
+            // T022 v2 (RES-0071): nodeValue y navegacion de solo lectura.
+            w.props["__nodeValueGet"] = JsProp.Value(JsBuiltins.fn("nodeValue-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "nodeValue exige un nodo del documento")
+                }
+                val node = domOp { doc.nodeOf(h) }
+                when (node) {
+                    is DomNode.Text -> JsStr(node.data)
+                    is DomNode.Comment -> JsStr(node.data)
+                    else -> JsNull
+                }
+            })
+            w.props["__nodeValueSet"] = JsProp.Value(JsBuiltins.fn("nodeValue-set") { args, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "nodeValue exige un nodo del documento")
+                }
+                val v = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                domOp {
+                    val node = doc.nodeOf(h)
+                    if (node is DomNode.Text || node is DomNode.Comment) {
+                        doc.setText(h, v)
+                    }
+                }
+                JsUndefined
+            })
+            w.props["__parentNodeGet"] = JsProp.Value(JsBuiltins.fn("parentNode-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "parentNode exige un nodo del documento")
+                }
+                wrapOrNull(domOp { doc.parentOf(h) })
+            })
+            w.props["__firstChildGet"] = JsProp.Value(JsBuiltins.fn("firstChild-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "firstChild exige un nodo del documento")
+                }
+                wrapOrNull(childrenOrEmpty(h).firstOrNull())
+            })
+            w.props["__lastChildGet"] = JsProp.Value(JsBuiltins.fn("lastChild-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "lastChild exige un nodo del documento")
+                }
+                wrapOrNull(childrenOrEmpty(h).lastOrNull())
+            })
+            w.props["__nextSiblingGet"] = JsProp.Value(JsBuiltins.fn("nextSibling-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "nextSibling exige un nodo del documento")
+                }
+                val p = domOp { doc.parentOf(h) }
+                if (p == null) return@fn JsNull
+                val kids = domOp { doc.childrenOf(p) }
+                val idx = kids.indexOfFirst { it.nodeId == h.nodeId }
+                if (idx < 0) return@fn JsNull
+                wrapOrNull(kids.getOrNull(idx + 1))
+            })
+            w.props["__previousSiblingGet"] = JsProp.Value(JsBuiltins.fn("previousSibling-get") { _, thiz ->
+                val h = handleOf(thiz)
+                if (h == null) {
+                    throw JsRuntime.throwNative("TypeError", "previousSibling exige un nodo del documento")
+                }
+                val p = domOp { doc.parentOf(h) }
+                if (p == null) return@fn JsNull
+                val kids = domOp { doc.childrenOf(p) }
+                val idx = kids.indexOfFirst { it.nodeId == h.nodeId }
+                if (idx < 0) return@fn JsNull
+                wrapOrNull(kids.getOrNull(idx - 1))
+            })
+            w.props["nodeValue"] = JsProp.Accessor(nvGet, nvSet)
+            w.props["parentNode"] = JsProp.Accessor(pnGet, null)
+            w.props["firstChild"] = JsProp.Accessor(fcGet, null)
+            w.props["lastChild"] = JsProp.Accessor(lcGet, null)
+            w.props["nextSibling"] = JsProp.Accessor(nsGet, null)
+            w.props["previousSibling"] = JsProp.Accessor(psGet, null)
+
 
             w.props["addEventListener"] = JsProp.Value(JsBuiltins.fn("addEventListener") { args, thiz ->
                 val target = thiz as? JsObj
@@ -550,7 +642,67 @@ object JsDomBindings {
                     JsInterpreter.callFunction(dVal, target, listOf(ev))
                 })
             }
+            // T022 v2 (RES-0071): reflejo de nodos. nodeType y nodeName son
+            // constantes del nodo; tagName, id y className solo en Elements.
+            if (selfNode != null) {
+                val nt = when (selfNode) {
+                    is DomNode.Document -> 9.0
+                    is DomNode.Element -> 1.0
+                    is DomNode.Text -> 3.0
+                    is DomNode.Comment -> 8.0
+                    is DomNode.Doctype -> 10.0
+                }
+                w.props["nodeType"] = JsProp.Value(JsNum(nt))
+                val nn = when (selfNode) {
+                    is DomNode.Document -> "#document"
+                    is DomNode.Element -> selfNode.name.uppercase()
+                    is DomNode.Text -> "#text"
+                    is DomNode.Comment -> "#comment"
+                    is DomNode.Doctype -> selfNode.name ?: ""
+                }
+                w.props["nodeName"] = JsProp.Value(JsStr(nn))
+            }
+            if (selfNode is DomNode.Element) {
+                w.props["tagName"] = JsProp.Value(JsStr(selfNode.name.uppercase()))
+                w.props["__idGet"] = JsProp.Value(JsBuiltins.fn("id-get") { _, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "id exige un nodo del documento")
+                    }
+                    JsStr(domOp { doc.attributeOf(h, "id") } ?: "")
+                })
+                w.props["__idSet"] = JsProp.Value(JsBuiltins.fn("id-set") { args, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "id exige un nodo del documento")
+                    }
+                    val v = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                    domOp { doc.setAttribute(h, "id", v) }
+                    JsUndefined
+                })
+                w.props["__classNameGet"] = JsProp.Value(JsBuiltins.fn("class-get") { _, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "class exige un nodo del documento")
+                    }
+                    JsStr(domOp { doc.attributeOf(h, "class") } ?: "")
+                })
+                w.props["__classNameSet"] = JsProp.Value(JsBuiltins.fn("class-set") { args, thiz ->
+                    val h = handleOf(thiz)
+                    if (h == null) {
+                        throw JsRuntime.throwNative("TypeError", "class exige un nodo del documento")
+                    }
+                    val v = JsRuntime.toStringJs(JsBuiltins.a0(args))
+                    domOp { doc.setAttribute(h, "class", v) }
+                    JsUndefined
+                })
+                w.props["id"] = JsProp.Accessor(idGet, idSet)
+                w.props["className"] = JsProp.Accessor(clGet, clSet)
+            }
         }
+    }
+
+    /** Instala el global document        }
     }
 
     /** Instala el global document con los bindings sobre doc (T022). */
@@ -579,9 +731,15 @@ object JsDomBindings {
             val data = JsRuntime.toStringJs(JsBuiltins.a0(args))
             s.wrap(domOp { doc.createTextNode(data) })
         })
-        val bodyH = domOp { doc.findFirst("body") }
+        document.props["createComment"] = JsProp.Value(JsBuiltins.fn("createComment") { args, _ ->
+            val data = JsRuntime.toStringJs(JsBuiltins.a0(args))
+            s.wrap(domOp { doc.createComment(data) })
+        })
+        val bodyH = domOp { doc.findFirst("body") }        val bodyH = domOp { doc.findFirst("body") }
         document.props["body"] = JsProp.Value(s.wrapOrNull(bodyH))
-        genv.declare("document", document)
+                document.props["nodeType"] = JsProp.Value(JsNum(9.0))
+        document.props["nodeName"] = JsProp.Value(JsStr("#document"))
+genv.declare("document", document)
     }
 }
 
