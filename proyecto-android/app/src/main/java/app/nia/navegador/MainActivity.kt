@@ -72,6 +72,7 @@ import nia.engine.modules.ModuleRegistry
 import nia.engine.modules.PluginEvent
 import nia.engine.modules.PluginRuntime
 import nia.engine.themes.ThemeManager
+import nia.engine.bookmarks.BookmarkManager
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -217,6 +218,8 @@ import java.util.concurrent.Executors
  * T031 v1 (R0133, RES-0069): temas declarativos con recovery en la
  * demo: ThemeManager instala un tema custom, lo activa y al
  * desinstalar el activo cae al ultimo bueno. Boton Temas demo.
+ * T060 v1 (R0135, RES-0070): marcadores y accesos rapidos con
+ * persistencia por perfil. Boton Marcadores demo.
  */
 class MainActivity : Activity() {
 
@@ -298,6 +301,8 @@ class MainActivity : Activity() {
         torrentMagnet.text = "Torrent magnet"
         val pluginsDemo = Button(this)
         pluginsDemo.text = "Plugins demo"
+        val marcadoresDemo = Button(this)
+        marcadoresDemo.text = "Marcadores demo"
         val temasDemo = Button(this)
         temasDemo.text = "Temas demo"
         val streamDemo = Button(this)
@@ -342,6 +347,7 @@ class MainActivity : Activity() {
         buttons.addView(torrentRed)
         buttons.addView(torrentMagnet)
         buttons.addView(pluginsDemo)
+        buttons.addView(marcadoresDemo)
         buttons.addView(temasDemo)
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
@@ -440,6 +446,9 @@ class MainActivity : Activity() {
         }
         pluginsDemo.setOnClickListener {
             runPluginsDemo()
+        }
+        marcadoresDemo.setOnClickListener {
+            runBookmarksDemo()
         }
         temasDemo.setOnClickListener {
             runThemesDemo()
@@ -969,6 +978,21 @@ class MainActivity : Activity() {
         downloadText.text = "temas: activo=" + (activo?.name ?: "?") +
             " - builtin protegido=" + reservado +
             " - tras quitar el activo: " + (recuperado?.name ?: "?")
+    }
+
+    private fun runBookmarksDemo() {
+        val marcadores = BookmarkManager()
+        val carpeta = marcadores.addCarpeta("Noticias")
+        val carpetaId = (carpeta as? Outcome.Success)?.value?.id
+        marcadores.add("Diario", "https://ejemplo.com/diario", carpetaId ?: "root")
+        val fijado = marcadores.pin("bm.1") is Outcome.Success
+        val encontrados = marcadores.buscar("diario").size
+        val clon = BookmarkManager()
+        val importado = clon.importar(marcadores.exportar())
+        val total = if (importado is Outcome.Success) clon.total else -1
+        downloadText.text = "marcadores: total=" + total +
+            " - encontrados=" + encontrados +
+            " - fijado=" + fijado
     }
 
     /** T048 v1 (R0110, RES-0059): demo de streaming del archivo
