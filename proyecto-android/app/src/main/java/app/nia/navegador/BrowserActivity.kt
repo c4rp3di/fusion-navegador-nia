@@ -269,13 +269,10 @@ class BrowserActivity : Activity() {
                 linea += " - " + u
             }
             estado.text = linea
-            pagina.loadPagina(
+            pintar(
                 "<html><body><h1>" + textoHtml(error.titulo) + "</h1><p>" +
-                    textoHtml(error.mensaje) + "</p><p>" + textoHtml(error.detalleRedactado) + "</p></body></html>",
-                cssNavegador(),
-                true
+                    textoHtml(error.mensaje) + "</p><p>" + textoHtml(error.detalleRedactado) + "</p></body></html>"
             )
-            scroll.scrollTo(0, 0)
         }
     }
 
@@ -325,6 +322,18 @@ class BrowserActivity : Activity() {
             .show()
     }
 
+    /** R0171: pinta con el motor y, si una pagina real revienta algo del
+     * pipeline, el shell NO se cierra: se conserva la pagina previa y el
+     * estado cuenta que fallo (honesto, sin WebView). */
+    private fun pintar(html: String) {
+        try {
+            pagina.loadPagina(html, cssNavegador(), true)
+            scroll.scrollTo(0, 0)
+        } catch (e: Exception) {
+            estado.text = "el motor no pudo pintar la pagina: " + e
+        }
+    }
+
     private fun pintaPagina(o: NavOutcome.Loaded) {
         val page = o.page
         estado.text = "LOADED " + page.status + " - " + page.origin + " - " + page.url
@@ -346,8 +355,7 @@ class BrowserActivity : Activity() {
         indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
         val html = page.html
         if (html != null) {
-            pagina.loadPagina(html, cssNavegador(), true)
-            scroll.scrollTo(0, 0)
+            pintar(html)
         }
     }
 

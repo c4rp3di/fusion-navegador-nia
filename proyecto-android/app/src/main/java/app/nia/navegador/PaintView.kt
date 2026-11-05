@@ -200,7 +200,18 @@ class PaintView(context: Context) : View(context) {
         fun go(h: DomHandle) {
             val n = document.nodeOf(h)
             if (n is DomNode.Element && n.name.equals("style", ignoreCase = true)) {
-                sb.append('\n').append(document.textOf(h))
+                // R0171 (crash del smoke T072 v2): el CSS vive en los hijos
+                // Text del <style>; textOf exige un nodo Text y con el handle
+                // del ELEMENTO reventaba en paginas reales (la demo no trae
+                // <style> y no lo ejecutaba nunca). Comentarios y <style>
+                // vacio se ignoran; varios hijos Text se concatenan.
+                for (k in childrenOrEmpty(h)) {
+                    val hijo = document.nodeOf(k)
+                    if (hijo is DomNode.Text) {
+                        sb.append('\n').append(hijo.data)
+                    }
+                }
+                return
             }
             for (k in childrenOrEmpty(h)) go(k)
         }
