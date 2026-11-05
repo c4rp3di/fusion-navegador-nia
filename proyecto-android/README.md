@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0144)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0154)
 
 **R0116 (T050 v1, RES-0061):** proveedor OpenSubtitles (ADR-017). `OpenSubtitlesClient` habla con la API REST v1 sobre el `FetchManager` de T011 (transporte inyectable), con cuenta configurable (API key siempre; usuario y contraseña opcionales activan el *login* Bearer perezoso, una sola vez), búsqueda por consulta e idiomas con el query codificado, descarga del archivo (`POST /download` + `GET` del enlace firmado) y un JSON mínimo propio sin dependencias. Las credenciales nunca salen del proceso: los mensajes de error son seguros y no las contienen. La demo «Subs OS» recorre el flujo buscar → descargar → pista con un transporte falso enlatado, sin red. Motor 1398→1412 tests (14 nuevos, espejo del gemelo TS), workflow 115→116 fuentes.
 
@@ -49,6 +49,21 @@ para TalkBack); los overlays y los atados a navegación (NiaMenu, BottomSheet,
 Dialog, Snackbar, UrlBar, TabStrip, ErrorPage) llegan con el shell de
 navegación (T071/T072, ADR-022). Motor 1600→1615 tests (15 nuevos, espejo del
 gemelo TS), workflow 134→144 fuentes.
+
+**R0154 (T072, RES-0075):** ADR-022, omnibox con URL y búsqueda por parser
+y heurísticas explícitas (tarea documental, ANTES del código de T072). El
+omnibox resuelve el texto ambiguo con reglas deterministas apoyadas en el
+UrlParser del motor (T012): esquema http/https explícito, navegar tal
+cual; esquema no soportado, aviso honesto; sin esquema pero parece dominio
+(punto, localhost o IP), navegar con https implícito; todo lo demás,
+búsqueda. Decisión del usuario: si la navegación implícita falla de DNS se
+OFRECE la búsqueda tras confirmación (nunca en silencio) y el motor por
+defecto es DuckDuckGo HTML (elegible cuando existan los ajustes
+T054/T094); las sugerencias son SIEMPRE locales (historial y marcadores,
+sin red ni telemetría, sin historial en incógnito por ADR-019). Una
+búsqueda es una navegación normal del NavController: misma identidad, TLS
+y cookies. Documental: motor sin cambios (1629 tests, workflow 146
+fuentes).
 
 **R0114 (T049 v1, RES-0060):** subtítulos locales e incluidos. El parser gana ASS/SSA (sección `[Events]` con `Format`/`Dialogue`, `Text` obligatoriamente el último campo que absorbe comas, centésimos, etiquetas de estilo fuera y `\N` como salto), `SubtitleManager` hace la selección multi-pista (idiomas) con el desfase delegado a la seleccionada y `TorrentSubtitles` lee del torrent los archivos `srt`/`vtt`/`ass`/`ssa` ya legibles vía `TorrentStream` — los subs incluidos en el torrent. La demo «Subs torrent» carga las pistas del torrent sintético y cicla la selección sobre el overlay de subs. Motor 1379→1398 tests (19 nuevos, espejo del gemelo TS), workflow 113→115 fuentes.
 
@@ -174,7 +189,7 @@ settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
 engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + async/await y generators (T018 v5) + broker/renderer/IPC (T006) + config con migración/recovery (T007) + inspector con redacción de secretos (T008) + módulos declarativos (T009) + panel DevTools (T017) + fetch/TLS/cancelación (T011) + panel DevTools Android (T017 v2) + transporte real HttpURLConnection (T011 v2) + cuotas/interrupción JS (T021) + tablas/template HTML (T012 v3) + tests)
 app/                aplicación Android mínima
-docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma), ADR-012/013/014/015 (WASM, WebGL, WebRTC, DRM), ADR-016/017/018/019/020 (torrent, subtítulos, adblock, incógnito/Fire, casting), ADR-021 (diseño del shell)
+docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma), ADR-012/013/014/015 (WASM, WebGL, WebRTC, DRM), ADR-016/017/018/019/020 (torrent, subtítulos, adblock, incógnito/Fire, casting), ADR-021 (diseño del shell), ADR-022 (omnibox)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)
 ```
 
