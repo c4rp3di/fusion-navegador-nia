@@ -190,14 +190,15 @@ class NavController(
             if (outcome is Outcome.Failure) {
                 return NavOutcome.Failed(NavState.NAVIGATING, outcome.error.code, outcome.error.safeMessage, null)
             }
-            response = (outcome as Outcome.Success).value
+            val fetched = (outcome as Outcome.Success<FetchResponse>).value
+            response = fetched
             events.add(NavEvent(NavState.RESPONSE_RECEIVED, current))
-            val setCookie = headerValue(response.headers, "set-cookie")
+            val setCookie = headerValue(fetched.headers, "set-cookie")
             if (setCookie != null) {
                 profile.cookies.storeFromResponse(u.host, u.scheme == "https", setCookie)
             }
-            if (RedirectPolicy.redirectable(response.status)) {
-                val plan = RedirectPolicy.plan(response.status, method, headerValue(response.headers, "location"), current, hops)
+            if (RedirectPolicy.redirectable(fetched.status)) {
+                val plan = RedirectPolicy.plan(fetched.status, method, headerValue(fetched.headers, "location"), current, hops)
                 if (plan is RedirectPolicy.Plan.Stop) {
                     return NavOutcome.Failed(NavState.NAVIGATING, ErrorCode.UNSUPPORTED, "redireccion no seguida: " + plan.reason, null)
                 }
@@ -332,7 +333,7 @@ class NavController(
             }
             return SideResult.Failed(code)
         }
-        val resp = (outcome as Outcome.Success).value
+        val resp = (outcome as Outcome.Success<FetchResponse>).value
         return SideResult.Ok(String(resp.body, Charsets.UTF_8))
     }
 
