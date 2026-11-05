@@ -71,6 +71,7 @@ import nia.engine.torrent.torrentDesdeInfo
 import nia.engine.modules.ModuleRegistry
 import nia.engine.modules.PluginEvent
 import nia.engine.modules.PluginRuntime
+import nia.engine.themes.ThemeManager
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -213,6 +214,9 @@ import java.util.concurrent.Executors
  * (onStartup y onNavigate siempre; onRequest exige network.fetch),
  * dispara hooks (fire) con revocacion (unload DENIED) y update con
  * rollback automatico sin recompilar. Boton Plugins demo.
+ * T031 v1 (R0133, RES-0069): temas declarativos con recovery en la
+ * demo: ThemeManager instala un tema custom, lo activa y al
+ * desinstalar el activo cae al ultimo bueno. Boton Temas demo.
  */
 class MainActivity : Activity() {
 
@@ -294,6 +298,8 @@ class MainActivity : Activity() {
         torrentMagnet.text = "Torrent magnet"
         val pluginsDemo = Button(this)
         pluginsDemo.text = "Plugins demo"
+        val temasDemo = Button(this)
+        temasDemo.text = "Temas demo"
         val streamDemo = Button(this)
         streamDemo.text = "Stream torrent"
         val subsTorrentBtn = Button(this)
@@ -336,6 +342,7 @@ class MainActivity : Activity() {
         buttons.addView(torrentRed)
         buttons.addView(torrentMagnet)
         buttons.addView(pluginsDemo)
+        buttons.addView(temasDemo)
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
         buttons.addView(subsOsBtn)
@@ -433,6 +440,9 @@ class MainActivity : Activity() {
         }
         pluginsDemo.setOnClickListener {
             runPluginsDemo()
+        }
+        temasDemo.setOnClickListener {
+            runThemesDemo()
         }
         streamDemo.setOnClickListener {
             runStreamDemo()
@@ -936,6 +946,29 @@ class MainActivity : Activity() {
         downloadText.text = "plugins: demo.adblock nav ads=" + banner +
             " request tracker=" + tracker + " - update v2 " + v2Resultado +
             " - rollback " + rollback
+    }
+
+    /** T031 v1 (R0133, RES-0069): demo de temas con recovery: instala
+     * un tema custom, lo activa, rechaza desinstalar el builtin y al
+     * quitar el activo cae al ultimo bueno (recovery de tema roto). */
+    private fun runThemesDemo() {
+        val temas = ThemeManager()
+        val instalado = temas.install(
+            "id = sol.playa\nname = Playa\nbg = #fdf6e3\nsurface = #eee8d5\n" +
+                "fg = #657b83\naccent = #2aa198\nwarn = #cb4b16\nerror = #dc322f"
+        )
+        if (instalado is Outcome.Failure) {
+            downloadText.text = "temas: la instalacion del tema fallo"
+            return
+        }
+        val activado = temas.activate("sol.playa")
+        val activo = (activado as? Outcome.Success)?.value
+        val reservado = temas.uninstall("claro") is Outcome.Failure
+        val quitarActivo = temas.uninstall("sol.playa")
+        val recuperado = (quitarActivo as? Outcome.Success)?.value
+        downloadText.text = "temas: activo=" + (activo?.name ?: "?") +
+            " - builtin protegido=" + reservado +
+            " - tras quitar el activo: " + (recuperado?.name ?: "?")
     }
 
     /** T048 v1 (R0110, RES-0059): demo de streaming del archivo
