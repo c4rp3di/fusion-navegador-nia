@@ -27,6 +27,10 @@
         <activity
             android:name=".CatalogoActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".BrowserActivity"
+            android:exported="false" />
     </application>
 
 </manifest>

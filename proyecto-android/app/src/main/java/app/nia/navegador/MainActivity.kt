@@ -89,6 +89,9 @@ import java.util.concurrent.Executors
  * R0062 (T027 v2): boton Fetch demo que abre FetchDemoActivity, la demo
  * interactiva de forms/fetch con cancelacion.
  *
+ * R0155 (T072 v1): boton Navegador que abre BrowserActivity, el shell de
+ * navegacion con omnibox sobre el NavController verificado (ADR-022).
+ *
  * T035 v1 (R0088, RES-0049): botones Abrir y Guardar con el Storage Access
  * Framework, sin permisos de almacenamiento. Abrir (ACTION_OPEN_DOCUMENT
  * text/html) lee el archivo y PaintView lo parsea con el motor (los <style>
@@ -322,6 +325,8 @@ class MainActivity : Activity() {
         ytBtn.text = "Matriz YT"
         val catalogoBtn = Button(this)
         catalogoBtn.text = "Catalogo UI"
+        val navegadorBtn = Button(this)
+        navegadorBtn.text = "Navegador"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -362,6 +367,7 @@ class MainActivity : Activity() {
         buttons.addView(matrizBtn)
         buttons.addView(ytBtn)
         buttons.addView(catalogoBtn)
+        buttons.addView(navegadorBtn)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -478,6 +484,10 @@ class MainActivity : Activity() {
         }
         catalogoBtn.setOnClickListener {
             startActivity(Intent(this, CatalogoActivity::class.java))
+        }
+
+        navegadorBtn.setOnClickListener {
+            startActivity(Intent(this, BrowserActivity::class.java))
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -1266,3 +1276,4 @@ class MainActivity : Activity() {
         private const val YT_SUBS_DEMO = "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nGran video\n\n00:00:05.000 --> 00:00:08.000\nEl seek funciona\n\n00:00:09.000 --> 00:00:12.000\nTercera linea\n"
     }
 }
+
