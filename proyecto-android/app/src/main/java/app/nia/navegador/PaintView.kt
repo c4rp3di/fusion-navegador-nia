@@ -227,8 +227,8 @@ class PaintView(context: Context) : View(context) {
             return
         }
         val ancho = View.MeasureSpec.getSize(widthMeasureSpec)
-        val escala = ancho / viewport.toFloat()
-        var maximo = 0f
+        val escala = ancho / viewport
+        var maximo = 0.0
         for (op in scene.ops) {
             val fin = op.y + op.height
             if (fin > maximo) maximo = fin
