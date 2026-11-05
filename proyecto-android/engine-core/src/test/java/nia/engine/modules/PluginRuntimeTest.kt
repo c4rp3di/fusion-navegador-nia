@@ -35,7 +35,7 @@ class PluginRuntimeTest {
     @Test
     fun loadDeModuloNoInstaladoFalla() {
         val rt = PluginRuntime(registry())
-        val r = rt.load("x.no-instalado", "nia.onNavigate(function (u) { return "x"; });")
+        val r = rt.load("x.no-instalado", "nia.onNavigate(function (u) { return 'x'; });")
         assertTrue(r is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (r as Outcome.Failure).error.code)
         assertEquals("modulo no instalado: x.no-instalado", r.error.message)
@@ -81,7 +81,7 @@ class PluginRuntimeTest {
     @Test
     fun loadConHookNoFuncionFalla() {
         val rt = PluginRuntime(registry())
-        val r = rt.load("demo.adblock", "nia.onNavigate("no-funcion");")
+        val r = rt.load("demo.adblock", "nia.onNavigate('no-funcion');")
         assertTrue(r is Outcome.Failure)
         assertEquals(ErrorCode.INVALID_INPUT, (r as Outcome.Failure).error.code)
         assertNull(rt.sessionOf("demo.adblock"))
@@ -92,9 +92,9 @@ class PluginRuntimeTest {
         val reg = ModuleRegistry(null)
         reg.install("id = demo.solo-nav\nversion = 1\nentry = p.js")
         val rt = PluginRuntime(reg)
-        val sinPermiso = rt.load("demo.solo-nav", "nia.onRequest(function (u) { return "x"; });")
+        val sinPermiso = rt.load("demo.solo-nav", "nia.onRequest(function (u) { return 'x'; });")
         assertTrue(sinPermiso is Outcome.Failure)
-        val conOnNavigate = rt.load("demo.solo-nav", "nia.onNavigate(function (u) { return "nav"; });")
+        val conOnNavigate = rt.load("demo.solo-nav", "nia.onNavigate(function (u) { return 'nav'; });")
         assertTrue(conOnNavigate is Outcome.Success)
         assertEquals(1, (conOnNavigate as Outcome.Success).value.hookCount(PluginEvent.NAVIGATE))
     }
@@ -106,8 +106,8 @@ class PluginRuntimeTest {
         val rt = PluginRuntime(reg)
         val r = rt.load(
             "demo.solo-nav",
-            "nia.onStartup(function () { return "s"; });" +
-                "nia.onNavigate(function (u) { return "nav"; });"
+            "nia.onStartup(function () { return 's'; });" +
+                "nia.onNavigate(function (u) { return 'nav'; });"
         )
         assertTrue(r is Outcome.Success)
         val s = (r as Outcome.Success).value
@@ -174,7 +174,7 @@ class PluginRuntimeTest {
         val reg = ModuleRegistry(null)
         reg.install("id = demo.lanza\nversion = 1\nentry = p.js")
         val rt = PluginRuntime(reg)
-        val r = rt.load("demo.lanza", "nia.onNavigate(function (u) { return "ok"; });")
+        val r = rt.load("demo.lanza", "nia.onNavigate(function (u) { return 'ok'; });")
         val s = (r as Outcome.Success).value
         assertTrue(rt.unload("demo.lanza") is Outcome.Success)
         val f = s.fire(PluginEvent.NAVIGATE, "https://x/")
