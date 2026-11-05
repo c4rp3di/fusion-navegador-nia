@@ -188,7 +188,7 @@ class TorrentDhtTest {
                 "values" to Benc.BList(
                     listOf(
                         Benc.BStr(byteArrayOf(10, 0, 0, 9, 0x1b, 0x39)),
-                        Benc.BStr(byteArrayOf(10, 0, 1, 1, 0x04, 0xd2))
+                        Benc.BStr(byteArrayOf(10, 0, 1, 1, 0x04, 0xd2.toByte()))
                     )
                 )
             )
