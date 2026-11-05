@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import nia.contracts.CancellationToken
+import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.contracts.valueOrNull
 import nia.engine.media.MediaEngine
@@ -67,6 +68,9 @@ import nia.engine.torrent.TrackerTransport
 import nia.engine.torrent.UdpTrackerClient
 import nia.engine.torrent.UdpTransport
 import nia.engine.torrent.torrentDesdeInfo
+import nia.engine.modules.ModuleRegistry
+import nia.engine.modules.PluginEvent
+import nia.engine.modules.PluginRuntime
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -201,6 +205,14 @@ import java.util.concurrent.Executors
  * (BEP-9/10) ensamblados desde un peer guionado con ut_metadata;
  * torrentDesdeInfo monta el torrent desde el info dict ensamblado.
  * Boton Torrent magnet.
+ *
+ * T029/T030 v1 (R0131, RES-0068, ADR-016): runtime de plugins SIN red
+ * en la demo: PluginRuntime carga el entry de un modulo instalado
+ * (ModuleRegistry de T009) con cuotas de plugin (topes reducidos),
+ * inyecta el objeto nia con los hooks que los permisos conceden
+ * (onStartup y onNavigate siempre; onRequest exige network.fetch),
+ * dispara hooks (fire) con revocacion (unload DENIED) y update con
+ * rollback automatico sin recompilar. Boton Plugins demo.
  */
 class MainActivity : Activity() {
 
@@ -280,6 +292,8 @@ class MainActivity : Activity() {
         torrentRed.text = "Torrent red"
         val torrentMagnet = Button(this)
         torrentMagnet.text = "Torrent magnet"
+        val pluginsDemo = Button(this)
+        pluginsDemo.text = "Plugins demo"
         val streamDemo = Button(this)
         streamDemo.text = "Stream torrent"
         val subsTorrentBtn = Button(this)
@@ -321,6 +335,7 @@ class MainActivity : Activity() {
         buttons.addView(torrentDemo)
         buttons.addView(torrentRed)
         buttons.addView(torrentMagnet)
+        buttons.addView(pluginsDemo)
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
         buttons.addView(subsOsBtn)
@@ -415,6 +430,9 @@ class MainActivity : Activity() {
         }
         torrentMagnet.setOnClickListener {
             runTorrentMagnetDemo()
+        }
+        pluginsDemo.setOnClickListener {
+            runPluginsDemo()
         }
         streamDemo.setOnClickListener {
             runStreamDemo()
@@ -864,6 +882,60 @@ class MainActivity : Activity() {
             override val output: java.io.OutputStream = java.io.ByteArrayOutputStream()
             override fun close() {}
         }
+    }
+
+    /** T029/T030 v1 (R0131, RES-0068, ADR-016): demo del runtime de
+     * plugins SIN red: instala demo.adblock en un ModuleRegistry sin
+     * broker, carga el entry (que registra onNavigate y onRequest con
+     * decision block/allow), dispara ambos hooks, hace update a la
+     * v2 (hook que devuelve block-v2) y un update roto que cae en
+     * rollback automatico con la sesion v2 intacta. */
+    private fun runPluginsDemo() {
+        val registry = ModuleRegistry(null)
+        val runtime = PluginRuntime(registry)
+        registry.install(
+            "id = demo.adblock\nversion = 1\nentry = plugin.js\npermissions = network.fetch"
+        )
+        val carga = runtime.load(
+            "demo.adblock",
+            "nia.onNavigate(function (u) { return u.indexOf('/ads/') >= 0 ? 'block' : 'allow'; });" +
+                "nia.onRequest(function (u) { return u.indexOf('/tracker/') >= 0 ? 'block' : 'allow'; });"
+        )
+        val sesion = (carga as? Outcome.Success)?.value
+        if (sesion == null) {
+            downloadText.text = "plugins: la carga del modulo fallo"
+            return
+        }
+        val rNav = sesion.fire(PluginEvent.NAVIGATE, "https://example.com/ads/banner.png")
+        val banner = if (rNav is Outcome.Success) rNav.value else "error"
+        val rReq = sesion.fire(PluginEvent.REQUEST, "https://example.com/tracker/t.js")
+        val tracker = if (rReq is Outcome.Success) rReq.value else "error"
+        val actualizado = runtime.update(
+            "demo.adblock",
+            "id = demo.adblock\nversion = 1\nentry = plugin-v2.js\npermissions = network.fetch",
+            "nia.onRequest(function (u) { return 'block-v2'; });"
+        )
+        val v2 = (actualizado as? Outcome.Success)?.value
+        val v2Resultado = if (v2 == null) {
+            "error"
+        } else {
+            val r2 = v2.fire(PluginEvent.REQUEST, "https://example.com/ads/a.png")
+            if (r2 is Outcome.Success) r2.value else "error"
+        }
+        val roto = runtime.update(
+            "demo.adblock",
+            "id = demo.adblock\nversion = 1\nentry = plugin-v3.js\npermissions = network.fetch",
+            "throw new Error('roto');"
+        )
+        val rollback = if (roto is Outcome.Failure && v2 != null) {
+            val r3 = v2.fire(PluginEvent.REQUEST, "https://example.com/ads/a.png")
+            if (r3 is Outcome.Success) r3.value else "error"
+        } else {
+            "sin-rollback"
+        }
+        downloadText.text = "plugins: demo.adblock nav ads=" + banner +
+            " request tracker=" + tracker + " - update v2 " + v2Resultado +
+            " - rollback " + rollback
     }
 
     /** T048 v1 (R0110, RES-0059): demo de streaming del archivo
