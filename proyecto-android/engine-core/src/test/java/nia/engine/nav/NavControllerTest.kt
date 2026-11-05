@@ -195,7 +195,7 @@ class NavControllerTest {
     fun commitDeIdentidadConOrigenYSite() {
         val t = FakeTransport()
         val c = FakeClock()
-        t.routes["https://app.nia.dev/pagina"] = resp(200, emptyMap(), "<html><body><p id="t">x</p></body></html>")
+        t.routes["https://app.nia.dev/pagina"] = resp(200, emptyMap(), "<html><body><p id=\"t\">x</p></body></html>")
         val controller = nav(t, c)
         val out = controller.navigate("https://app.nia.dev/pagina")
         assertTrue(out is NavOutcome.Loaded)
@@ -213,8 +213,8 @@ class NavControllerTest {
         val c = FakeClock()
         t.routes["https://a.dev/p"] = resp(
             200, emptyMap(),
-            "<html><body><img src="/ok.png"><img src="http://m.dev/x.png">" +
-                "<link rel="stylesheet" href="/estilos.css"></body></html>"
+            "<html><body><img src=\"/ok.png\"><img src=\"http://m.dev/x.png\">" +
+                "<link rel=\"stylesheet\" href=\"/estilos.css\"></body></html>"
         )
         t.routes["https://a.dev/ok.png"] = resp(200, emptyMap(), "img")
         t.routes["https://a.dev/estilos.css"] = resp(200, emptyMap(), "body{}")
@@ -242,7 +242,7 @@ class NavControllerTest {
         assertTrue(profile.cookies.storeFromResponse("b.dev", true, "sidb=dos; Path=/; SameSite=Lax"))
         t.routes["https://a.dev/p"] = resp(
             200, emptyMap(),
-            "<html><body><img src="https://b.dev/x.png"><img src="/q.png"></body></html>"
+            "<html><body><img src=\"https://b.dev/x.png\"><img src=\"/q.png\"></body></html>"
         )
         t.routes["https://b.dev/x.png"] = resp(200, emptyMap(), "x")
         t.routes["https://a.dev/q.png"] = resp(200, emptyMap(), "q")
@@ -261,9 +261,9 @@ class NavControllerTest {
         val profile = BrowserProfile.incognito(c)
         t.routes["https://a.dev/app"] = resp(
             200, emptyMap(),
-            "<html><body><p id="t">x</p>" +
+            "<html><body><p id=\"t\">x</p>" +
                 "<script>localStorage.setItem('nav', 'listo')</script>" +
-                "<script src="/segundo.js"></script></body></html>"
+                "<script src=\"/segundo.js\"></script></body></html>"
         )
         t.routes["https://a.dev/segundo.js"] = resp(200, emptyMap(), "localStorage.setItem('js', 'ok')")
         val controller = NavController(t, c, profile)
@@ -289,7 +289,7 @@ class NavControllerTest {
     fun falloDespuesDelCommitEnSubrecursoStale() {
         val t = FakeTransport()
         val c = FakeClock()
-        t.routes["https://a.dev/p"] = resp(200, emptyMap(), "<html><body><img src="/boom.png"></body></html>")
+        t.routes["https://a.dev/p"] = resp(200, emptyMap(), "<html><body><img src=\"/boom.png\"></body></html>")
         t.routes["https://a.dev/boom.png"] = resp(200, emptyMap(), "b")
         val controller = nav(t, c)
         t.hook = { r -> if (r.url == "https://a.dev/boom.png") controller.invalidateGeneration() }
@@ -301,7 +301,8 @@ class NavControllerTest {
         assertEquals("respuesta descartada: generacion anterior", f.message)
         assertTrue(f.page != null)
         assertEquals(listOf("https://a.dev/p"), controller.historyUrls())
-        assertTrue(f.page != null && f.page.events.any { it.state == NavState.COMMITTED })
+        val fp = f.page ?: throw AssertionError("fallo tras el commit sin pagina")
+        assertTrue(fp.events.any { it.state == NavState.COMMITTED })
     }
 
     @Test
@@ -336,7 +337,7 @@ class NavControllerTest {
     fun mutacionDelDocumentoVivoInvalidaElLayout() {
         val t = FakeTransport()
         val c = FakeClock()
-        t.routes["http://a.dev/"] = resp(200, emptyMap(), "<html><body><p id="t">x</p></body></html>")
+        t.routes["http://a.dev/"] = resp(200, emptyMap(), "<html><body><p id=\"t\">x</p></body></html>")
         val controller = nav(t, c)
         val out = controller.navigate("http://a.dev/")
         assertTrue(out is NavOutcome.Loaded)
