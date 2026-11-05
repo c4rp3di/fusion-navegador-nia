@@ -186,6 +186,8 @@ jobs:
             engine-core/src/main/java/nia/engine/omnibox/OmniboxSugerencias.kt \
             engine-core/src/test/java/nia/engine/omnibox/OmniboxInputTest.kt \
             engine-core/src/test/java/nia/engine/omnibox/OmniboxSugerenciasTest.kt \
+            engine-core/src/main/java/nia/engine/errors/ErrorPages.kt \
+            engine-core/src/test/java/nia/engine/errors/ErrorPagesTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

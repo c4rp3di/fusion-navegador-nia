@@ -16,6 +16,7 @@ import nia.engine.bookmarks.BookmarkManager
 import nia.engine.dom.DomDocument
 import nia.engine.dom.DomException
 import nia.engine.dom.DomHandle
+import nia.engine.errors.ErrorPages
 import nia.engine.html.DomNode
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
@@ -39,6 +40,11 @@ import nia.engine.profile.BrowserProfile
  * DNS (ErrorCode.NETWORK con mensaje de DNS, contrato del FetchManager), se
  * OFRECE la busqueda del texto original tras confirmacion, nunca en
  * silencio; cualquier otro fallo muestra su error honesto.
+ *
+ * Paginas de error (T083 v1, RES-0076): todo fallo que no sea una cancelacion o
+ * un handle caducado muestra su pagina de error (ErrorPages del motor) con el
+ * detalle REDACTADO y la URL de la pagina comprometida sin secretos; TLS nunca
+ * ofrece recargar como recuperacion.
  *
  * Exclusiones v1 (documentadas en la capability engine.omnibox): sin pintar
  * la pagina (el PaintView del shell llega con el smoke T067-A; aqui se lee
@@ -195,7 +201,17 @@ class BrowserActivity : Activity() {
                 .show()
             return
         }
-        estado.text = "fallo " + f.code.name + ": " + f.message
+        val error = ErrorPages.desdeFallo(f.code, f.message, f.page?.url)
+        if (error == null) {
+            estado.text = "navegacion cancelada"
+        } else {
+            var linea = error.titulo + ": " + error.mensaje + " - " + error.detalleRedactado
+            val u = error.urlRedactada
+            if (u != null) {
+                linea += " - " + u
+            }
+            estado.text = linea
+        }
     }
 
     private fun mostrarSugerencias() {
