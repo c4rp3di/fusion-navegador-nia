@@ -64,6 +64,10 @@ import nia.engine.paint.PaintSceneBuilder
  * demo. Exclusiones v1: caret fijo (sin parpadeo), cursor siempre al final
  * y una sola linea; los inputs abiertos por SAF necesitan display:block
  * para ser tocables.
+ *
+ * R0167 (fix smoke T067-A): BaseInputConnection con fullEditor=true
+ * para que el IME entregue commitText; con false el IME era dummy y las
+ * letras llegaban como KeyEvent que PaintView no procesaba.
  */
 class PaintView(context: Context) : View(context) {
 
@@ -332,7 +336,9 @@ class PaintView(context: Context) : View(context) {
         editor.clear()
         editor.append(inputValue(input))
         Selection.setSelection(editor, editor.length)
-        return object : BaseInputConnection(this, false) {
+        // R0167: fullEditor=true: con false el IME era dummy y las letras
+        // llegaban como KeyEvent que nadie procesaba.
+        return object : BaseInputConnection(this, true) {
             override fun getEditable(): Editable = editor
             override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
                 val ok = super.commitText(text, newCursorPosition)

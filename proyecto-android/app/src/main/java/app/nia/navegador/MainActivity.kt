@@ -14,6 +14,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import nia.contracts.CancellationToken
@@ -228,6 +229,10 @@ import java.util.concurrent.Executors
  * propios en app/ui (NiaSection, NiaCard, NiaListItem, NiaToggle,
  * NiaEmptyState, NiaProgressBar) con los tokens del shell sobre el
  * schema de ThemeManager.
+ *
+ * R0167 (fix smoke T067-A): la columna de demos vive dentro de un
+ * ScrollView porque los 32 botones desbordaban la pantalla y los
+ * ultimos (entre ellos el boton Navegador) quedaban invisibles.
  */
 class MainActivity : Activity() {
 
@@ -368,7 +373,12 @@ class MainActivity : Activity() {
         buttons.addView(ytBtn)
         buttons.addView(catalogoBtn)
         buttons.addView(navegadorBtn)
-        frame.addView(buttons, params)
+                // R0167: sin scroll la columna de 32 botones desborda la pantalla
+        // y los ultimos (el Navegador incluido) quedaban invisibles;
+        // el ScrollView hace alcanzable la columna completa.
+        val botonesScroll = ScrollView(this)
+        botonesScroll.addView(buttons)
+        frame.addView(botonesScroll, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
         }
