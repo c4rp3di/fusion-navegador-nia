@@ -13,6 +13,7 @@ import nia.engine.js.JsInterpreter
 import nia.engine.js.JsLimits
 import nia.engine.js.JsNative
 import nia.engine.js.JsObj
+import nia.engine.js.JsParser
 import nia.engine.js.JsProp
 import nia.engine.js.JsQuotas
 import nia.engine.js.JsRuntime
@@ -107,11 +108,22 @@ class PluginRuntime(
     private val sesiones = LinkedHashMap<String, PluginSession>()
     private val codigos = HashMap<String, String>()
 
-    /** Carga el entry del modulo instalado: cuotas de plugin y objeto nia. */
+    /**
+     * Carga el entry del modulo instalado: pre-parse, cuotas de plugin y
+     * objeto nia. El parser real recupera en vez de lanzar (sus errores y
+     * los del lexer viajan en el resultado, no como excepcion), asi que el
+     * pre-parse es lo que detecta un entry que no compila.
+     */
     fun load(id: String, codigo: String): Outcome<PluginSession> {
         val manifest = registry.manifestOf(id)
         if (manifest == null) {
             return Outcome.failure(ErrorInfo(ErrorCode.INVALID_INPUT, "modulo no instalado: " + id))
+        }
+        val pre = JsParser.parse(codigo)
+        if (pre.program.errors.isNotEmpty() || pre.lexErrors.isNotEmpty()) {
+            return Outcome.failure(
+                ErrorInfo(ErrorCode.INVALID_INPUT, "entry del modulo " + id + " es invalido: no compila o lanzo")
+            )
         }
         val hooks = HashMap<PluginEvent, MutableList<JsValue>>()
         val nia = objetoNia(manifest, hooks)
