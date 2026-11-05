@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0157)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0160)
 
 **R0116 (T050 v1, RES-0061):** proveedor OpenSubtitles (ADR-017). `OpenSubtitlesClient` habla con la API REST v1 sobre el `FetchManager` de T011 (transporte inyectable), con cuenta configurable (API key siempre; usuario y contraseña opcionales activan el *login* Bearer perezoso, una sola vez), búsqueda por consulta e idiomas con el query codificado, descarga del archivo (`POST /download` + `GET` del enlace firmado) y un JSON mínimo propio sin dependencias. Las credenciales nunca salen del proceso: los mensajes de error son seguros y no las contienen. La demo «Subs OS» recorre el flujo buscar → descargar → pista con un transporte falso enlatado, sin red. Motor 1398→1412 tests (14 nuevos, espejo del gemelo TS), workflow 115→116 fuentes.
 
@@ -64,6 +64,8 @@ sin red ni telemetría, sin historial en incógnito por ADR-019). Una
 búsqueda es una navegación normal del NavController: misma identidad, TLS
 y cookies. Documental: motor sin cambios (1629 tests, workflow 146
 fuentes).
+
+**R0160 (T084 v1, RES-0077):** identidad y TLS detallado — SiteSecurity en el motor (nia/engine/net): TlsInfo con emisor/sujeto/validez SOLO del transporte real (nunca fabricado), PanelIdentidad no spoofeable que siempre recuerda que el cifrado no hace el sitio confiable, ExcepcionesHttps por sitio separadas y PoliticaHttpsOnly inyectada en NavController que decide cada salto ANTES de red (http sin excepcion -> DENIED; con excepcion -> evento visible excepcion-http:host pintado junto al panel); mixed-content bloqueado (T071) y degradacion https prohibida (T026) intactos; SiteSecurityTest (27) espejo del gemelo TS (huella 0070.3417.3348), motor 1687->1714 tests, workflow 153->155 fuentes.
 
 **R0157 (T083 v1, RES-0076):** error pages completas — el motor gana `nia/engine/errors` (ErrorPages) sobre los codigos cerrados de `:contracts` (maestro, seccion 4): cada ErrorCode tipifica su pagina (titulo, mensaje seguro y accion VOLVER/RECARGAR/NINGUNA) sin inventar codigos, la cancelacion del usuario o el handle caducado NO reemplazan la pagina util (devuelven null), el detalle del motor y la URL de la pagina comprometida se muestran SIEMPRE redactados con el SecretRedactor verificado (T008) y TLS nunca ofrece recargar como recuperacion (aceptar un certificado invalido no es recuperacion); BrowserActivity pinta la pagina de error en manejaFallo con el fallback DNS de T072 intacto; exclusiones v1: sin reintentos automaticos (el usuario decide con la accion ofrecida) y sin pintar la pagina de error dentro del motor (el shell decide); motor 1665→1687 tests (22 nuevos, espejo del gemelo TS, huella 6bbf.b766.161), workflow 151→153 fuentes.
 

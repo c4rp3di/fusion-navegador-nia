@@ -21,6 +21,7 @@ import nia.engine.html.DomNode
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.net.HttpTransport
+import nia.engine.net.PanelIdentidad
 import nia.engine.omnibox.OmniboxInput
 import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
@@ -45,6 +46,12 @@ import nia.engine.profile.BrowserProfile
  * un handle caducado muestra su pagina de error (ErrorPages del motor) con el
  * detalle REDACTADO y la URL de la pagina comprometida sin secretos; TLS nunca
  * ofrece recargar como recuperacion.
+ *
+ * Pagina de identidad (T084 v1, RES-0077): con cada pagina se pinta el
+ * panel de identidad del motor (PanelIdentidad): cifrada o NO cifrada,
+ * emisor y validez SOLO si el transporte real los expone (nunca
+ * fabricados) y la advertencia de la excepcion HTTP concedida; el panel
+ * SIEMPRE recuerda que el cifrado no hace que el sitio sea de confiar.
  *
  * Exclusiones v1 (documentadas en la capability engine.omnibox): sin pintar
  * la pagina (el PaintView del shell llega con el smoke T067-A; aqui se lee
@@ -240,7 +247,19 @@ class BrowserActivity : Activity() {
     private fun pintaPagina(o: NavOutcome.Loaded) {
         val page = o.page
         estado.text = "LOADED " + page.status + " - " + page.origin + " - " + page.url
-        pagina.text = textoDe(page.document).take(20000)
+        val panel = StringBuilder()
+        for (linea in PanelIdentidad.lineas(page.url, page.tls)) {
+            panel.append(linea)
+            panel.append('\n')
+        }
+        for (evento in page.events) {
+            if (evento.url.startsWith("excepcion-http:")) {
+                panel.append("Excepcion HTTP concedida por el usuario para ")
+                panel.append(evento.url.substring(15))
+                panel.append('\n')
+            }
+        }
+        pagina.text = textoDe(page.document).take(20000) + "\n--- Identidad ---\n" + panel.toString()
     }
 
     private fun textoDe(doc: DomDocument): String {

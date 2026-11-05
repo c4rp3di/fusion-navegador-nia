@@ -53,7 +53,8 @@ data class FetchRequest(
 data class FetchResponse(
     val status: Int,
     val headers: Map<String, String>,
-    val body: ByteArray
+    val body: ByteArray,
+    val seguridad: TlsInfo? = null
 )
 
 /** Fallos que reporta el transporte; el manager los mapea a ErrorCode. */

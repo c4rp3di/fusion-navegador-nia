@@ -12,8 +12,10 @@ import nia.engine.js.JsStorageApi
 import nia.engine.net.FetchManager
 import nia.engine.net.FetchResponse
 import nia.engine.net.FetchTransport
+import nia.engine.net.PoliticaHttpsOnly
 import nia.engine.net.RedirectPolicy
 import nia.engine.net.SiteContext
+import nia.engine.net.TlsInfo
 import nia.engine.profile.BrowserProfile
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -54,6 +56,13 @@ import nia.engine.url.UrlParser
  * respuestas en vuelo se descartan; el deadline de navigate (absoluto
  * contra el reloj inyectable) vence sin llamar al transporte.
  *
+ * Politica HTTPS-only y TLS (T084 v1, R0160, RES-0077): con una
+ * PoliticaHttpsOnly inyectada, cada salto se decide ANTES de llamar al
+ * transporte (http sin excepcion -> DENIED; con excepcion -> evento
+ * visible "excepcion-http:host"); NavPage.tls lleva el TlsInfo real de
+ * la respuesta final (null si el transporte no lo expone o sirvio de
+ * cache: NUNCA se fabrica).
+ *
  * Exclusiones v1 (API propia del motor): sin frame tree ni CSP (X02,
  * subtareas futuras de T071); un solo Set-Cookie por respuesta (el
  * transporte entrega cabeceras como mapa); Location relativa compleja
@@ -88,7 +97,8 @@ data class NavPage(
     val layoutRevision: Long,
     val subresources: List<NavSubresource>,
     val scripts: List<NavScript>,
-    val events: List<NavEvent>
+    val events: List<NavEvent>,
+    val tls: TlsInfo? = null
 )
 
 /**
@@ -113,7 +123,8 @@ sealed class NavOutcome {
 class NavController(
     private val transport: FetchTransport,
     private val clock: WallClock,
-    private val profile: BrowserProfile
+    private val profile: BrowserProfile,
+    private val httpsOnly: PoliticaHttpsOnly? = null
 ) {
     private val manager = FetchManager(transport, clock, profile.cache)
     private val history = ArrayList<String>()
@@ -182,6 +193,18 @@ class NavController(
             if (u.scheme != "http" && u.scheme != "https") {
                 return NavOutcome.Failed(NavState.NAVIGATING, ErrorCode.UNSUPPORTED, "esquema no soportado: " + u.scheme, null)
             }
+            if (httpsOnly != null) {
+                when (val decision = httpsOnly.decidir(u.scheme, u.host)) {
+                    is PoliticaHttpsOnly.Decision.Bloquear -> {
+                        return NavOutcome.Failed(NavState.NAVIGATING, ErrorCode.DENIED, "https-only: sin excepcion para " + decision.host, null)
+                    }
+                    is PoliticaHttpsOnly.Decision.PermitirConAdvertencia -> {
+                        events.add(NavEvent(NavState.NAVIGATING, "excepcion-http:" + decision.host))
+                    }
+                    PoliticaHttpsOnly.Decision.Navegar -> {
+                    }
+                }
+            }
             val headers = HashMap<String, String>()
             val cookie = profile.cookies.cookieHeader(u.host, u.path, u.scheme == "https", SiteContext.TOP_LEVEL_CROSS_SITE)
             if (cookie.isNotEmpty()) headers["Cookie"] = cookie
@@ -234,7 +257,7 @@ class NavController(
         }
         val committed = NavPage(
             current, body.status, origin, site, document, document.snapshot().revision,
-            ArrayList(), ArrayList(), ArrayList(events)
+            ArrayList(), ArrayList(), ArrayList(events), body.seguridad
         )
         page = committed
         lastState = NavState.LOADED

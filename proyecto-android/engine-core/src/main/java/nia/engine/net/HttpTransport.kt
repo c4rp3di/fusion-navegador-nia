@@ -4,6 +4,8 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.UnknownHostException
+import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLException
 
 import nia.contracts.CancellationToken
@@ -64,7 +66,7 @@ class HttpTransport(
             return try {
                 val status = connection.responseCode
                 TransportResult.Success(
-                    FetchResponse(status, responseHeaders(connection), responseBody(connection, request.method, status))
+                    FetchResponse(status, responseHeaders(connection), responseBody(connection, request.method, status), seguridadTls(connection))
                 )
             } catch (_: SSLException) {
                 TransportResult.Failure(TransportFailure.TLS_INVALID)
@@ -77,6 +79,29 @@ class HttpTransport(
             }
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /**
+     * Cadena real de la conexion TLS: emisor, sujeto y ventana de validez
+     * del certificado hoja que expone el transporte. Null cuando la conexion
+     * no es TLS (http) o el adaptador no expone cadena: la identidad NUNCA
+     * se fabrica.
+     */
+    private fun seguridadTls(connection: HttpURLConnection): TlsInfo? {
+        val https = connection as? HttpsURLConnection ?: return null
+        return try {
+            val certs = https.serverCertificates
+            if (certs.isEmpty()) return null
+            val hoja = certs[0] as? X509Certificate ?: return null
+            TlsInfo(
+                hoja.issuerDN?.name,
+                hoja.subjectDN?.name,
+                hoja.notBefore?.toInstant()?.toString(),
+                hoja.notAfter?.toInstant()?.toString()
+            )
+        } catch (_: Exception) {
+            null
         }
     }
 
