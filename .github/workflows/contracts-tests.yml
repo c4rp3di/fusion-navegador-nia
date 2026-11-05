@@ -164,6 +164,12 @@ jobs:
             engine-core/src/test/java/nia/engine/torrent/TorrentStreamTest.kt \
             engine-core/src/main/java/nia/engine/torrent/TorrentNet.kt \
             engine-core/src/test/java/nia/engine/torrent/TorrentNetTest.kt \
+            engine-core/src/main/java/nia/engine/torrent/TorrentDht.kt \
+            engine-core/src/test/java/nia/engine/torrent/TorrentDhtTest.kt \
+            engine-core/src/main/java/nia/engine/torrent/TorrentUdp.kt \
+            engine-core/src/test/java/nia/engine/torrent/TorrentUdpTest.kt \
+            engine-core/src/main/java/nia/engine/torrent/TorrentMagnet.kt \
+            engine-core/src/test/java/nia/engine/torrent/TorrentMagnetTest.kt \
             engine-core/src/main/java/nia/engine/download/DownloadEngine.kt \
             engine-core/src/test/java/nia/engine/download/DownloadEngineTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \

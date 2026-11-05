@@ -46,8 +46,11 @@ import nia.engine.qa.YoutubeMatrix
 import nia.engine.torrent.AnnounceEvent
 import nia.engine.torrent.Benc
 import nia.engine.torrent.Bencode
+import nia.engine.torrent.DhtClient
+import nia.engine.torrent.DhtTransport
 import nia.engine.torrent.MagnetParser
 import nia.engine.torrent.PeerConnection
+import nia.engine.torrent.PeerMetadataClient
 import nia.engine.torrent.PeerPoolSource
 import nia.engine.torrent.PeerTransport
 import nia.engine.torrent.PieceSource
@@ -61,6 +64,9 @@ import nia.engine.torrent.TrackerAnnounceRequest
 import nia.engine.torrent.TrackerClient
 import nia.engine.torrent.TrackerPeer
 import nia.engine.torrent.TrackerTransport
+import nia.engine.torrent.UdpTrackerClient
+import nia.engine.torrent.UdpTransport
+import nia.engine.torrent.torrentDesdeInfo
 import nia.engine.storage.StorageScope
 import nia.engine.url.Origin
 import nia.engine.url.Site
@@ -188,6 +194,13 @@ import java.util.concurrent.Executors
  * bitfield, unchoke y bloques, una conexion por pieza);
  * PeerPoolSource alimenta el pump de TorrentSession hasta DONE con
  * verificacion SHA-1. Boton Torrent red.
+ *
+ * T047 v3 (R0129, RES-0067, ADR-016): red torrent ampliada SIN red
+ * en la demo: announce UDP (BEP-15) sobre un transporte falso, DHT
+ * (BEP-5) con get_peers sobre un transporte falso y metadatos magnet
+ * (BEP-9/10) ensamblados desde un peer guionado con ut_metadata;
+ * torrentDesdeInfo monta el torrent desde el info dict ensamblado.
+ * Boton Torrent magnet.
  */
 class MainActivity : Activity() {
 
@@ -265,6 +278,8 @@ class MainActivity : Activity() {
         torrentDemo.text = "Torrent demo"
         val torrentRed = Button(this)
         torrentRed.text = "Torrent red"
+        val torrentMagnet = Button(this)
+        torrentMagnet.text = "Torrent magnet"
         val streamDemo = Button(this)
         streamDemo.text = "Stream torrent"
         val subsTorrentBtn = Button(this)
@@ -305,6 +320,7 @@ class MainActivity : Activity() {
         buttons.addView(fireTotal)
         buttons.addView(torrentDemo)
         buttons.addView(torrentRed)
+        buttons.addView(torrentMagnet)
         buttons.addView(streamDemo)
         buttons.addView(subsTorrentBtn)
         buttons.addView(subsOsBtn)
@@ -396,6 +412,9 @@ class MainActivity : Activity() {
         }
         torrentRed.setOnClickListener {
             runTorrentNetDemo()
+        }
+        torrentMagnet.setOnClickListener {
+            runTorrentMagnetDemo()
         }
         streamDemo.setOnClickListener {
             runStreamDemo()
@@ -743,6 +762,108 @@ class MainActivity : Activity() {
         wire32(out, 1 + payload.size)
         out.write(id)
         out.write(payload)
+    }
+
+    /** T047 v3 (R0129, RES-0067, ADR-016): demo de los metadatos magnet
+     * SIN red: announce UDP sobre un transporte falso, get_peers DHT
+     * sobre un transporte falso y el info dict ensamblado desde un
+     * peer guionado con ut_metadata; torrentDesdeInfo monta el
+     * torrent y el TextView muestra el veredicto. */
+    private fun runTorrentMagnetDemo() {
+        val data = ByteArray(40) { (it + 1).toByte() }
+        val info = Benc.BDict(LinkedHashMap())
+        info.entries["name"] = Benc.BStr("red.txt".toByteArray(Charsets.UTF_8))
+        info.entries["piece length"] = Benc.BInt(16)
+        info.entries["pieces"] = Benc.BStr(piezasSha1(data, 16))
+        info.entries["length"] = Benc.BInt(40)
+        val infoBytes = Bencode.encode(info)
+        val meta = torrentDesdeInfo("udp://tracker.example:6969/announce", infoBytes)
+        val peerId = "-NIA-0001-0000000000".toByteArray(Charsets.US_ASCII)
+        var llamadaUdp = 0
+        val udp = object : UdpTransport {
+            override fun exchange(ip: String, port: Int, packet: ByteArray): ByteArray? {
+                llamadaUdp++
+                return if (llamadaUdp == 1) {
+                    byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1, 0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22)
+                } else {
+                    byteArrayOf(
+                        0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 120,
+                        0, 0, 0, 1, 0, 0, 0, 2,
+                        127, 0, 0, 1, 0x1a, 0xe1.toByte()
+                    )
+                }
+            }
+        }
+        val udpPeers = UdpTrackerClient(udp)
+            .announce(
+                "10.0.0.5", 6969,
+                TrackerAnnounceRequest(meta.infoHash, peerId, 6881, 0, 0, meta.totalLength, AnnounceEvent.STARTED)
+            )
+            .peers
+        val selfId = "-NIA-DHT-NODE-000001".toByteArray(Charsets.US_ASCII)
+        val dht = object : DhtTransport {
+            override fun exchange(ip: String, port: Int, request: ByteArray): ByteArray? {
+                val r = Benc.BDict(LinkedHashMap())
+                r.entries["id"] = Benc.BStr(selfId)
+                r.entries["token"] = Benc.BStr("tk".toByteArray(Charsets.UTF_8))
+                r.entries["values"] = Benc.BList(listOf(Benc.BStr(byteArrayOf(10, 0, 1, 9, 0x1b, 0x39))))
+                val raiz = Benc.BDict(LinkedHashMap())
+                raiz.entries["t"] = Benc.BStr(byteArrayOf(0, 1))
+                raiz.entries["y"] = Benc.BStr("r".toByteArray(Charsets.UTF_8))
+                raiz.entries["r"] = r
+                return Bencode.encode(raiz)
+            }
+        }
+        val dhtPeers = DhtClient(dht, selfId).buscarPeers(meta.infoHash, listOf(TrackerPeer("10.0.0.1", 1)))
+        val infoObtenida = PeerMetadataClient(object : PeerTransport {
+            override fun connect(peer: TrackerPeer): PeerConnection =
+                conexionMagnet(infoBytes, peerId, meta.infoHash)
+        }, meta.infoHash, peerId, 32).fetchMetadata(TrackerPeer("127.0.0.1", 6881))
+        if (infoObtenida == null) {
+            downloadText.text = "magnet: sin metadatos del peer guionado"
+            return
+        }
+        val meta2 = torrentDesdeInfo("udp://tracker.example:6969/announce", infoObtenida)
+        val piezasMeta = (infoBytes.size + 31) / 32
+        downloadText.text = "magnet: " + meta2.name + " - " + meta2.pieceCount() + " piezas/" +
+            meta2.totalLength + " B - UDP " + udpPeers.size + " peer - DHT " + dhtPeers.size +
+            " peer - metadatos " + piezasMeta + " piezas"
+    }
+
+    /** Peer guionado que sirve los metadatos magnet por piezas de
+     * ut_metadata (BEP-9/10) para la demo SIN red. */
+    private fun conexionMagnet(infoBytes: ByteArray, peerId: ByteArray, infoHash: ByteArray): PeerConnection {
+        val guion = java.io.ByteArrayOutputStream()
+        guion.write(19)
+        guion.write("BitTorrent protocol".toByteArray(Charsets.US_ASCII))
+        guion.write(ByteArray(8))
+        guion.write(infoHash)
+        guion.write(peerId)
+        val m = Benc.BDict(LinkedHashMap())
+        m.entries["ut_metadata"] = Benc.BInt(2)
+        val ext = Benc.BDict(LinkedHashMap())
+        ext.entries["m"] = m
+        wireMensaje(guion, 20, Bencode.encode(ext))
+        val total = infoBytes.size
+        val piezas = (total + 31) / 32
+        for (i in 0 until piezas) {
+            val desde = i * 32
+            val hasta = minOf(32, total - desde)
+            val dict = Benc.BDict(LinkedHashMap())
+            dict.entries["msg_type"] = Benc.BInt(1)
+            dict.entries["piece"] = Benc.BInt(i.toLong())
+            dict.entries["total_size"] = Benc.BInt(total.toLong())
+            val payload = java.io.ByteArrayOutputStream()
+            payload.write(Bencode.encode(dict))
+            payload.write(infoBytes.copyOfRange(desde, desde + hasta))
+            wireMensaje(guion, 2, payload.toByteArray())
+        }
+        val bytes = guion.toByteArray()
+        return object : PeerConnection {
+            override val input: java.io.InputStream = java.io.ByteArrayInputStream(bytes)
+            override val output: java.io.OutputStream = java.io.ByteArrayOutputStream()
+            override fun close() {}
+        }
     }
 
     /** T048 v1 (R0110, RES-0059): demo de streaming del archivo
