@@ -73,4 +73,3 @@ object Capabilities {
         ),
     )
 }
-

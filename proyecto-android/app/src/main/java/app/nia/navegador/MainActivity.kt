@@ -1276,4 +1276,3 @@ class MainActivity : Activity() {
         private const val YT_SUBS_DEMO = "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nGran video\n\n00:00:05.000 --> 00:00:08.000\nEl seek funciona\n\n00:00:09.000 --> 00:00:12.000\nTercera linea\n"
     }
 }
-
