@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0138)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0141)
 
 **R0116 (T050 v1, RES-0061):** proveedor OpenSubtitles (ADR-017). `OpenSubtitlesClient` habla con la API REST v1 sobre el `FetchManager` de T011 (transporte inyectable), con cuenta configurable (API key siempre; usuario y contraseña opcionales activan el *login* Bearer perezoso, una sola vez), búsqueda por consulta e idiomas con el query codificado, descarga del archivo (`POST /download` + `GET` del enlace firmado) y un JSON mínimo propio sin dependencias. Las credenciales nunca salen del proceso: los mensajes de error son seguros y no las contienen. La demo «Subs OS» recorre el flujo buscar → descargar → pista con un transporte falso enlatado, sin red. Motor 1398→1412 tests (14 nuevos, espejo del gemelo TS), workflow 115→116 fuentes.
 
@@ -19,6 +19,20 @@
 **R0135 (T060 v1, RES-0070):** marcadores y accesos rápidos con persistencia por perfil. `BookmarkManager` (nia/engine/bookmarks) sin dependencias: CRUD completo (`add`/`rename`/`move`/`delete`), carpetas anidadas con el ciclo de carpetas rechazado tipificado y root protegida, orden por carpeta con reordenación en la misma, búsqueda case-insensitive por título y URL, y accesos rápidos (pins solo de marcadores, sin duplicados y desfijados al borrar). `exportar`/`importar` con formato tabulado propio (cabecera `nia-bookmarks 1`, escapes como `StoragePersistence`) que parsea TODO a temporales antes del swap: un archivo corrupto nunca toca el estado vivo y los contadores de ids se recomputan del import. Motor 1546→1566 tests (BookmarkManagerTest 20, espejo del gemelo TS), workflow 132→134 fuentes (BookmarkManager.kt + BookmarkManagerTest.kt).
 
 **R0138 (T022 v2, RES-0071):** reflejo de nodos en los bindings DOM. Los wrappers de `JsDomBindings` ganan los accessors reales del estándar: `nodeType` (9/1/3/8/10) y `nodeName` («#document», «#text», «#comment» o el tag en mayúsculas) constantes por nodo, `nodeValue` como accessor (lectura del data en Text/Comment y `null` en el resto; escritura que fija el data en Text, propaga el error tipificado en Comment y no-op en el resto), `tagName` del Element, `id` y `className` reflejando los atributos (cadena vacía si faltan, mutación visible desde Kotlin) y la navegación de solo lectura `parentNode`/`firstChild`/`lastChild`/`nextSibling`/`previousSibling` con wrapper o `null`; el global `document` declara `createComment`, `nodeType` 9 y `nodeName` «#document». Motor 1566→1600 tests (JsDomBindingsTest 71→105, espejo del gemelo TS validado en 2 corridas idénticas), workflow en 134 fuentes (sin archivos nuevos).
+
+**R0141 (T068, RES-0072):** ADR-021, diseño del shell (tarea documental). El
+sistema de tokens se construye sobre el schema cerrado de ThemeManager (T031
+v1): los seis colores semánticos (`bg`/`surface`/`fg`/`accent`/`warn`/`error`)
+son la única fuente de color y el shell añade tipografía, espaciado, radios y
+elevación con claro, oscuro y auto (uiMode del sistema); iconografía monolineal
+propia, animaciones de 150–250ms con movimiento reducido, barra superior SIN
+barra inferior permanente (overlays, player y peek permitidos), gestos como
+contratos del shell, accesibilidad AA como contrato verificable (contraste por
+pares de tokens, foco visible, TalkBack, fontScale, targets táctiles >= 48dp) y
+ligereza con carga diferida; sin Material ni librerías UI externas nuevas, sin
+splash propio ni onboarding obligatorio, y el inspector de DevTools (T017) queda
+integrado al shell como NavTools. Motor en 1600 tests, workflow de 134 fuentes
+(sin cambios de código).
 
 **R0114 (T049 v1, RES-0060):** subtítulos locales e incluidos. El parser gana ASS/SSA (sección `[Events]` con `Format`/`Dialogue`, `Text` obligatoriamente el último campo que absorbe comas, centésimos, etiquetas de estilo fuera y `\N` como salto), `SubtitleManager` hace la selección multi-pista (idiomas) con el desfase delegado a la seleccionada y `TorrentSubtitles` lee del torrent los archivos `srt`/`vtt`/`ass`/`ssa` ya legibles vía `TorrentStream` — los subs incluidos en el torrent. La demo «Subs torrent» carga las pistas del torrent sintético y cicla la selección sobre el overlay de subs. Motor 1379→1398 tests (19 nuevos, espejo del gemelo TS), workflow 113→115 fuentes.
 
@@ -144,7 +158,7 @@ settings.gradle / build.gradle / gradle.properties   raíz Gradle (Groovy DSL)
 contracts/          módulo Kotlin JVM puro (contratos + tests)
 engine-core/        módulo Kotlin JVM puro (motor: URL/Origin/Site, tokenizer + tree builder HTML, DOM con mutaciones y snapshots, CSS con selectores/cascada/herencia, layout block/inline, paint display list, lexer + parser ECMAScript v2 + runtime/evaluación v1 + builtins v1/v2 (prototipos, Event/EventTarget) + bindings DOM/consola (T022) + eventos/consultas (T024 v2) + destructuring (T018 v4) + intrínsecos Date/Promise/RegExp (T023 v1) + async/await y generators (T018 v5) + broker/renderer/IPC (T006) + config con migración/recovery (T007) + inspector con redacción de secretos (T008) + módulos declarativos (T009) + panel DevTools (T017) + fetch/TLS/cancelación (T011) + panel DevTools Android (T017 v2) + transporte real HttpURLConnection (T011 v2) + cuotas/interrupción JS (T021) + tablas/template HTML (T012 v3) + tests)
 app/                aplicación Android mínima
-docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma), ADR-012/013/014/015 (WASM, WebGL, WebRTC, DRM), ADR-016/017/018/019/020 (torrent, subtítulos, adblock, incógnito/Fire, casting)
+docs/adr/           ADR-001 (stack), ADR-008 (licencia), ADR-011 (plataforma), ADR-012/013/014/015 (WASM, WebGL, WebRTC, DRM), ADR-016/017/018/019/020 (torrent, subtítulos, adblock, incógnito/Fire, casting), ADR-021 (diseño del shell)
 .github/workflows/  contracts-tests.yml (CI: tests + APK debug)
 ```
 
