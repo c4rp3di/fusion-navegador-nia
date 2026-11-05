@@ -263,7 +263,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          apk=$(ls proyecto-android/app/build/outputs/apk/debug/*.apk | head -n 1)
+          apk=$(ls "$GITHUB_WORKSPACE/proyecto-android/app/build/outputs/apk/debug/"*.apk | head -n 1)
+          if [ -z "$apk" ] || [ ! -s "$apk" ]; then
+            echo "::error::No se encontro el APK debug para publicar"
+            exit 1
+          fi
           echo "Publicando $apk como release smoke (firma DEBUG, prerelease, NO es la release oficial)."
           gh release delete smoke --yes || true
           git push --delete origin "refs/tags/smoke" || true
