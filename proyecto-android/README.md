@@ -1,4 +1,4 @@
-# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0141)
+# Navegador NIA — baseline 0.2.0 (código R0002 · revisión R0144)
 
 **R0116 (T050 v1, RES-0061):** proveedor OpenSubtitles (ADR-017). `OpenSubtitlesClient` habla con la API REST v1 sobre el `FetchManager` de T011 (transporte inyectable), con cuenta configurable (API key siempre; usuario y contraseña opcionales activan el *login* Bearer perezoso, una sola vez), búsqueda por consulta e idiomas con el query codificado, descarga del archivo (`POST /download` + `GET` del enlace firmado) y un JSON mínimo propio sin dependencias. Las credenciales nunca salen del proceso: los mensajes de error son seguros y no las contienen. La demo «Subs OS» recorre el flujo buscar → descargar → pista con un transporte falso enlatado, sin red. Motor 1398→1412 tests (14 nuevos, espejo del gemelo TS), workflow 115→116 fuentes.
 
@@ -33,6 +33,22 @@ ligereza con carga diferida; sin Material ni librerías UI externas nuevas, sin
 splash propio ni onboarding obligatorio, y el inspector de DevTools (T017) queda
 integrado al shell como NavTools. Motor en 1600 tests, workflow de 134 fuentes
 (sin cambios de código).
+
+**R0144 (T069 v1, RES-0073):** componentes propios en `app/ui` sobre los tokens
+del shell (ADR-021). `NiaTokens` (nia.engine.themes) resuelve el modo
+claro/oscuro/auto (el auto sigue el `uiMode` del sistema), toma los SEIS colores
+del schema cerrado de ThemeManager (T031 v1) como única fuente de color, deriva
+los pares de rol con contraste AA verificado (WCAG 2.1: 4.5:1 de texto sobre
+fondo y superficie, 3:1 de accent/warn/error como componentes esenciales) y
+añade las escalas fijas de tipografía (5 roles en sp), espaciado, radios y
+elevación con un catálogo comprobable de 27 tokens. En `:app`,
+`CatalogoActivity` monta el catálogo en vivo (alterna claro/oscuro y muestra el
+ratio AA de cada par) con los componentes v1: NiaSection, NiaCard, NiaListItem,
+NiaToggle, NiaEmptyState y NiaProgressBar (targets >= 48dp y contentDescription
+para TalkBack); los overlays y los atados a navegación (NiaMenu, BottomSheet,
+Dialog, Snackbar, UrlBar, TabStrip, ErrorPage) llegan con el shell de
+navegación (T071/T072, ADR-022). Motor 1600→1615 tests (15 nuevos, espejo del
+gemelo TS), workflow 134→144 fuentes.
 
 **R0114 (T049 v1, RES-0060):** subtítulos locales e incluidos. El parser gana ASS/SSA (sección `[Events]` con `Format`/`Dialogue`, `Text` obligatoriamente el último campo que absorbe comas, centésimos, etiquetas de estilo fuera y `\N` como salto), `SubtitleManager` hace la selección multi-pista (idiomas) con el desfase delegado a la seleccionada y `TorrentSubtitles` lee del torrent los archivos `srt`/`vtt`/`ass`/`ssa` ya legibles vía `TorrentStream` — los subs incluidos en el torrent. La demo «Subs torrent» carga las pistas del torrent sintético y cicla la selección sobre el overlay de subs. Motor 1379→1398 tests (19 nuevos, espejo del gemelo TS), workflow 113→115 fuentes.
 

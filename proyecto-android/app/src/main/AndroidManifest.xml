@@ -23,6 +23,10 @@
         <activity
             android:name=".FetchDemoActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".CatalogoActivity"
+            android:exported="false" />
     </application>
 
 </manifest>

@@ -220,6 +220,11 @@ import java.util.concurrent.Executors
  * desinstalar el activo cae al ultimo bueno. Boton Temas demo.
  * T060 v1 (R0135, RES-0070): marcadores y accesos rapidos con
  * persistencia por perfil. Boton Marcadores demo.
+ * T069 v1 (R0144, RES-0073, ADR-021): boton Catalogo UI que abre
+ * CatalogoActivity, el catalogo comprobable de los componentes
+ * propios en app/ui (NiaSection, NiaCard, NiaListItem, NiaToggle,
+ * NiaEmptyState, NiaProgressBar) con los tokens del shell sobre el
+ * schema de ThemeManager.
  */
 class MainActivity : Activity() {
 
@@ -315,6 +320,8 @@ class MainActivity : Activity() {
         matrizBtn.text = "Matriz GH/Gmail"
         val ytBtn = Button(this)
         ytBtn.text = "Matriz YT"
+        val catalogoBtn = Button(this)
+        catalogoBtn.text = "Catalogo UI"
         val buttons = LinearLayout(this)
         buttons.orientation = LinearLayout.VERTICAL
         val params = FrameLayout.LayoutParams(
@@ -354,6 +361,7 @@ class MainActivity : Activity() {
         buttons.addView(subsOsBtn)
         buttons.addView(matrizBtn)
         buttons.addView(ytBtn)
+        buttons.addView(catalogoBtn)
         frame.addView(buttons, params)
         devtools.setOnClickListener {
             startActivity(Intent(this, DevToolsActivity::class.java))
@@ -467,6 +475,9 @@ class MainActivity : Activity() {
         }
         ytBtn.setOnClickListener {
             runMatrizYtDemo()
+        }
+        catalogoBtn.setOnClickListener {
+            startActivity(Intent(this, CatalogoActivity::class.java))
         }
         descargar.setOnClickListener {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)

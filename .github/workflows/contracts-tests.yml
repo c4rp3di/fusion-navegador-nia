@@ -176,6 +176,8 @@ jobs:
             engine-core/src/test/java/nia/engine/download/DownloadEngineTest.kt \
             engine-core/src/main/java/nia/engine/themes/ThemeManager.kt \
             engine-core/src/test/java/nia/engine/themes/ThemeManagerTest.kt \
+            engine-core/src/main/java/nia/engine/themes/NiaTokens.kt \
+            engine-core/src/test/java/nia/engine/themes/NiaTokensTest.kt \
             engine-core/src/main/java/nia/engine/bookmarks/BookmarkManager.kt \
             engine-core/src/test/java/nia/engine/bookmarks/BookmarkManagerTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
@@ -184,6 +186,14 @@ jobs:
             app/src/main/java/app/nia/navegador/DemoPage.kt \
             app/src/main/java/app/nia/navegador/DevToolsState.kt \
             app/src/main/java/app/nia/navegador/FetchDemoActivity.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaUi.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaSection.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaCard.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaListItem.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaToggle.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaEmptyState.kt \
+            app/src/main/java/app/nia/navegador/ui/NiaProgressBar.kt \
+            app/src/main/java/app/nia/navegador/CatalogoActivity.kt \
             app/src/main/AndroidManifest.xml \
             app/build.gradle \
             contracts/build.gradle \
