@@ -180,6 +180,8 @@ jobs:
             engine-core/src/test/java/nia/engine/themes/NiaTokensTest.kt \
             engine-core/src/main/java/nia/engine/bookmarks/BookmarkManager.kt \
             engine-core/src/test/java/nia/engine/bookmarks/BookmarkManagerTest.kt \
+            engine-core/src/main/java/nia/engine/nav/NavController.kt \
+            engine-core/src/test/java/nia/engine/nav/NavControllerTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/java/app/nia/navegador/DevToolsActivity.kt \
