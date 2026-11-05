@@ -182,7 +182,12 @@ jobs:
             engine-core/src/test/java/nia/engine/bookmarks/BookmarkManagerTest.kt \
             engine-core/src/main/java/nia/engine/nav/NavController.kt \
             engine-core/src/test/java/nia/engine/nav/NavControllerTest.kt \
+            engine-core/src/main/java/nia/engine/omnibox/OmniboxInput.kt \
+            engine-core/src/main/java/nia/engine/omnibox/OmniboxSugerencias.kt \
+            engine-core/src/test/java/nia/engine/omnibox/OmniboxInputTest.kt \
+            engine-core/src/test/java/nia/engine/omnibox/OmniboxSugerenciasTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
+            app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
             app/src/main/java/app/nia/navegador/DevToolsActivity.kt \
             app/src/main/java/app/nia/navegador/DemoPage.kt \
