@@ -271,7 +271,21 @@ jobs:
           echo "Publicando $apk como release smoke (firma DEBUG, prerelease, NO es la release oficial)."
           gh release delete smoke --yes || true
           git push --delete origin "refs/tags/smoke" || true
-          gh release create smoke "$apk" \
+          # R0172: nombre de asset UNICO por commit. Con el mismo
+          # nombre (app-debug.apk) la descarga del usuario sirvio el
+          # APK VIEJO de un build anterior (cache del gestor de
+          # descargas o del CDN por URL igual).
+          NOMBRE="app-debug-${GITHUB_SHA:0:7}.apk"
+          cp "$apk" "$NOMBRE"
+          if ! gh release create smoke "$NOMBRE" \
             --title "Navegador NIA - APK debug (smoke T067-A)" \
             --notes "APK con firma DEBUG del commit ${GITHUB_SHA}. Distribucion APK manual (ADR-008). NO es la release oficial del navegador: tag smoke prerelease para el reality smoke con dispositivo." \
-            --prerelease
+            --prerelease; then
+            echo "create fallo (posible carrera); se re-borra y reintenta"
+            gh release delete smoke --yes || true
+            git push --delete origin "refs/tags/smoke" || true
+            gh release create smoke "$NOMBRE" \
+              --title "Navegador NIA - APK debug (smoke T067-A)" \
+              --notes "APK con firma DEBUG del commit ${GITHUB_SHA}. Distribucion APK manual (ADR-008). NO es la release oficial del navegador: tag smoke prerelease para el reality smoke con dispositivo." \
+              --prerelease
+          fi

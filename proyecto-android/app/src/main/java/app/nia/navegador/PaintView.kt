@@ -162,6 +162,9 @@ class PaintView(context: Context) : View(context) {
     /** HTML fuente cargado (SAF: Guardar escribe esto, no el DOM mutado). */
     fun currentHtml(): String = loadedHtml
 
+    /** R0172 (diagnostico smoke): ops de la escena pintada. */
+    fun opsCount(): Int = scene.ops.size
+
     /** Hijos del handle o vacio si el nodo no es contenedor (patron de
      * JsDomBindings para no depender del tipo del nodo). */
     private fun childrenOrEmpty(h: DomHandle): List<DomHandle> =
@@ -560,6 +563,8 @@ class PaintView(context: Context) : View(context) {
         try {
             Color.parseColor(hex)
         } catch (e: IllegalArgumentException) {
-            Color.BLACK
+            // R0172: fallback CLARO: un color que Android no
+            // parsea no puede quedar negro invisible.
+            Color.rgb(176, 176, 192)
         }
 }

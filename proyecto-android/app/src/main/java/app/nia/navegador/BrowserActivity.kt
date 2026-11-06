@@ -100,7 +100,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL"
+        omnibox.hint = "Busca o escribe una URL (R0172)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -131,8 +131,8 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo"
-        estado.textSize = NiaTokens.TIPOGRAFIA[4].sp.toFloat()
+        estado.text = "listo (R0172)"
+        estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
         raiz.addView(estado)
@@ -152,6 +152,9 @@ class BrowserActivity : Activity() {
 
         val barra = LinearLayout(this)
         barra.orientation = LinearLayout.HORIZONTAL
+        // R0172 (smoke): fondo propio para que la barra se vea
+        // aunque tema y fondo se confundan.
+        barra.setBackgroundColor(NiaUi.color(colores.surface))
         barra.addView(boton("Atras") {
             if (!nav.canGoBack()) {
                 estado.text = "sin historial para atras"
@@ -336,7 +339,7 @@ class BrowserActivity : Activity() {
 
     private fun pintaPagina(o: NavOutcome.Loaded) {
         val page = o.page
-        estado.text = "LOADED " + page.status + " - " + page.origin + " - " + page.url
+        estado.text = "LOADED " + page.status + " - " + page.origin + " - " + page.url + " | ops=" + pagina.opsCount()
         val panel = StringBuilder()
         for (linea in PanelIdentidad.lineas(page.url, page.tls)) {
             panel.append(linea)
@@ -364,7 +367,7 @@ class BrowserActivity : Activity() {
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA</h1>" +
+        "<html><body><h1>Navegador NIA (R0172)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell v1).</p>" +
             "</body></html>"
