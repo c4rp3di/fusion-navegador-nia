@@ -41,7 +41,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v1, RES-0083, R0179): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v2, RES-0084, R0181): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -86,24 +86,31 @@ import app.nia.navegador.ui.NiaUi
  * Historial agrupado por dia (tocar abre la URL) y el Fire total del
  * perfil NORMAL tambien borra el historial (T045).
  *
- * T093 v1 (R0179): ajustes modulares con el SettingsManager del
- * motor (armazon v1: registro tipificado, busqueda que abre la
- * opcion, export/import SIN secretos ni no disponibles, recovery
- * y persistencia): el Menu trae Ajustes; toda opcion enlaza
- * capacidad real (diagnostico.fifo: lineas de la traza en
- * caliente) o declara su estado de no disponible (nada
- * falsificado).
+ * T093 v1 (R0179) + v2 (R0181): ajustes modulares con el
+ * SettingsManager del motor (armazon v1: registro tipificado,
+ * busqueda que abre la opcion, export/import SIN secretos ni no
+ * disponibles, recovery y persistencia): el Menu trae Ajustes;
+ * toda opcion enlaza capacidad real (diagnostico.fifo: lineas de
+ * la traza en caliente) o declara su estado de no disponible
+ * (nada falsificado). v2: seccion Limpieza que ABSORBE el Fire
+ * del menu (sesion y total del perfil del tipo activo,
+ * confirmacion ADR-019) y el borrado del historial por rango
+ * (hoy, 7 dias, 30 dias, todo): acciones de un uso que JAMAS
+ * dejan valor colgado (la opcion sigue en su defecto y el
+ * export nunca guarda una accion).
  *
  * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
  * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
- * activo (sin gestor multi-perfil ni Ajustes Limpieza, T054/T093),
+ * activo (absorbido por Ajustes Limpieza en v2; sin gestor
+ * multi-perfil, T054/T093),
  * panel de identidad solo de la ultima pagina cargada, sin tema
  * conmutable en la UI (T070), sugerencias en dialogo (no desplegable)
  * y el pintado respeta SOLO lo que el motor CSS/layout soporta hoy
  * (paginas reales simples, honesto). El historial del shell es un
- * dialogo simple agrupado por dia: la busqueda de texto, el borrado
- * por rango y los Ajustes de Limpieza llegan con T093.
+ * dialogo simple agrupado por dia (la busqueda de texto llega con un
+ * subhito siguiente); el borrado por rango y el Fire viven en
+ * Ajustes Limpieza (v2).
  */
 class BrowserActivity : Activity() {
 
@@ -119,7 +126,7 @@ class BrowserActivity : Activity() {
      * Persiste en filesDir; un archivo corrupto se ignora. */
     private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
 
-    /** Ajustes del navegador (T093 v1): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -131,6 +138,33 @@ class BrowserActivity : Activity() {
                 "Lineas de traza",
                 "Cuantas lineas guarda el dialogo Diagnostico (10 a 200)",
                 TipoOpcion.ENTERO, "40", 10L, 200L
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "limpieza.historial", "Limpieza",
+                "Borrar historial",
+                "Borra el rango elegido del historial de pestanas normales (hoy, 7 dias, 30 dias o todo) tras confirmar; la opcion vuelve a nada",
+                TipoOpcion.ELECCION, "nada",
+                elecciones = listOf("nada", "hoy", "7-dias", "30-dias", "todo")
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "limpieza.fire-sesion", "Limpieza",
+                "Fire de sesion",
+                "Borra el sessionStorage del perfil del tipo de pestana activa tras confirmar (ADR-019)",
+                TipoOpcion.ELECCION, "conservar",
+                elecciones = listOf("conservar", "ejecutar")
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "limpieza.fire-total", "Limpieza",
+                "Fire total",
+                "Borra TODO el estado del perfil del tipo activo tras confirmar (ADR-019); el historial muere si el tipo es normal",
+                TipoOpcion.ELECCION, "conservar",
+                elecciones = listOf("conservar", "ejecutar")
             )
         )
         s.registrar(
@@ -211,7 +245,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0179)"
+        omnibox.hint = "Busca o escribe una URL (R0181)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -242,7 +276,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0179)"
+        estado.text = "listo (R0181)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -316,7 +350,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0179 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0181 con " + tabs.contar() + " pestana(s)")
         pintarStrip()
     }
 
@@ -522,8 +556,6 @@ class BrowserActivity : Activity() {
             "Identidad de la pagina",
             "Historial (solo pestanas normales)",
             "Ajustes (busca y cambia)",
-            "Fire sesion (perfil del tipo activo)",
-            "Fire total (perfil del tipo activo)",
             "Diagnostico (traza del shell)",
             "Demos del motor"
         )
@@ -538,10 +570,8 @@ class BrowserActivity : Activity() {
                     4 -> mostrarIdentidad()
                     5 -> mostrarHistorial()
                     6 -> mostrarAjustes()
-                    7 -> confirmarFire(FireLevel.SESION)
-                    8 -> confirmarFire(FireLevel.TOTAL)
-                    9 -> mostrarDiagnostico()
-                    10 -> startActivity(Intent(this, MainActivity::class.java))
+                    7 -> mostrarDiagnostico()
+                    8 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -777,25 +807,82 @@ class BrowserActivity : Activity() {
             if (kind == ProfileKind.INCOGNITO) TextView.VISIBLE else TextView.GONE
     }
 
-    /** Fire del perfil del TIPO de la pestana activa (T090) con
-     * confirmacion explicita por dialogo (ADR-019). */
-    private fun confirmarFire(nivel: FireLevel) {
-        val id = tabs.activa()
-        val kind = if (id == null) null else tabs.tarjeta(id)?.kind
-        val tipo = kind ?: ProfileKind.NORMAL
-        val nombre = if (tipo == ProfileKind.INCOGNITO) "incognito" else "normal"
-        val titulo = if (nivel == FireLevel.SESION) "Fire de sesion" else "Fire total"
-        val mensaje = if (nivel == FireLevel.SESION) {
-            "Borrar el sessionStorage del perfil " + nombre + "? (cookies, cache y storage local quedan)"
-        } else {
-            "Borrar TODO el estado del perfil " + nombre + " (cookies, cache, storage, IndexedDB y el archivo en disco) y vaciar sus reabiertas?"
-        }
+    /** Seccion Limpieza (T093 v2): acciones de un uso elegidas de
+     * lista cerrada. Elegir un valor distinto del defecto pide
+     * confirmacion y despues la ejecuta; la opcion NUNCA cambia de
+     * valor (sigue su defecto: el export JAMAS guarda una accion
+     * colgada) y el Fire conserva su confirmacion ADR-019. */
+    private fun elegirLimpieza(op: OpcionAjuste) {
         AlertDialog.Builder(this)
-            .setTitle(titulo)
-            .setMessage(mensaje)
-            .setPositiveButton("Borrar") { _, _ -> ejecutarFire(tipo, nivel) }
+            .setTitle(op.titulo)
+            .setMessage(op.descripcion)
+            .setItems(op.elecciones.toTypedArray()) { _, cual ->
+                aplicarLimpieza(op, op.elecciones[cual])
+            }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    /** Confirma y ejecuta la accion de Limpieza (T093 v2); el valor
+     * de defecto (nada/conservar) no ejecuta nada. */
+    private fun aplicarLimpieza(op: OpcionAjuste, eleccion: String) {
+        if (eleccion == op.defecto) {
+            estado.text = op.titulo + " sin cambios"
+            traza("limpieza", "sin cambios " + op.id)
+            return
+        }
+        val tipo = tipoActivo()
+        val nombre = if (tipo == ProfileKind.INCOGNITO) "incognito" else "normal"
+        val mensaje = when (op.id) {
+            "limpieza.historial" ->
+                "Se borrara el historial de pestanas normales (" + eleccion + "). Borrar?"
+            "limpieza.fire-sesion" ->
+                "Borrar el sessionStorage del perfil " + nombre + "? (cookies, cache y storage local quedan)"
+            "limpieza.fire-total" ->
+                "Borrar TODO el estado del perfil " + nombre + " (cookies, cache, storage, IndexedDB y el archivo en disco) y vaciar sus reabiertas?"
+            else -> return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(op.titulo)
+            .setMessage(mensaje)
+            .setPositiveButton("Borrar") { _, _ ->
+                ejecutarLimpieza(op, eleccion, tipo)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Ejecuta la accion ya confirmada (T093 v2): el rango del
+     * historial es inclusivo hasta ahora (86400000L = un dia en
+     * millis, dia UTC de HistoryManager.diaDe) y el Fire reusa
+     * ejecutarFire (el total del perfil NORMAL borra tambien el
+     * historial, consistencia T045). */
+    private fun ejecutarLimpieza(op: OpcionAjuste, eleccion: String, tipo: ProfileKind) {
+        if (op.id == "limpieza.historial") {
+            val ahora = clock.nowMillis()
+            val n = if (eleccion == "todo") {
+                historial.limpiar()
+            } else {
+                val desde = if (eleccion == "hoy") {
+                    HistoryManager.diaDe(ahora) * 86400000L
+                } else {
+                    ahora - (if (eleccion == "7-dias") 7L else 30L) * 86400000L
+                }
+                historial.borrarRango(desde, ahora)
+            }
+            estado.text = "historial borrado (" + n + ", " + eleccion + ")"
+            traza("limpieza", "historial " + eleccion + " (" + n + ")")
+            return
+        }
+        ejecutarFire(tipo, if (op.id == "limpieza.fire-sesion") FireLevel.SESION else FireLevel.TOTAL)
+        traza("limpieza", "fire " + op.id)
+    }
+
+    /** Tipo de perfil de la pestana activa (normal si no hay). */
+    private fun tipoActivo(): ProfileKind {
+        val id = tabs.activa()
+        val kind = if (id == null) null else tabs.tarjeta(id)?.kind
+        return kind ?: ProfileKind.NORMAL
     }
 
     private fun ejecutarFire(tipo: ProfileKind, nivel: FireLevel) {
@@ -896,8 +983,9 @@ class BrowserActivity : Activity() {
             .show()
     }
 
-    /** Dialogo de ajustes (T093 v1): busca por nombre, seccion o
-     * descripcion y ABRE la opcion; la seccion Limpieza y las demas
+    /** Dialogo de ajustes (T093): busca por nombre, seccion o
+     * descripcion y ABRE la opcion; la seccion Limpieza (v2) trae
+     * el Fire y el borrado del historial por rango, las demas
      * secciones llegan con los subhitos siguientes. */
     private fun mostrarAjustes() {
         val campo = EditText(this)
@@ -932,9 +1020,11 @@ class BrowserActivity : Activity() {
             .show()
     }
 
-    /** Aplica el cambio de un ajuste (T093): BOOL alterna al tocar;
-     * ENTERO y TEXTO piden el valor; ELECCION elige de la lista; lo
-     * no disponible se avisa y JAMAS cambia. */
+    /** Aplica el cambio de un ajuste (T093): la ELECCION de la
+     * seccion Limpieza es una accion de un uso (v2, elegirLimpieza);
+     * BOOL alterna al tocar; ENTERO y TEXTO piden el valor; la
+     * ELECCION elige de la lista; lo no disponible se avisa y JAMAS
+     * cambia. */
     private fun tocarAjuste(op: OpcionAjuste) {
         if (!op.disponible) {
             estado.text = "no disponible: " + op.titulo
@@ -952,17 +1042,21 @@ class BrowserActivity : Activity() {
             TipoOpcion.ENTERO -> pedirAjuste(op, "entre " + op.minimo + " y " + op.maximo)
             TipoOpcion.TEXTO -> pedirAjuste(op, op.descripcion)
             TipoOpcion.ELECCION -> {
-                AlertDialog.Builder(this)
-                    .setTitle(op.titulo)
-                    .setItems(op.elecciones.toTypedArray()) { _, cual ->
-                        val nuevo = op.elecciones[cual]
-                        if (ajustes.asignar(op.id, nuevo)) {
-                            estado.text = op.titulo + " = " + nuevo
-                            traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                if (op.seccion == "Limpieza") {
+                    elegirLimpieza(op)
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle(op.titulo)
+                        .setItems(op.elecciones.toTypedArray()) { _, cual ->
+                            val nuevo = op.elecciones[cual]
+                            if (ajustes.asignar(op.id, nuevo)) {
+                                estado.text = op.titulo + " = " + nuevo
+                                traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                            }
                         }
-                    }
-                    .setNegativeButton("Cancelar", null)
-                    .show()
+                        .setNegativeButton("Cancelar", null)
+                        .show()
+                }
             }
         }
     }
@@ -995,10 +1089,10 @@ class BrowserActivity : Activity() {
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0179)</h1>" +
+        "<html><body><h1>Navegador NIA (R0181)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>El Menu trae Historial (solo pestanas normales), Ajustes (busca y cambia), Fire de sesion y total con confirmacion, y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
+            "<p>El Menu trae Historial (solo pestanas normales), Ajustes (busca y cambia; Limpieza: borrar historial por rango y Fire de sesion/total con confirmacion) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
             "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
             "</body></html>"
 
