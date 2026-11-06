@@ -23,6 +23,13 @@ class NiaProgressBar(
         minimumHeight = NiaUi.dp(context, NiaTokens.ESPACIADO[1])
     }
 
+    /** Alto fijo = minimumHeight. Sin este onMeasure, getDefaultSize devuelve el
+     * specSize con AT_MOST (WRAP_CONTENT) y la barra ocupaba TODO el alto libre
+     * del LinearLayout, empujando la pagina fuera de pantalla (smoke T072 v2). */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        setMeasuredDimension(View.MeasureSpec.getSize(widthMeasureSpec), minimumHeight)
+    }
+
     /** Fija el avance (acotado 0..1) y repinta. */
     fun setFraccion(valor: Float) {
         fraccion = valor.coerceIn(0f, 1f)
