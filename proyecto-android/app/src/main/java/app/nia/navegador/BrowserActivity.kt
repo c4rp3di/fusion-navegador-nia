@@ -41,7 +41,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4, RES-0086, R0183): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1, RES-0087, R0184): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -111,6 +111,13 @@ import app.nia.navegador.ui.NiaUi
  * cache de los perfiles vivos: cookies, storage e historial
  * viven; no es Fire) y descargas honestas NO disponibles hasta
  * el gestor de descargas del shell (T047/T085).
+ *
+ * T075 v1 (R0184, RES-0087): cerradas y deshacer. Aviso con
+ * accion de Reabrir al cerrar (autodescarte) y lista de
+ * recientes en el Menu; las incognito viven en la lista solo
+ * dentro de la sesion viva: tras el wipe queda unicamente la
+ * recien cerrada (reabrirla es un perfil NUEVO) y los datos
+ * privados destruidos JAMAS reviven.
  *
  * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
@@ -253,6 +260,9 @@ class BrowserActivity : Activity() {
 
     /** Banner inequivoco de modo incognito (T090). */
     private lateinit var bannerIncognito: TextView
+    private lateinit var avisoCierre: LinearLayout
+    private lateinit var avisoTexto: TextView
+    private val esconderAviso = Runnable { avisoCierre.visibility = LinearLayout.GONE }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -285,7 +295,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0183)"
+        omnibox.hint = "Busca o escribe una URL (R0184)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -316,7 +326,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0183)"
+        estado.text = "listo (R0184)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -359,6 +369,26 @@ class BrowserActivity : Activity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
 
+        // T075 v1 (R0184): aviso de deshacer al cerrar una pestana.
+        avisoCierre = LinearLayout(this)
+        avisoCierre.orientation = LinearLayout.HORIZONTAL
+        avisoCierre.setBackgroundColor(NiaUi.color(colores.accent))
+        avisoTexto = TextView(this)
+        avisoTexto.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
+        avisoTexto.setTextColor(NiaUi.color(colores.bg))
+        avisoTexto.setPadding(espacio, espacio / 2, espacio / 2)
+        avisoCierre.addView(
+            avisoTexto,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        avisoCierre.addView(boton("Reabrir") {
+            avisoCierre.removeCallbacks(esconderAviso)
+            avisoCierre.visibility = LinearLayout.GONE
+            reabrirPestana()
+        })
+        avisoCierre.visibility = LinearLayout.GONE
+        raiz.addView(avisoCierre)
+
         val barra = LinearLayout(this)
         barra.orientation = LinearLayout.HORIZONTAL
         // R0172 (smoke): fondo propio para que la barra se vea
@@ -390,7 +420,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0183 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0184 con " + tabs.contar() + " pestana(s)")
         aplicarRetencion()
         pintarStrip()
     }
@@ -593,6 +623,7 @@ class BrowserActivity : Activity() {
             "Nueva pestana",
             "Nueva pestana incognito",
             "Reabrir pestana",
+            "Cerradas (recientes)",
             "Sugerencias",
             "Identidad de la pagina",
             "Historial (solo pestanas normales)",
@@ -607,12 +638,13 @@ class BrowserActivity : Activity() {
                     0 -> nuevaPestana(ProfileKind.NORMAL)
                     1 -> nuevaPestana(ProfileKind.INCOGNITO)
                     2 -> reabrirPestana()
-                    3 -> mostrarSugerencias()
-                    4 -> mostrarIdentidad()
-                    5 -> mostrarHistorial()
-                    6 -> mostrarAjustes()
-                    7 -> mostrarDiagnostico()
-                    8 -> startActivity(Intent(this, MainActivity::class.java))
+                    3 -> mostrarCerradas()
+                    4 -> mostrarSugerencias()
+                    5 -> mostrarIdentidad()
+                    6 -> mostrarHistorial()
+                    7 -> mostrarAjustes()
+                    8 -> mostrarDiagnostico()
+                    9 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -759,6 +791,7 @@ class BrowserActivity : Activity() {
     }
 
     private fun cerrarPestanaYa(id: Long) {
+        val titulo = tabs.tarjeta(id)?.title ?: ""
         val cierre = tabs.cerrar(id) ?: return
         val mensaje = if (cierre.perfilBorrado) {
             traza("tabs", "ultima incognito cerrada: perfil borrado (wipe)")
@@ -774,10 +807,48 @@ class BrowserActivity : Activity() {
             cambiarPestana(activa)
         }
         estado.text = mensaje
+        avisoCierre.removeCallbacks(esconderAviso)
+        if (cierre.perfilBorrado) {
+            avisoCierre.visibility = LinearLayout.GONE
+        } else {
+            avisoTexto.text = "Pestana cerrada" + (if (titulo.isEmpty()) "" else ": " + titulo)
+            avisoCierre.visibility = LinearLayout.VISIBLE
+            avisoCierre.postDelayed(esconderAviso, 5000)
+            traza("tabs", "aviso de deshacer listo para id=" + id)
+        }
     }
 
     private fun reabrirPestana() {
-        when (val r = tabs.reabrir()) {
+        reabrirResultado(tabs.reabrir())
+    }
+
+    /** Menu de cerradas recientes (T075 v1): la mas reciente arriba y
+     * la elegida se reabre con el motor; las incognito destruidas
+     * JAMAS aparecen (el motor las retira al morir el perfil). */
+    private fun mostrarCerradas() {
+        val cerradas = tabs.reabiertas()
+        if (cerradas.isEmpty()) {
+            estado.text = "sin pestanas cerradas recientes"
+            return
+        }
+        val recientes = cerradas.asReversed()
+        val etiquetas = recientes.map { c ->
+            val titulo = if (c.title.length > 16) c.title.substring(0, 15) + "..." else c.title
+            val priv = if (c.kind == ProfileKind.INCOGNITO) "[priv] " else ""
+            priv + titulo + " - " + c.url
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Cerradas recientes")
+            .setItems(etiquetas) { _, cual ->
+                reabrirResultado(tabs.reabrirEn(cerradas.size - 1 - cual))
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Ejecuta un reabrir (del menu o de la lista): activa, pinta y navega. */
+    private fun reabrirResultado(r: TabCrear) {
+        when (r) {
             is TabCrear.Ok -> {
                 tabs.activar(r.id)
                 pintarStrip()
@@ -1164,10 +1235,10 @@ class BrowserActivity : Activity() {
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0183)</h1>" +
+        "<html><body><h1>Navegador NIA (R0184)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>El Menu trae Historial (solo pestanas normales), Ajustes (busca y cambia; Limpieza: borrar historial por rango, Fire de sesion/total con confirmacion, Retencion del historial y Borrar cache con conteo) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
+            "<p>El Menu trae Historial (solo pestanas normales), Cerradas (recientes, reabre la elegida), Ajustes (busca y cambia; Limpieza: borrar historial por rango, Fire de sesion/total con confirmacion, Retencion del historial y Borrar cache con conteo) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
             "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
             "</body></html>"
 

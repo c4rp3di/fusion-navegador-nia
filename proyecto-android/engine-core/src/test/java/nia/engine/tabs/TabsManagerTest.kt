@@ -21,16 +21,17 @@ import nia.engine.profile.ProfileKind
 
 /**
  * Espejo Kotlin del gemelo TS validado offline (2 corridas
- * identicas, huella 32333.48541.155): los 15 tests cubren la creacion con
+ * identicas, huella 32333.48541.155): los 17 tests cubren la creacion con
  * tarjetas ordenadas por tipo, el presupuesto por tipo, el
  * desalojo del mas viejo en las reabiertas, la pestana activa,
  * la actualizacion del shell, el duplicado, el cierre de la
  * unica, el borrado del perfil al cerrar la ultima incognito
  * (con cookies REALES del CookieJar compartidas dentro del
  * tipo), el aislamiento entre tipos, el vaciado de las
- * reabiertas de incognito, cerrarTodas, el reorden, Fire y la
- * limpieza dedicada del cache HTTP (T093 v4, R0183).
- * T073 v1 (RES-0079) + T093 v4 (R0183).
+ * reabiertas de incognito, cerrarTodas, el reorden, Fire, la
+ * limpieza dedicada del cache HTTP (T093 v4, R0183) y las cerradas
+ * recientes con reabrirEn (T075 v1, R0184, RES-0087).
+ * T073 v1 (RES-0079) + T093 v4 (R0183) + T075 v1 (R0184, RES-0087).
  */
 class TabsManagerTest {
 
@@ -286,5 +287,44 @@ class TabsManagerTest {
         cargar(m, normal, "http://a.dev/")
         assertEquals("tras limpiar el GET vuelve a la red", 3, t.requests.size)
         assertEquals("la cookie sobrevive: limpiarCache NO es Fire", "sid=uno", t.requests[2].headers["Cookie"])
+    }
+
+    @Test
+    fun reabrirEnReabreLaElegidaYConservaElResto() {
+        val m = manager(FakeTransport())
+        val a = (m.crear(ProfileKind.NORMAL, "u1", "t1", null) as TabCrear.Ok).id
+        val b = (m.crear(ProfileKind.NORMAL, "u2", "t2", null) as TabCrear.Ok).id
+        val c = (m.crear(ProfileKind.NORMAL, "u3", "t3", null) as TabCrear.Ok).id
+        m.cerrar(a)
+        m.cerrar(b)
+        m.cerrar(c)
+        assertEquals("la lista es la mas vieja primero", listOf("t1", "t2", "t3"), m.reabiertas().map { it.title })
+        val vuelta = m.reabrirEn(0) as TabCrear.Ok
+        assertEquals("la elegida revive", "u1", m.tarjeta(vuelta.id)?.url)
+        assertEquals("las demas siguen en la lista", listOf("t2", "t3"), m.reabiertas().map { it.title })
+        assertFalse(m.reabrirEn(-1) is TabCrear.Ok)
+        assertFalse(m.reabrirEn(5) is TabCrear.Ok)
+        assertEquals("fuera de rango no toca la lista", listOf("t2", "t3"), m.reabiertas().map { it.title })
+        val ultima = m.reabrirEn(1) as TabCrear.Ok
+        assertEquals("t3", m.tarjeta(ultima.id)?.title)
+        assertEquals(listOf("t2"), m.reabiertas().map { it.title })
+    }
+
+    @Test
+    fun reabiertasSoloLaRecienCerradaTrasElWipe() {
+        val m = manager(FakeTransport())
+        val n = (m.crear(ProfileKind.NORMAL, "un", "tn", null) as TabCrear.Ok).id
+        val i1 = (m.crear(ProfileKind.INCOGNITO, "ui1", "ti1", null) as TabCrear.Ok).id
+        val i2 = (m.crear(ProfileKind.INCOGNITO, "ui2", "ti2", null) as TabCrear.Ok).id
+        m.cerrar(i1)
+        assertEquals("la incognito vive en la lista mientras el perfil vive", listOf("ti1"), m.reabiertas().map { it.title })
+        val cierre = m.cerrar(i2)
+        assertTrue(cierre != null && cierre.perfilBorrado)
+        assertEquals("la destruida vieja JAMAS revive; solo queda la recien cerrada", listOf("ti2"), m.reabiertas().map { it.title })
+        val vuelta = m.reabrirEn(0) as TabCrear.Ok
+        assertEquals("ui2", m.tarjeta(vuelta.id)?.url)
+        assertEquals("la lista queda vacia", 0, m.reabiertas().size)
+        m.cerrar(n)
+        assertEquals(listOf("tn"), m.reabiertas().map { it.title })
     }
 }

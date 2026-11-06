@@ -37,6 +37,16 @@ sealed class TabCrear {
 /** Resultado de cerrar: si el cierre borro el perfil del tipo. */
 data class TabCierre(val id: Long, val kind: ProfileKind, val perfilBorrado: Boolean)
 
+/** Cerrada reciente (T075 v1, R0184, RES-0087): tarjeta de la lista
+ * de recientes; JAMAS lleva el preview (solo vive en memoria para
+ * reabrir) y las incognito de un perfil destruido JAMAS aparecen
+ * (el cierre de la ultima las retira de la lista). */
+data class TabCerrada(
+    val kind: ProfileKind,
+    val title: String,
+    val url: String
+)
+
 /**
  * TabsManager puro JVM (T073 v1, RES-0079): pestanas normales e incognito
  * separadas sobre los perfiles verificados (T044) y el NavController
@@ -197,6 +207,31 @@ class TabsManager(
         val c = reabiertos.removeAt(reabiertos.size - 1)
         val out = crear(c.kind, c.url, c.title, c.preview)
         if (out !is TabCrear.Ok) reabiertos.add(c)
+        return out
+    }
+
+    /**
+     * T075 v1 (R0184, RES-0087): instantaneo de las cerradas
+     * recientes, la mas vieja primero (la ultima cerrada cierra
+     * la lista). Solo kind, titulo y URL: el preview JAMAS viaja
+     * y las incognito de un perfil destruido JAMAS aparecen (el
+     * cierre de la ultima las retira; solo la recien cerrada
+     * queda, y reabrirla crea un perfil NUEVO sin datos privados
+     * revividos).
+     */
+    fun reabiertas(): List<TabCerrada> =
+        reabiertos.map { TabCerrada(it.kind, it.title, it.url) }
+
+    /**
+     * T075 v1 (R0184, RES-0087): reabre la cerrada de la posicion
+     * pos (0 = la mas vieja de la lista); NoExiste fuera de rango
+     * y el presupuesto restituye la tarjeta en su sitio.
+     */
+    fun reabrirEn(pos: Int): TabCrear {
+        if (pos < 0 || pos >= reabiertos.size) return TabCrear.NoExiste
+        val c = reabiertos.removeAt(pos)
+        val out = crear(c.kind, c.url, c.title, c.preview)
+        if (out !is TabCrear.Ok) reabiertos.add(pos, c)
         return out
     }
 
