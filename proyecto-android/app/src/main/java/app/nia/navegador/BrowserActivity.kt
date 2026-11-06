@@ -41,7 +41,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1, RES-0087, R0184): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1, RES-0089, R0187): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -118,6 +118,14 @@ import app.nia.navegador.ui.NiaUi
  * dentro de la sesion viva: tras el wipe queda unicamente la
  * recien cerrada (reabrirla es un perfil NUEVO) y los datos
  * privados destruidos JAMAS reviven.
+ *
+ * T087 v1 + T088 v1 (R0187, RES-0088/RES-0089): interoperabilidad
+ * Android. Menu con Compartir pagina (SEND saliente con chooser,
+ * SOLO la URL final de la activa; about: no comparte) y SEND/VIEW
+ * entrantes con confirmacion por dialogo sobre la resolucion REAL
+ * del OmniboxInput: lo que no resuelve JAMAS abre y el incognito
+ * NO se filtra; sin App Links ajenos ni peticion de rol (honesto
+ * hasta el smoke T067-B en dispositivo).
  *
  * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
@@ -295,7 +303,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0184)"
+        omnibox.hint = "Busca o escribe una URL (R0187)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -326,7 +334,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0184)"
+        estado.text = "listo (R0187)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -420,9 +428,10 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0184 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0187 con " + tabs.contar() + " pestana(s)")
         aplicarRetencion()
         pintarStrip()
+        manejarIntentExterno(intent)
     }
 
     /** Strip de pestanas: una tarjeta por pestana viva y el boton + al final. */
@@ -626,6 +635,7 @@ class BrowserActivity : Activity() {
             "Cerradas (recientes)",
             "Sugerencias",
             "Identidad de la pagina",
+            "Compartir pagina",
             "Historial (solo pestanas normales)",
             "Ajustes (busca y cambia)",
             "Diagnostico (traza del shell)",
@@ -641,10 +651,11 @@ class BrowserActivity : Activity() {
                     3 -> mostrarCerradas()
                     4 -> mostrarSugerencias()
                     5 -> mostrarIdentidad()
-                    6 -> mostrarHistorial()
-                    7 -> mostrarAjustes()
-                    8 -> mostrarDiagnostico()
-                    9 -> startActivity(Intent(this, MainActivity::class.java))
+                    6 -> compartirPagina()
+                    7 -> mostrarHistorial()
+                    8 -> mostrarAjustes()
+                    9 -> mostrarDiagnostico()
+                    10 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -878,6 +889,67 @@ class BrowserActivity : Activity() {
         }
         val q = resto.indexOf('?')
         return if (q >= 0) resto.substring(0, q) else resto
+    }
+
+    /** T087 v1 (R0187): compartir la pagina actual. SOLO la URL final
+     * de la pestana activa viaja al chooser (about: no comparte) y
+     * el incognito NO se filtra: decide quien recibe. */
+    private fun compartirPagina() {
+        val url = navActual()?.currentPage()?.url
+        if (url == null || url.startsWith("about:")) {
+            estado.text = "sin pagina actual para compartir"
+            return
+        }
+        traza("share", "compartir " + hostDe(url))
+        val envio = Intent(Intent.ACTION_SEND)
+        envio.type = "text/plain"
+        envio.putExtra(Intent.EXTRA_TEXT, url)
+        startActivity(Intent.createChooser(envio, "Compartir"))
+    }
+
+    /** T087/T088 v1 (R0187): SEND/VIEW entrantes. El texto o URI
+     * externa se resuelve con el OmniboxInput REAL y pide
+     * confirmacion ANTES de abrir; lo que no resuelve JAMAS abre. */
+    private fun manejarIntentExterno(envio: Intent) {
+        val accion = envio.action ?: return
+        if (accion != Intent.ACTION_SEND && accion != Intent.ACTION_VIEW) return
+        val texto = if (accion == Intent.ACTION_SEND) envio.getStringExtra(Intent.EXTRA_TEXT) else envio.dataString
+        if (texto == null || texto.trim().isEmpty()) {
+            estado.text = "externo sin texto para abrir"
+            return
+        }
+        when (val r = OmniboxInput.resolver(texto)) {
+            is OmniboxInput.Resolucion.Navegar ->
+                confirmarExterno("Abrir enlace externo?", r.url, r.dominioImplicito, texto)
+            is OmniboxInput.Resolucion.Buscar ->
+                confirmarExterno("Buscar texto externo?", r.url, false, texto)
+            is OmniboxInput.Resolucion.EsquemaNoSoportado -> {
+                estado.text = "externo con esquema no soportado: " + r.esquema
+                traza("externo", "esquema no soportado")
+            }
+            is OmniboxInput.Resolucion.ErrorDeParseo -> {
+                estado.text = "externo invalido: " + r.motivo
+                traza("externo", "url invalida")
+            }
+            is OmniboxInput.Resolucion.Vacio -> estado.text = "externo vacio"
+        }
+    }
+
+    /** T087/T088 v1 (R0187): dialogo ADR-019 para abrir lo externo.
+     * Cancelar JAMAS navega; aceptar abre en la pestana activa, sea
+     * normal o incognito (sin filtro automatico). */
+    private fun confirmarExterno(titulo: String, url: String, dominioImplicito: Boolean, textoOriginal: String) {
+        traza("externo", "confirmar " + hostDe(url))
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setMessage(url)
+            .setPositiveButton("Abrir") { _, _ ->
+                navegar(url, dominioImplicito, textoOriginal)
+            }
+            .setNegativeButton("Cancelar") { _, _ ->
+                estado.text = "externo cancelado"
+            }
+            .show()
     }
 
     /** La tarjeta de la pestana refleja la URL cargada; la carga en vuelo
@@ -1235,7 +1307,7 @@ class BrowserActivity : Activity() {
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0184)</h1>" +
+        "<html><body><h1>Navegador NIA (R0187)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
             "<p>El Menu trae Historial (solo pestanas normales), Cerradas (recientes, reabre la elegida), Ajustes (busca y cambia; Limpieza: borrar historial por rango, Fire de sesion/total con confirmacion, Retencion del historial y Borrar cache con conteo) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
