@@ -20,6 +20,7 @@ import nia.contracts.ErrorCode
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
 import nia.engine.errors.ErrorPages
+import nia.engine.history.HistoryManager
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.net.HttpTransport
@@ -37,7 +38,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1, RES-0081, R0177): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1, RES-0082, R0178): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -74,14 +75,24 @@ import app.nia.navegador.ui.NiaUi
  * pruebas: cada accion deja una linea en el dialogo Diagnostico y en
  * "adb logcat -s NIA.Shell" (NUNCA una URL: solo el host).
  *
- * Exclusiones v4: sin grupos ni previews pintadas, sin persistencia
+ * T074 v1 (R0178): historial global del perfil NORMAL (HistoryManager)
+ * separado del session history de cada pestana (el back/forward vive
+ * en el NavController de cada pestana): cada pagina cargada en una
+ * pestana NORMAL se registra SIN query ni fragmento (redaccion por
+ * diseno) y el incognito JAMAS se registra (D-001); el Menu trae
+ * Historial agrupado por dia (tocar abre la URL) y el Fire total del
+ * perfil NORMAL tambien borra el historial (T045).
+ *
+ * Exclusiones v5: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
  * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
  * activo (sin gestor multi-perfil ni Ajustes Limpieza, T054/T093),
  * panel de identidad solo de la ultima pagina cargada, sin tema
  * conmutable en la UI (T070), sugerencias en dialogo (no desplegable)
  * y el pintado respeta SOLO lo que el motor CSS/layout soporta hoy
- * (paginas reales simples, honesto).
+ * (paginas reales simples, honesto). El historial del shell es un
+ * dialogo simple agrupado por dia: la busqueda de texto, el borrado
+ * por rango y los Ajustes de Limpieza llegan con T093.
  */
 class BrowserActivity : Activity() {
 
@@ -91,6 +102,11 @@ class BrowserActivity : Activity() {
 
     private val tabs by lazy { TabsManager(clock, HttpTransport(), File(cacheDir, "perfil-navegador")) }
     private val marcadores = BookmarkManager()
+
+    /** Historial global SOLO del perfil NORMAL (T074): el incognito
+     * jamas se registra y la URL se guarda sin query (redaccion).
+     * Persiste en filesDir; un archivo corrupto se ignora. */
+    private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
 
     private val colores by lazy { NiaUi.colores(this, NiaTokens.Modo.AUTO) }
 
@@ -141,7 +157,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0177)"
+        omnibox.hint = "Busca o escribe una URL (R0178)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -172,7 +188,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0177)"
+        estado.text = "listo (R0178)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -246,7 +262,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0177 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0178 con " + tabs.contar() + " pestana(s)")
         pintarStrip()
     }
 
@@ -450,6 +466,7 @@ class BrowserActivity : Activity() {
             "Reabrir pestana",
             "Sugerencias",
             "Identidad de la pagina",
+            "Historial (solo pestanas normales)",
             "Fire sesion (perfil del tipo activo)",
             "Fire total (perfil del tipo activo)",
             "Diagnostico (traza del shell)",
@@ -464,10 +481,11 @@ class BrowserActivity : Activity() {
                     2 -> reabrirPestana()
                     3 -> mostrarSugerencias()
                     4 -> mostrarIdentidad()
-                    5 -> confirmarFire(FireLevel.SESION)
-                    6 -> confirmarFire(FireLevel.TOTAL)
-                    7 -> mostrarDiagnostico()
-                    8 -> startActivity(Intent(this, MainActivity::class.java))
+                    5 -> mostrarHistorial()
+                    6 -> confirmarFire(FireLevel.SESION)
+                    7 -> confirmarFire(FireLevel.TOTAL)
+                    8 -> mostrarDiagnostico()
+                    9 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -521,6 +539,7 @@ class BrowserActivity : Activity() {
         val page = o.page
         estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
         traza("nav", "loaded " + page.status + " " + hostDe(page.url))
+        registrarVisita(page.url)
         omnibox.setText(page.url)
         val panel = StringBuilder()
         for (linea in PanelIdentidad.lineas(page.url, page.tls)) {
@@ -738,6 +757,10 @@ class BrowserActivity : Activity() {
         val linea = if (nivel == FireLevel.SESION) "sesion" else "total"
         traza("fire", linea + " " + tipo.toString().lowercase() + " " + resumen)
         estado.text = "fire " + linea + " aplicado: " + resumen
+        if (nivel == FireLevel.TOTAL && tipo == ProfileKind.NORMAL) {
+            val borradas = historial.limpiar()
+            traza("hist", "fire total: historial limpiado (" + borradas + ")")
+        }
     }
 
     /** Dialogo de diagnostico (T090): la traza del shell linea a linea,
@@ -755,15 +778,76 @@ class BrowserActivity : Activity() {
             .show()
     }
 
+    /** Registra la visita en el historial SOLO si la pestana activa es
+     * NORMAL (T074): el incognito JAMAS entra al historial (D-001). */
+    private fun registrarVisita(url: String) {
+        val id = tabs.activa()
+        val kind = if (id == null) null else tabs.tarjeta(id)?.kind
+        if (kind != ProfileKind.NORMAL) {
+            return
+        }
+        if (historial.registrar(url, hostDe(url))) {
+            traza("hist", "registrado " + hostDe(url))
+        }
+    }
+
+    /** Dialogo de historial (T074 v1): entradas del perfil NORMAL
+     * agrupadas por dia UTC, la mas reciente primero; tocar una
+     * entrada la abre y Borrar todo pide confirmacion (la busqueda
+     * de texto y los rangos de fechas llegan con Ajustes, T093). */
+    private fun mostrarHistorial() {
+        val lista = historial.entradas()
+        val lineas = ArrayList<String>()
+        val urls = ArrayList<String?>()
+        var diaAnterior = -1L
+        for (e in lista) {
+            val dia = HistoryManager.diaDe(e.fecha)
+            if (dia != diaAnterior) {
+                lineas.add("-- dia " + dia + " --")
+                urls.add(null)
+                diaAnterior = dia
+            }
+            lineas.add(e.titulo + " - " + hostDe(e.url) + " (" + e.visitas + ")")
+            urls.add(e.url)
+        }
+        if (lineas.isEmpty()) {
+            lineas.add("(historial vacio)")
+            urls.add(null)
+        }
+        traza("hist", "historial abierto con " + historial.contar() + " entradas")
+        AlertDialog.Builder(this)
+            .setTitle("Historial (solo pestanas normales)")
+            .setItems(lineas.toTypedArray()) { _, cual ->
+                val url = urls[cual]
+                if (url != null) {
+                    navegar(url, false, null)
+                }
+            }
+            .setPositiveButton("Borrar todo") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("Borrar el historial")
+                    .setMessage("Se borrara TODO el historial de pestanas normales. Borrar?")
+                    .setPositiveButton("Borrar") { _, _ ->
+                        val n = historial.limpiar()
+                        estado.text = "historial borrado (" + n + ")"
+                        traza("hist", "historial borrado (" + n + ")")
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
     /** Texto seguro para el HTML de la pagina de error (sin <, > ni &). */
     private fun textoHtml(s: String): String =
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0177)</h1>" +
+        "<html><body><h1>Navegador NIA (R0178)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>El Menu trae Fire de sesion y total con confirmacion, y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
+            "<p>El Menu trae Historial (solo pestanas normales), Fire de sesion y total con confirmacion, y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
             "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
             "</body></html>"
 
