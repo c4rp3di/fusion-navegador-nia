@@ -21,15 +21,16 @@ import nia.engine.profile.ProfileKind
 
 /**
  * Espejo Kotlin del gemelo TS validado offline (2 corridas
- * identicas, huella 32333.48541.155): los 14 tests cubren la creacion con
+ * identicas, huella 32333.48541.155): los 15 tests cubren la creacion con
  * tarjetas ordenadas por tipo, el presupuesto por tipo, el
  * desalojo del mas viejo en las reabiertas, la pestana activa,
  * la actualizacion del shell, el duplicado, el cierre de la
  * unica, el borrado del perfil al cerrar la ultima incognito
  * (con cookies REALES del CookieJar compartidas dentro del
  * tipo), el aislamiento entre tipos, el vaciado de las
- * reabiertas de incognito, cerrarTodas, el reorden y Fire.
- * T073 v1 (RES-0079).
+ * reabiertas de incognito, cerrarTodas, el reorden, Fire y la
+ * limpieza dedicada del cache HTTP (T093 v4, R0183).
+ * T073 v1 (RES-0079) + T093 v4 (R0183).
  */
 class TabsManagerTest {
 
@@ -268,5 +269,22 @@ class TabsManagerTest {
         val sesion = m.fire(FireLevel.SESION, ProfileKind.INCOGNITO)
         assertEquals(0, sesion!!.sessionPartitions)
         assertTrue(m.nav(incognito) != null)
+    }
+
+    @Test
+    fun limpiarCacheBorraSoloElCacheDeLosPerfilesVivos() {
+        val t = FakeTransport()
+        t.routes["http://a.dev/"] = resp(200, mapOf("cache-control" to "max-age=60", "set-cookie" to "sid=uno; Path=/"), "<html><body>a</body></html>")
+        t.routes["http://i.dev/"] = resp(200, mapOf("cache-control" to "max-age=60"), "<html><body>i</body></html>")
+        val m = manager(t)
+        val normal = (m.crear(ProfileKind.NORMAL, "http://a.dev/", "a", null) as TabCrear.Ok).id
+        val incognito = (m.crear(ProfileKind.INCOGNITO, "http://i.dev/", "i", null) as TabCrear.Ok).id
+        cargar(m, normal, "http://a.dev/")
+        cargar(m, incognito, "http://i.dev/")
+        assertEquals("las entradas de cache del normal y del incognito mueren", 2, m.limpiarCache())
+        assertEquals("un cache ya vacio devuelve 0", 0, m.limpiarCache())
+        cargar(m, normal, "http://a.dev/")
+        assertEquals("tras limpiar el GET vuelve a la red", 3, t.requests.size)
+        assertEquals("la cookie sobrevive: limpiarCache NO es Fire", "sid=uno", t.requests[2].headers["Cookie"])
     }
 }

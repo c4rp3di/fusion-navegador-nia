@@ -41,7 +41,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v3, RES-0085, R0182): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4, RES-0086, R0183): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -86,7 +86,7 @@ import app.nia.navegador.ui.NiaUi
  * Historial agrupado por dia (tocar abre la URL) y el Fire total del
  * perfil NORMAL tambien borra el historial (T045).
  *
- * T093 v1 (R0179) + v2 (R0181) + v3 (R0182): ajustes modulares con el
+ * T093 v1 (R0179) + v2 (R0181) + v3 (R0182) + v4 (R0183): ajustes modulares con el
  * SettingsManager del motor (armazon v1: registro tipificado,
  * busqueda que abre la opcion, export/import SIN secretos ni no
  * disponibles, recovery y persistencia): el Menu trae Ajustes;
@@ -105,6 +105,12 @@ import app.nia.navegador.ui.NiaUi
  * historial lo mas viejo que la ventana elegida (7, 30 o 90
  * dias; nada conserva todo), silenciosa cuando no hay nada
  * que borrar.
+ *
+ * v4: limpieza dedicada del cache HTTP como accion de un
+ * uso con conteo (limpiarCache del TabsManager borra SOLO el
+ * cache de los perfiles vivos: cookies, storage e historial
+ * viven; no es Fire) y descargas honestas NO disponibles hasta
+ * el gestor de descargas del shell (T047/T085).
  *
  * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
@@ -133,7 +139,7 @@ class BrowserActivity : Activity() {
      * Persiste en filesDir; un archivo corrupto se ignora. */
     private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
 
-    /** Ajustes del navegador (T093 v1 + v2 + v3): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -181,6 +187,24 @@ class BrowserActivity : Activity() {
                 "Al arrancar y al cambiar este ajuste se borra del historial lo mas viejo que la ventana (7, 30 o 90 dias; nada conserva todo)",
                 TipoOpcion.ELECCION, "nada",
                 elecciones = listOf("nada", "7-dias", "30-dias", "90-dias")
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "limpieza.cache", "Limpieza",
+                "Borrar cache",
+                "Borra SOLO el cache HTTP de los perfiles vivos con conteo (cookies, storage e historial viven; no es Fire)",
+                TipoOpcion.ELECCION, "conservar",
+                elecciones = listOf("conservar", "ejecutar")
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "limpieza.descargas", "Limpieza",
+                "Limpiar descargas",
+                "NO disponible todavia: llega con el gestor de descargas del shell (T047/T085)",
+                TipoOpcion.ELECCION, "conservar", elecciones = listOf("conservar", "ejecutar"),
+                disponible = false
             )
         )
         s.registrar(
@@ -261,7 +285,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0182)"
+        omnibox.hint = "Busca o escribe una URL (R0183)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -292,7 +316,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0182)"
+        estado.text = "listo (R0183)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -366,7 +390,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0182 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0183 con " + tabs.contar() + " pestana(s)")
         aplicarRetencion()
         pintarStrip()
     }
@@ -857,6 +881,8 @@ class BrowserActivity : Activity() {
                 "Borrar el sessionStorage del perfil " + nombre + "? (cookies, cache y storage local quedan)"
             "limpieza.fire-total" ->
                 "Borrar TODO el estado del perfil " + nombre + " (cookies, cache, storage, IndexedDB y el archivo en disco) y vaciar sus reabiertas?"
+            "limpieza.cache" ->
+                "Borrar solo el cache HTTP de los perfiles vivos (normal e incognito)? Las cookies y el historial viven"
             else -> return
         }
         AlertDialog.Builder(this)
@@ -889,6 +915,12 @@ class BrowserActivity : Activity() {
             }
             estado.text = "historial borrado (" + n + ", " + eleccion + ")"
             traza("limpieza", "historial " + eleccion + " (" + n + ")")
+            return
+        }
+        if (op.id == "limpieza.cache") {
+            val n = tabs.limpiarCache()
+            estado.text = "cache borrado (" + n + " entradas)"
+            traza("limpieza", "cache (" + n + ")")
             return
         }
         ejecutarFire(tipo, if (op.id == "limpieza.fire-sesion") FireLevel.SESION else FireLevel.TOTAL)
@@ -1022,9 +1054,10 @@ class BrowserActivity : Activity() {
 
     /** Dialogo de ajustes (T093): busca por nombre, seccion o
      * descripcion y ABRE la opcion; la seccion Limpieza trae el
-     * Fire y el borrado del historial por rango (v2) y la
-     * retencion automatica al arrancar (v3); las demas secciones
-     * llegan con los subhitos siguientes. */
+     * Fire, el borrado del historial por rango (v2), la
+     * retencion automatica al arrancar (v3) y el borrado del
+     * cache HTTP con conteo (v4); las demas secciones llegan
+     * con los subhitos siguientes. */
     private fun mostrarAjustes() {
         val campo = EditText(this)
         campo.hint = "Buscar ajuste (texto, seccion o descripcion)"
@@ -1131,10 +1164,10 @@ class BrowserActivity : Activity() {
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0182)</h1>" +
+        "<html><body><h1>Navegador NIA (R0183)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>El Menu trae Historial (solo pestanas normales), Ajustes (busca y cambia; Limpieza: borrar historial por rango, Fire de sesion/total con confirmacion y Retencion del historial: borra lo mas viejo al arrancar) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
+            "<p>El Menu trae Historial (solo pestanas normales), Ajustes (busca y cambia; Limpieza: borrar historial por rango, Fire de sesion/total con confirmacion, Retencion del historial y Borrar cache con conteo) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
             "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
             "</body></html>"
 

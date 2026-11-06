@@ -222,4 +222,17 @@ class TabsManager(
         val perfil = perfiles[kind] ?: return null
         return DataFire.apply(level, perfil)
     }
+
+    /**
+     * T093 v4 (R0183): borra SOLO el cache HTTP de los perfiles
+     * vivos (normal e incognito) y devuelve cuantas entradas
+     * murieron. NO es Fire: las cookies, el storage, el IndexedDb
+     * y el historial del perfil normal viven (limpieza dedicada
+     * del cache para Ajustes).
+     */
+    fun limpiarCache(): Int {
+        var n = 0
+        for (p in perfiles.values) n += p.cache.clear()
+        return n
+    }
 }
