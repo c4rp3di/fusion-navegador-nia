@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -25,14 +26,18 @@ import nia.engine.net.PanelIdentidad
 import nia.engine.omnibox.OmniboxInput
 import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
-import nia.engine.profile.BrowserProfile
+import nia.engine.profile.ProfileKind
+import nia.engine.tabs.TabCrear
+import nia.engine.tabs.TabTarjeta
+import nia.engine.tabs.TabsManager
 import nia.engine.themes.NiaTokens
 import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2, RES-0078, R0168): shell estetico "DDG
- * ligero" sobre el NavController verificado (T071). El navegador pasa a
+ * BrowserActivity (T072 v2 + T073 v2, RES-0080, R0176): shell estetico
+ * "DDG ligero" sobre el NavController verificado (T071) con las
+ * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
  * se pintan con el motor propio: NavPage.html (crudo de la respuesta
  * final) alimenta PaintView con el CSS del navegador, sin re-fetch.
@@ -46,9 +51,23 @@ import app.nia.navegador.ui.NiaUi
  *
  * La resolucion del omnibox, el fallback DNS con confirmacion, las
  * paginas de error honestas y las sugerencias SIEMPRE locales quedan
- * como en v1 (ADR-022, T083, T084). Exclusiones v2: sin pestanas
- * (T073), sin tema conmutable en la UI (T070), sugerencias en dialogo
- * (no desplegable) y el pintado respeta SOLO lo que el motor
+ * como en v1 (ADR-022, T083, T084).
+ *
+ * T073 v2 (R0176): strip horizontal de pestanas sobre el TabsManager
+ * (tocar cambia, x cierra, + abre; la activa se invierte fg/bg para
+ * distinguirse), nueva incognito y reabrir desde el Menu; un perfil POR
+ * TIPO (normal persistido, incognito solo en memoria: cerrar la ultima
+ * borra TODO el perfil y vacia sus reabiertas).
+ *
+ * Usabilidad R0176: el omnibox refleja la URL final cargada, el estado
+ * muestra el host en vez del objeto interno, una carga en vuelo solo
+ * pinta si su pestana sigue activa y cerrar la ultima pestana abre
+ * una nueva (nunca pantalla sin pestanas).
+ *
+ * Exclusiones v3: sin grupos ni previews pintadas, sin persistencia
+ * de la sesion de pestanas, panel de identidad solo de la ultima
+ * pagina cargada, sin tema conmutable en la UI (T070), sugerencias en
+ * dialogo (no desplegable) y el pintado respeta SOLO lo que el motor
  * CSS/layout soporta hoy (paginas reales simples, honesto).
  */
 class BrowserActivity : Activity() {
@@ -57,8 +76,7 @@ class BrowserActivity : Activity() {
         override fun nowMillis(): Long = System.currentTimeMillis()
     }
 
-    private val profile by lazy { BrowserProfile.normal(clock, File(cacheDir, "perfil-navegador")) }
-    private val nav by lazy { NavController(HttpTransport(), clock, profile) }
+    private val tabs by lazy { TabsManager(clock, HttpTransport(), File(cacheDir, "perfil-navegador")) }
     private val marcadores = BookmarkManager()
 
     private val colores by lazy { NiaUi.colores(this, NiaTokens.Modo.AUTO) }
@@ -69,6 +87,7 @@ class BrowserActivity : Activity() {
     private lateinit var progreso: NiaProgressBar
     private lateinit var pagina: PaintView
     private lateinit var scroll: ScrollView
+    private lateinit var filaPestanas: LinearLayout
     private var panelIdentidad: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -80,6 +99,8 @@ class BrowserActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT
         )
         raiz.setBackgroundColor(NiaUi.color(colores.bg))
+
+        tabs.crear(ProfileKind.NORMAL, "about:nia", "Nueva pestana", null)
 
         val espacio = NiaUi.dp(this, NiaTokens.ESPACIADO[3])
 
@@ -100,7 +121,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0172)"
+        omnibox.hint = "Busca o escribe una URL (R0176)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -131,11 +152,26 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0172)"
+        estado.text = "listo (R0176)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
         raiz.addView(estado)
+
+        val scrollPestanas = HorizontalScrollView(this)
+        scrollPestanas.setBackgroundColor(NiaUi.color(colores.surface))
+        scrollPestanas.setFillViewport(true)
+        filaPestanas = LinearLayout(this)
+        filaPestanas.orientation = LinearLayout.HORIZONTAL
+        filaPestanas.setPadding(espacio / 2, espacio / 2, espacio / 2, espacio / 2)
+        scrollPestanas.addView(
+            filaPestanas,
+            ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        raiz.addView(
+            scrollPestanas,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
 
         pagina = PaintView(this)
         pagina.loadPagina(paginaNueva(), cssNavegador(), true)
@@ -156,22 +192,24 @@ class BrowserActivity : Activity() {
         // aunque tema y fondo se confundan.
         barra.setBackgroundColor(NiaUi.color(colores.surface))
         barra.addView(boton("Atras") {
-            if (!nav.canGoBack()) {
+            val nc = navActual()
+            if (nc == null || !nc.canGoBack()) {
                 estado.text = "sin historial para atras"
             } else {
-                navegarOutcome { nav.back() }
+                navegarOutcome { n -> n.back() }
             }
         })
         barra.addView(boton("Adelante") {
-            if (!nav.canGoForward()) {
+            val nc = navActual()
+            if (nc == null || !nc.canGoForward()) {
                 estado.text = "sin historial para adelante"
             } else {
-                navegarOutcome { nav.forward() }
+                navegarOutcome { n -> n.forward() }
             }
         })
         barra.addView(boton("Recargar") { recargar() })
         barra.addView(boton("Stop") {
-            nav.invalidateGeneration()
+            navActual()?.invalidateGeneration()
             progreso.setFraccion(0f)
             estado.text = "navegacion cancelada por generacion"
         })
@@ -179,6 +217,77 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
+        pintarStrip()
+    }
+
+    /** Strip de pestanas: una tarjeta por pestana viva y el boton + al final. */
+    private fun pintarStrip() {
+        filaPestanas.removeAllViews()
+        for (tarjeta in tabs.tarjetas()) {
+            filaPestanas.addView(chipDe(tarjeta))
+        }
+        filaPestanas.addView(botonMas())
+    }
+
+    /** Tarjeta del strip: tocar cambia de pestana, x cierra; la activa se
+     * invierte (fondo fg, texto bg) para distinguirse sin dudas. */
+    private fun chipDe(t: TabTarjeta): LinearLayout {
+        val espacio = NiaUi.dp(this, NiaTokens.ESPACIADO[2])
+        val activa = t.id == tabs.activa()
+        val chip = LinearLayout(this)
+        chip.orientation = LinearLayout.HORIZONTAL
+        chip.setPadding(espacio, espacio / 2, espacio, espacio / 2)
+        chip.setMinimumHeight(NiaUi.dp(this, 44))
+        val fondo = GradientDrawable()
+        fondo.setColor(NiaUi.color(if (activa) colores.fg else colores.surface))
+        fondo.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[3]).toFloat()
+        chip.background = fondo
+        val titulo = TextView(this)
+        titulo.text = etiquetaDe(t)
+        titulo.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
+        titulo.setTextColor(NiaUi.color(if (activa) colores.bg else colores.fg))
+        chip.addView(
+            titulo,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        val cerrar = TextView(this)
+        cerrar.text = "x"
+        cerrar.textSize = NiaTokens.TIPOGRAFIA[3].sp.toFloat()
+        cerrar.setPadding(espacio, 0, espacio, 0)
+        cerrar.setTextColor(NiaUi.color(if (activa) colores.bg else colores.fg))
+        cerrar.setOnClickListener { cerrarPestana(t.id) }
+        chip.addView(
+            cerrar,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        chip.setOnClickListener { cambiarPestana(t.id) }
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.rightMargin = NiaUi.dp(this, NiaTokens.ESPACIADO[2])
+        chip.layoutParams = lp
+        return chip
+    }
+
+    /** Boton + del strip: nueva pestana normal. */
+    private fun botonMas(): TextView {
+        val mas = TextView(this)
+        mas.text = "+"
+        mas.textSize = NiaTokens.TIPOGRAFIA[3].sp.toFloat()
+        mas.setGravity(Gravity.CENTER)
+        mas.setMinimumHeight(NiaUi.dp(this, 44))
+        mas.setMinimumWidth(NiaUi.dp(this, 44))
+        mas.setPadding(NiaUi.dp(this, NiaTokens.ESPACIADO[2]), 0, NiaUi.dp(this, NiaTokens.ESPACIADO[2]), 0)
+        val fondo = GradientDrawable()
+        fondo.setColor(NiaUi.color(colores.surface))
+        fondo.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[3]).toFloat()
+        mas.background = fondo
+        mas.setTextColor(NiaUi.color(colores.accent))
+        mas.setOnClickListener { nuevaPestana(ProfileKind.NORMAL) }
+        return mas
+    }
+
+    private fun etiquetaDe(t: TabTarjeta): String {
+        val titulo = if (t.title.length > 16) t.title.substring(0, 15) + "..." else t.title
+        return if (t.kind == ProfileKind.INCOGNITO) "[priv] " + titulo else titulo
     }
 
     private fun boton(etiqueta: String, alPulsar: () -> Unit): Button {
@@ -204,39 +313,60 @@ class BrowserActivity : Activity() {
     }
 
     private fun recargar() {
-        val actual = nav.currentPage()?.url
+        val nc = navActual()
+        val actual = nc?.currentPage()?.url
         if (actual == null) {
             estado.text = "sin pagina actual"
+        } else if (actual.startsWith("about:")) {
+            pintar(paginaNueva())
         } else {
             navegar(actual, false, null)
         }
     }
 
     private fun navegar(url: String, dominioImplicito: Boolean, textoOriginal: String?) {
-        nav.invalidateGeneration()
+        val id = tabs.activa()
+        val nc = navActual()
+        if (nc == null) {
+            estado.text = "sin pestana activa"
+            return
+        }
+        nc.invalidateGeneration()
         progreso.setFraccion(0.2f)
         Thread {
-            val o = nav.navigate(url)
+            val o = nc.navigate(url)
             runOnUiThread {
                 progreso.setFraccion(0f)
-                when (o) {
-                    is NavOutcome.Loaded -> pintaPagina(o)
-                    is NavOutcome.Failed -> manejaFallo(o, dominioImplicito, textoOriginal)
+                refrescaTarjeta(id, o)
+                if (tabs.activa() == id) {
+                    when (o) {
+                        is NavOutcome.Loaded -> pintaPagina(o)
+                        is NavOutcome.Failed -> manejaFallo(o, dominioImplicito, textoOriginal)
+                    }
                 }
             }
         }.start()
     }
 
-    private fun navegarOutcome(accion: () -> NavOutcome?) {
-        nav.invalidateGeneration()
+    private fun navegarOutcome(accion: (NavController) -> NavOutcome?) {
+        val id = tabs.activa()
+        val nc = navActual()
+        if (nc == null) {
+            estado.text = "sin pestana activa"
+            return
+        }
+        nc.invalidateGeneration()
         progreso.setFraccion(0.2f)
         Thread {
-            val o = accion()
+            val o = accion(nc)
             runOnUiThread {
                 progreso.setFraccion(0f)
                 if (o == null) {
                     estado.text = "sin resultado de navegacion"
-                } else {
+                    return@runOnUiThread
+                }
+                refrescaTarjeta(id, o)
+                if (tabs.activa() == id) {
                     when (o) {
                         is NavOutcome.Loaded -> pintaPagina(o)
                         is NavOutcome.Failed -> manejaFallo(o, false, null)
@@ -280,14 +410,24 @@ class BrowserActivity : Activity() {
     }
 
     private fun mostrarMenu() {
-        val opciones = arrayOf("Sugerencias", "Identidad de la pagina", "Demos del motor")
+        val opciones = arrayOf(
+            "Nueva pestana",
+            "Nueva pestana incognito",
+            "Reabrir pestana",
+            "Sugerencias",
+            "Identidad de la pagina",
+            "Demos del motor"
+        )
         AlertDialog.Builder(this)
             .setTitle("Menu")
             .setItems(opciones) { _, cual ->
                 when (cual) {
-                    0 -> mostrarSugerencias()
-                    1 -> mostrarIdentidad()
-                    2 -> startActivity(Intent(this, MainActivity::class.java))
+                    0 -> nuevaPestana(ProfileKind.NORMAL)
+                    1 -> nuevaPestana(ProfileKind.INCOGNITO)
+                    2 -> reabrirPestana()
+                    3 -> mostrarSugerencias()
+                    4 -> mostrarIdentidad()
+                    5 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -304,7 +444,7 @@ class BrowserActivity : Activity() {
 
     private fun mostrarSugerencias() {
         val texto = omnibox.text.toString()
-        val historial = nav.historyUrls().asReversed()
+        val historial = navActual()?.historyUrls()?.asReversed() ?: emptyList()
         val lista = OmniboxSugerencias.sugerencias(texto, marcadores, historial, false)
         if (lista.isEmpty()) {
             estado.text = "sin sugerencias locales"
@@ -339,7 +479,8 @@ class BrowserActivity : Activity() {
 
     private fun pintaPagina(o: NavOutcome.Loaded) {
         val page = o.page
-        estado.text = "LOADED " + page.status + " - " + page.origin + " - " + page.url + " | ops=" + pagina.opsCount()
+        estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
+        omnibox.setText(page.url)
         val panel = StringBuilder()
         for (linea in PanelIdentidad.lineas(page.url, page.tls)) {
             panel.append(linea)
@@ -362,14 +503,129 @@ class BrowserActivity : Activity() {
         }
     }
 
+    private fun navActual(): NavController? {
+        val id = tabs.activa()
+        if (id == null) {
+            return null
+        }
+        return tabs.nav(id)
+    }
+
+    private fun nuevaPestana(kind: ProfileKind) {
+        when (val r = tabs.crear(kind, "about:nia", "Nueva pestana", null)) {
+            is TabCrear.Ok -> {
+                tabs.activar(r.id)
+                omnibox.setText("")
+                pintar(paginaNueva())
+                estado.text = if (kind == ProfileKind.INCOGNITO) {
+                    "pestana incognito: cookies solo en memoria, perfil borrado al cerrar la ultima"
+                } else {
+                    "nueva pestana"
+                }
+                pintarStrip()
+            }
+            is TabCrear.PresupuestoExcedido -> estado.text = "demasiadas pestanas abiertas"
+            is TabCrear.NoExiste -> estado.text = "no se pudo crear la pestana"
+        }
+    }
+
+    private fun cambiarPestana(id: Long) {
+        if (!tabs.activar(id)) {
+            return
+        }
+        pintarStrip()
+        val nc = tabs.nav(id)
+        val page = nc?.currentPage()
+        if (page == null) {
+            omnibox.setText("")
+            pintar(paginaNueva())
+            estado.text = "pestana activa sin pagina"
+            return
+        }
+        val cifrada = page.url.startsWith("https")
+        indicador.text = if (cifrada) "https" else "http"
+        indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
+        omnibox.setText(page.url)
+        estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
+        val html = page.html
+        if (html != null) {
+            pintar(html)
+        }
+    }
+
+    private fun cerrarPestana(id: Long) {
+        val cierre = tabs.cerrar(id) ?: return
+        val mensaje = if (cierre.perfilBorrado) {
+            "ultima incognito cerrada: perfil borrado de memoria"
+        } else {
+            "pestana cerrada"
+        }
+        val activa = tabs.activa()
+        if (activa == null) {
+            nuevaPestana(ProfileKind.NORMAL)
+        } else {
+            cambiarPestana(activa)
+        }
+        estado.text = mensaje
+    }
+
+    private fun reabrirPestana() {
+        when (val r = tabs.reabrir()) {
+            is TabCrear.Ok -> {
+                tabs.activar(r.id)
+                pintarStrip()
+                val url = tabs.tarjeta(r.id)?.url
+                if (url == null || url.startsWith("about:")) {
+                    omnibox.setText("")
+                    pintar(paginaNueva())
+                    estado.text = "pestana reabierta"
+                } else {
+                    estado.text = "pestana reabierta: recargando"
+                    navegar(url, false, null)
+                }
+            }
+            is TabCrear.PresupuestoExcedido -> estado.text = "demasiadas pestanas abiertas"
+            is TabCrear.NoExiste -> estado.text = "nada que reabrir"
+        }
+    }
+
+    /** Host legible de una URL para la linea de estado (hallazgo R0174-a). */
+    private fun hostDe(url: String): String {
+        val pos = url.indexOf("://")
+        val resto = if (pos >= 0) url.substring(pos + 3) else url
+        val fin = resto.indexOf('/')
+        if (fin >= 0) {
+            return resto.substring(0, fin)
+        }
+        val q = resto.indexOf('?')
+        return if (q >= 0) resto.substring(0, q) else resto
+    }
+
+    /** La tarjeta de la pestana refleja la URL cargada; la carga en vuelo
+     * solo pinta si su pestana sigue activa (R0176). */
+    private fun refrescaTarjeta(id: Long?, o: NavOutcome) {
+        if (id == null) {
+            return
+        }
+        val url = when (o) {
+            is NavOutcome.Loaded -> o.page.url
+            is NavOutcome.Failed -> o.page?.url
+        }
+        if (url != null) {
+            tabs.actualizar(id, hostDe(url), url, null)
+        }
+        pintarStrip()
+    }
+
     /** Texto seguro para el HTML de la pagina de error (sin <, > ni &). */
     private fun textoHtml(s: String): String =
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0172)</h1>" +
+        "<html><body><h1>Navegador NIA (R0176)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
-            "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell v1).</p>" +
+            "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
+            "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell v2).</p>" +
             "</body></html>"
 
     /** CSS del navegador: tokens del tema activo (T069/ADR-021); inputs
