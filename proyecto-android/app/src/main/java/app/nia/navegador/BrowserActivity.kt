@@ -376,7 +376,7 @@ class BrowserActivity : Activity() {
         avisoTexto = TextView(this)
         avisoTexto.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         avisoTexto.setTextColor(NiaUi.color(colores.bg))
-        avisoTexto.setPadding(espacio, espacio / 2, espacio / 2)
+        avisoTexto.setPadding(espacio, espacio / 2, espacio, espacio / 2)
         avisoCierre.addView(
             avisoTexto,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
