@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -26,6 +27,7 @@ import nia.engine.net.PanelIdentidad
 import nia.engine.omnibox.OmniboxInput
 import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
+import nia.engine.profile.FireLevel
 import nia.engine.profile.ProfileKind
 import nia.engine.tabs.TabCrear
 import nia.engine.tabs.TabTarjeta
@@ -35,7 +37,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2, RES-0080, R0176): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1, RES-0081, R0177): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -64,11 +66,22 @@ import app.nia.navegador.ui.NiaUi
  * pinta si su pestana sigue activa y cerrar la ultima pestana abre
  * una nueva (nunca pantalla sin pestanas).
  *
- * Exclusiones v3: sin grupos ni previews pintadas, sin persistencia
- * de la sesion de pestanas, panel de identidad solo de la ultima
- * pagina cargada, sin tema conmutable en la UI (T070), sugerencias en
- * dialogo (no desplegable) y el pintado respeta SOLO lo que el motor
- * CSS/layout soporta hoy (paginas reales simples, honesto).
+ * T090 v1 (R0177): modo incognito inequivoco en el shell (banner warn
+ * visible mientras la activa es privada, chip [priv] en el strip), Fire
+ * de sesion y total del perfil del TIPO activo con confirmacion
+ * explicita por dialogo (ADR-019), confirmacion antes de cerrar la
+ * ultima incognito y traza observable por apartado para alistar las
+ * pruebas: cada accion deja una linea en el dialogo Diagnostico y en
+ * "adb logcat -s NIA.Shell" (NUNCA una URL: solo el host).
+ *
+ * Exclusiones v4: sin grupos ni previews pintadas, sin persistencia
+ * de la sesion de pestanas (el incognito JAMAS se restaura tras un
+ * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
+ * activo (sin gestor multi-perfil ni Ajustes Limpieza, T054/T093),
+ * panel de identidad solo de la ultima pagina cargada, sin tema
+ * conmutable en la UI (T070), sugerencias en dialogo (no desplegable)
+ * y el pintado respeta SOLO lo que el motor CSS/layout soporta hoy
+ * (paginas reales simples, honesto).
  */
 class BrowserActivity : Activity() {
 
@@ -89,6 +102,13 @@ class BrowserActivity : Activity() {
     private lateinit var scroll: ScrollView
     private lateinit var filaPestanas: LinearLayout
     private var panelIdentidad: String = ""
+
+    /** Traza del shell por apartado (T090): ultimas 40 lineas visibles
+     * en el dialogo Diagnostico y en logcat (tag NIA.Shell). */
+    private val traza = ArrayList<String>()
+
+    /** Banner inequivoco de modo incognito (T090). */
+    private lateinit var bannerIncognito: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -121,7 +141,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0176)"
+        omnibox.hint = "Busca o escribe una URL (R0177)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -152,11 +172,20 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0176)"
+        estado.text = "listo (R0177)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
         raiz.addView(estado)
+
+        bannerIncognito = TextView(this)
+        bannerIncognito.text = "MODO INCOGNITO: este perfil vive solo en memoria y se borra al cerrar la ultima pestana"
+        bannerIncognito.textSize = NiaTokens.TIPOGRAFIA[1].sp.toFloat()
+        bannerIncognito.setTextColor(NiaUi.color(colores.bg))
+        bannerIncognito.setBackgroundColor(NiaUi.color(colores.warn))
+        bannerIncognito.setPadding(espacio, espacio / 2, espacio, espacio / 2)
+        bannerIncognito.visibility = TextView.GONE
+        raiz.addView(bannerIncognito)
 
         val scrollPestanas = HorizontalScrollView(this)
         scrollPestanas.setBackgroundColor(NiaUi.color(colores.surface))
@@ -217,6 +246,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
+        traza("shell", "arranque R0177 con " + tabs.contar() + " pestana(s)")
         pintarStrip()
     }
 
@@ -227,6 +257,7 @@ class BrowserActivity : Activity() {
             filaPestanas.addView(chipDe(tarjeta))
         }
         filaPestanas.addView(botonMas())
+        pintarModo()
     }
 
     /** Tarjeta del strip: tocar cambia de pestana, x cierra; la activa se
@@ -333,6 +364,7 @@ class BrowserActivity : Activity() {
         }
         nc.invalidateGeneration()
         progreso.setFraccion(0.2f)
+        traza("nav", "navegar " + hostDe(url))
         Thread {
             val o = nc.navigate(url)
             runOnUiThread {
@@ -357,6 +389,7 @@ class BrowserActivity : Activity() {
         }
         nc.invalidateGeneration()
         progreso.setFraccion(0.2f)
+        traza("nav", "back/forward")
         Thread {
             val o = accion(nc)
             runOnUiThread {
@@ -377,6 +410,7 @@ class BrowserActivity : Activity() {
     }
 
     private fun manejaFallo(f: NavOutcome.Failed, dominioImplicito: Boolean, textoOriginal: String?) {
+        traza("nav", "fallo " + f.code)
         if (dominioImplicito && textoOriginal != null &&
             f.code == ErrorCode.NETWORK && f.message.contains("DNS")
         ) {
@@ -416,6 +450,9 @@ class BrowserActivity : Activity() {
             "Reabrir pestana",
             "Sugerencias",
             "Identidad de la pagina",
+            "Fire sesion (perfil del tipo activo)",
+            "Fire total (perfil del tipo activo)",
+            "Diagnostico (traza del shell)",
             "Demos del motor"
         )
         AlertDialog.Builder(this)
@@ -427,7 +464,10 @@ class BrowserActivity : Activity() {
                     2 -> reabrirPestana()
                     3 -> mostrarSugerencias()
                     4 -> mostrarIdentidad()
-                    5 -> startActivity(Intent(this, MainActivity::class.java))
+                    5 -> confirmarFire(FireLevel.SESION)
+                    6 -> confirmarFire(FireLevel.TOTAL)
+                    7 -> mostrarDiagnostico()
+                    8 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -480,6 +520,7 @@ class BrowserActivity : Activity() {
     private fun pintaPagina(o: NavOutcome.Loaded) {
         val page = o.page
         estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
+        traza("nav", "loaded " + page.status + " " + hostDe(page.url))
         omnibox.setText(page.url)
         val panel = StringBuilder()
         for (linea in PanelIdentidad.lineas(page.url, page.tls)) {
@@ -516,6 +557,7 @@ class BrowserActivity : Activity() {
             is TabCrear.Ok -> {
                 tabs.activar(r.id)
                 omnibox.setText("")
+                traza("tabs", "nueva " + kind + " id=" + r.id)
                 pintar(paginaNueva())
                 estado.text = if (kind == ProfileKind.INCOGNITO) {
                     "pestana incognito: cookies solo en memoria, perfil borrado al cerrar la ultima"
@@ -534,6 +576,7 @@ class BrowserActivity : Activity() {
             return
         }
         pintarStrip()
+        traza("tabs", "activa id=" + id)
         val nc = tabs.nav(id)
         val page = nc?.currentPage()
         if (page == null) {
@@ -554,10 +597,28 @@ class BrowserActivity : Activity() {
     }
 
     private fun cerrarPestana(id: Long) {
+        val t = tabs.tarjeta(id)
+        if (t != null && t.kind == ProfileKind.INCOGNITO &&
+            tabs.contar(ProfileKind.INCOGNITO) == 1
+        ) {
+            AlertDialog.Builder(this)
+                .setTitle("Cerrar la ultima incognito")
+                .setMessage("Se borrara TODO el perfil incognito (cookies, storage, cache) de la memoria. Cerrar?")
+                .setPositiveButton("Cerrar") { _, _ -> cerrarPestanaYa(id) }
+                .setNegativeButton("Cancelar", null)
+                .show()
+            return
+        }
+        cerrarPestanaYa(id)
+    }
+
+    private fun cerrarPestanaYa(id: Long) {
         val cierre = tabs.cerrar(id) ?: return
         val mensaje = if (cierre.perfilBorrado) {
+            traza("tabs", "ultima incognito cerrada: perfil borrado (wipe)")
             "ultima incognito cerrada: perfil borrado de memoria"
         } else {
+            traza("tabs", "pestana cerrada id=" + id)
             "pestana cerrada"
         }
         val activa = tabs.activa()
@@ -574,6 +635,7 @@ class BrowserActivity : Activity() {
             is TabCrear.Ok -> {
                 tabs.activar(r.id)
                 pintarStrip()
+                traza("tabs", "reabierta id=" + r.id)
                 val url = tabs.tarjeta(r.id)?.url
                 if (url == null || url.startsWith("about:")) {
                     omnibox.setText("")
@@ -617,15 +679,92 @@ class BrowserActivity : Activity() {
         pintarStrip()
     }
 
+    /** Traza observable por apartado (T090): cada accion del shell deja
+     * una linea con su apartado, visible en el dialogo Diagnostico y en
+     * logcat con "adb logcat -s NIA.Shell". Las URLs NUNCA entran en la
+     * traza: el shell solo traza el host (privacidad primero). */
+    private fun traza(apartado: String, evento: String) {
+        val linea = apartado + " " + evento
+        traza.add(linea)
+        while (traza.size > 40) {
+            traza.removeAt(0)
+        }
+        Log.d("NIA.Shell", linea)
+    }
+
+    /** Banner inequivoco de modo incognito (T090): visible SOLO con la
+     * activa privada; nunca depende del contenido de la pagina. */
+    private fun pintarModo() {
+        val id = tabs.activa()
+        val kind = if (id == null) null else tabs.tarjeta(id)?.kind
+        bannerIncognito.visibility =
+            if (kind == ProfileKind.INCOGNITO) TextView.VISIBLE else TextView.GONE
+    }
+
+    /** Fire del perfil del TIPO de la pestana activa (T090) con
+     * confirmacion explicita por dialogo (ADR-019). */
+    private fun confirmarFire(nivel: FireLevel) {
+        val id = tabs.activa()
+        val kind = if (id == null) null else tabs.tarjeta(id)?.kind
+        val tipo = kind ?: ProfileKind.NORMAL
+        val nombre = if (tipo == ProfileKind.INCOGNITO) "incognito" else "normal"
+        val titulo = if (nivel == FireLevel.SESION) "Fire de sesion" else "Fire total"
+        val mensaje = if (nivel == FireLevel.SESION) {
+            "Borrar el sessionStorage del perfil " + nombre + "? (cookies, cache y storage local quedan)"
+        } else {
+            "Borrar TODO el estado del perfil " + nombre + " (cookies, cache, storage, IndexedDB y el archivo en disco) y vaciar sus reabiertas?"
+        }
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setMessage(mensaje)
+            .setPositiveButton("Borrar") { _, _ -> ejecutarFire(tipo, nivel) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun ejecutarFire(tipo: ProfileKind, nivel: FireLevel) {
+        val reporte = tabs.fire(nivel, tipo)
+        if (reporte == null) {
+            estado.text = "sin perfil vivo de tipo " + tipo
+            traza("fire", "sin perfil vivo " + tipo)
+            return
+        }
+        val resumen = if (nivel == FireLevel.SESION) {
+            "sessions=" + reporte.sessionPartitions
+        } else {
+            "cookies=" + reporte.cookies + " cache=" + reporte.cacheEntries +
+                " storage=" + reporte.storagePartitions + " idb=" + reporte.idbPartitions
+        }
+        val linea = if (nivel == FireLevel.SESION) "sesion" else "total"
+        traza("fire", linea + " " + tipo.toString().lowercase() + " " + resumen)
+        estado.text = "fire " + linea + " aplicado: " + resumen
+    }
+
+    /** Dialogo de diagnostico (T090): la traza del shell linea a linea,
+     * la mas reciente primero, para alistar las pruebas sin adb. */
+    private fun mostrarDiagnostico() {
+        val lineas: Array<String> = if (traza.isEmpty()) {
+            arrayOf("(sin traza todavia)")
+        } else {
+            traza.toTypedArray().reversedArray()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Diagnostico (logcat: adb logcat -s NIA.Shell)")
+            .setItems(lineas) { _, _ -> }
+            .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
     /** Texto seguro para el HTML de la pagina de error (sin <, > ni &). */
     private fun textoHtml(s: String): String =
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0176)</h1>" +
+        "<html><body><h1>Navegador NIA (R0177)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell v2).</p>" +
+            "<p>El Menu trae Fire de sesion y total con confirmacion, y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
+            "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
             "</body></html>"
 
     /** CSS del navegador: tokens del tema activo (T069/ADR-021); inputs
