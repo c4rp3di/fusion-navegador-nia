@@ -30,6 +30,9 @@ import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
 import nia.engine.profile.FireLevel
 import nia.engine.profile.ProfileKind
+import nia.engine.settings.OpcionAjuste
+import nia.engine.settings.SettingsManager
+import nia.engine.settings.TipoOpcion
 import nia.engine.tabs.TabCrear
 import nia.engine.tabs.TabTarjeta
 import nia.engine.tabs.TabsManager
@@ -38,7 +41,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1, RES-0082, R0178): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v1, RES-0083, R0179): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -83,7 +86,15 @@ import app.nia.navegador.ui.NiaUi
  * Historial agrupado por dia (tocar abre la URL) y el Fire total del
  * perfil NORMAL tambien borra el historial (T045).
  *
- * Exclusiones v5: sin grupos ni previews pintadas, sin persistencia
+ * T093 v1 (R0179): ajustes modulares con el SettingsManager del
+ * motor (armazon v1: registro tipificado, busqueda que abre la
+ * opcion, export/import SIN secretos ni no disponibles, recovery
+ * y persistencia): el Menu trae Ajustes; toda opcion enlaza
+ * capacidad real (diagnostico.fifo: lineas de la traza en
+ * caliente) o declara su estado de no disponible (nada
+ * falsificado).
+ *
+ * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
  * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
  * activo (sin gestor multi-perfil ni Ajustes Limpieza, T054/T093),
@@ -107,6 +118,49 @@ class BrowserActivity : Activity() {
      * jamas se registra y la URL se guarda sin query (redaccion).
      * Persiste en filesDir; un archivo corrupto se ignora. */
     private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
+
+    /** Ajustes del navegador (T093 v1): armazon del SettingsManager
+     * del motor con busqueda, export/import sin secretos y
+     * persistencia; cada opcion enlaza capacidad real o declara su
+     * estado de no disponible (JAMAS se falsifica). */
+    private val ajustes by lazy {
+        val s = SettingsManager(File(filesDir, "ajustes.tsv"))
+        s.registrar(
+            OpcionAjuste(
+                "diagnostico.fifo", "Diagnostico",
+                "Lineas de traza",
+                "Cuantas lineas guarda el dialogo Diagnostico (10 a 200)",
+                TipoOpcion.ENTERO, "40", 10L, 200L
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "apariencia.tema", "Apariencia",
+                "Tema de colores",
+                "Tema claro u oscuro (persistir el activo llega con T031 v2)",
+                TipoOpcion.ELECCION, "claro", elecciones = listOf("claro", "oscuro"),
+                disponible = false
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "buscador.predeterminado", "Busqueda",
+                "Buscador del omnibox",
+                "Hoy DuckDuckGo por ADR-022 (elegir llega con T054/T094)",
+                TipoOpcion.TEXTO, "duckduckgo", disponible = false
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "privacidad.https-only", "Privacidad",
+                "HTTPS-only",
+                "Bloquear el http salvo excepciones del panel",
+                TipoOpcion.BOOL, "false", disponible = false
+            )
+        )
+        s.recargar()
+        s
+    }
 
     private val colores by lazy { NiaUi.colores(this, NiaTokens.Modo.AUTO) }
 
@@ -157,7 +211,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0178)"
+        omnibox.hint = "Busca o escribe una URL (R0179)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -188,7 +242,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0178)"
+        estado.text = "listo (R0179)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -262,7 +316,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0178 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0179 con " + tabs.contar() + " pestana(s)")
         pintarStrip()
     }
 
@@ -467,6 +521,7 @@ class BrowserActivity : Activity() {
             "Sugerencias",
             "Identidad de la pagina",
             "Historial (solo pestanas normales)",
+            "Ajustes (busca y cambia)",
             "Fire sesion (perfil del tipo activo)",
             "Fire total (perfil del tipo activo)",
             "Diagnostico (traza del shell)",
@@ -482,10 +537,11 @@ class BrowserActivity : Activity() {
                     3 -> mostrarSugerencias()
                     4 -> mostrarIdentidad()
                     5 -> mostrarHistorial()
-                    6 -> confirmarFire(FireLevel.SESION)
-                    7 -> confirmarFire(FireLevel.TOTAL)
-                    8 -> mostrarDiagnostico()
-                    9 -> startActivity(Intent(this, MainActivity::class.java))
+                    6 -> mostrarAjustes()
+                    7 -> confirmarFire(FireLevel.SESION)
+                    8 -> confirmarFire(FireLevel.TOTAL)
+                    9 -> mostrarDiagnostico()
+                    10 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -705,7 +761,8 @@ class BrowserActivity : Activity() {
     private fun traza(apartado: String, evento: String) {
         val linea = apartado + " " + evento
         traza.add(linea)
-        while (traza.size > 40) {
+        val limite = ajustes.valor("diagnostico.fifo")?.toLongOrNull() ?: 40L
+        while (traza.size > limite) {
             traza.removeAt(0)
         }
         Log.d("NIA.Shell", linea)
@@ -839,15 +896,109 @@ class BrowserActivity : Activity() {
             .show()
     }
 
+    /** Dialogo de ajustes (T093 v1): busca por nombre, seccion o
+     * descripcion y ABRE la opcion; la seccion Limpieza y las demas
+     * secciones llegan con los subhitos siguientes. */
+    private fun mostrarAjustes() {
+        val campo = EditText(this)
+        campo.hint = "Buscar ajuste (texto, seccion o descripcion)"
+        traza("ajustes", "ajustes abiertos con " + ajustes.contar() + " opciones")
+        AlertDialog.Builder(this)
+            .setTitle("Ajustes")
+            .setMessage("Busca por nombre, seccion o descripcion; tocar una opcion la abre.")
+            .setView(campo)
+            .setPositiveButton("Buscar") { _, _ ->
+                val q = campo.text.toString()
+                val resultados = ajustes.buscar(q)
+                if (resultados.isEmpty()) {
+                    estado.text = "sin ajustes para: " + q
+                    traza("ajustes", "sin resultados para la busqueda")
+                    return@setPositiveButton
+                }
+                val lineas = ArrayList<String>()
+                for (op in resultados) {
+                    val marca = if (op.disponible) ajustes.valor(op.id) else "no disponible"
+                    lineas.add(op.seccion + " / " + op.titulo + " = " + marca)
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Ajustes (" + resultados.size + ")")
+                    .setItems(lineas.toTypedArray()) { _, cual ->
+                        tocarAjuste(resultados[cual])
+                    }
+                    .setNegativeButton("Cerrar", null)
+                    .show()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Aplica el cambio de un ajuste (T093): BOOL alterna al tocar;
+     * ENTERO y TEXTO piden el valor; ELECCION elige de la lista; lo
+     * no disponible se avisa y JAMAS cambia. */
+    private fun tocarAjuste(op: OpcionAjuste) {
+        if (!op.disponible) {
+            estado.text = "no disponible: " + op.titulo
+            traza("ajustes", "no disponible " + op.id)
+            return
+        }
+        when (op.tipo) {
+            TipoOpcion.BOOL -> {
+                val nuevo = if (ajustes.valor(op.id) == "true") "false" else "true"
+                if (ajustes.asignar(op.id, nuevo)) {
+                    estado.text = op.titulo + " = " + ajustes.valor(op.id)
+                    traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                }
+            }
+            TipoOpcion.ENTERO -> pedirAjuste(op, "entre " + op.minimo + " y " + op.maximo)
+            TipoOpcion.TEXTO -> pedirAjuste(op, op.descripcion)
+            TipoOpcion.ELECCION -> {
+                AlertDialog.Builder(this)
+                    .setTitle(op.titulo)
+                    .setItems(op.elecciones.toTypedArray()) { _, cual ->
+                        val nuevo = op.elecciones[cual]
+                        if (ajustes.asignar(op.id, nuevo)) {
+                            estado.text = op.titulo + " = " + nuevo
+                            traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                        }
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
+    }
+
+    /** Pide el valor de un ajuste ENTERO o TEXTO (T093); el valor
+     * invalido se rechaza y el estado lo avisa. */
+    private fun pedirAjuste(op: OpcionAjuste, mensaje: String) {
+        val campo = EditText(this)
+        campo.setText(ajustes.valor(op.id))
+        AlertDialog.Builder(this)
+            .setTitle(op.titulo)
+            .setMessage(mensaje)
+            .setView(campo)
+            .setPositiveButton("Aceptar") { _, _ ->
+                val nuevo = campo.text.toString()
+                if (ajustes.asignar(op.id, nuevo)) {
+                    estado.text = op.titulo + " = " + ajustes.valor(op.id)
+                    traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                } else {
+                    estado.text = "valor invalido para " + op.titulo
+                    traza("ajustes", "valor invalido para " + op.id)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
     /** Texto seguro para el HTML de la pagina de error (sin <, > ni &). */
     private fun textoHtml(s: String): String =
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
     private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0178)</h1>" +
+        "<html><body><h1>Navegador NIA (R0179)</h1>" +
             "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
             "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>El Menu trae Historial (solo pestanas normales), Fire de sesion y total con confirmacion, y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
+            "<p>El Menu trae Historial (solo pestanas normales), Ajustes (busca y cambia), Fire de sesion y total con confirmacion, y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
             "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
             "</body></html>"
 
