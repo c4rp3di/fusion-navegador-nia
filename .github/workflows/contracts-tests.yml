@@ -193,6 +193,8 @@ jobs:
             engine-core/src/test/java/nia/engine/errors/ErrorPagesTest.kt \
             engine-core/src/main/java/nia/engine/net/SiteSecurity.kt \
             engine-core/src/test/java/nia/engine/net/SiteSecurityTest.kt \
+            engine-core/src/main/java/nia/engine/tabs/TabsManager.kt \
+            engine-core/src/test/java/nia/engine/tabs/TabsManagerTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
