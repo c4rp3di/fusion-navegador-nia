@@ -7,9 +7,20 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
+import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.print.PageRange
+import android.print.PrintAttributes
+import android.print.PrintDocumentAdapter
+import android.print.PrintDocumentInfo
+import android.print.PrintManager
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -23,6 +34,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import nia.contracts.ContractsVersion
 import nia.contracts.ErrorCode
@@ -57,6 +69,11 @@ import nia.engine.modules.GestorModulos
 import nia.engine.modules.ModuleRegistry
 import nia.engine.modules.PluginRuntime
 import nia.engine.modules.PreviaPaquete
+import nia.engine.paint.PaintOp
+import nia.engine.print.DocumentoPaginado
+import nia.engine.print.Impresor
+import nia.engine.print.Orientacion
+import nia.engine.print.PaginaImpresa
 import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
 import nia.engine.net.PanelIdentidad
@@ -942,7 +959,8 @@ class BrowserActivity : Activity() {
             "Exportar marcadores (HTML)",
             "Capacidades",
             "Cuotas JS",
-            "Modulos"
+            "Modulos",
+            "Imprimir / PDF"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -983,6 +1001,7 @@ class BrowserActivity : Activity() {
                     28 -> mostrarCapacidades()
                     29 -> mostrarCuotasJs()
                     30 -> mostrarModulos()
+                    31 -> imprimirPagina()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1647,6 +1666,145 @@ class BrowserActivity : Activity() {
         estado.text = "modulo instalado: " + previa.id
         traza("modulos", "niamod instalado: " + previa.id)
         mostrarModulos()
+    }
+
+    /** T098 (RES-0108): imprimir o guardar en PDF la pagina activa.
+     *  El documento sale del render del motor re-maquetado al ancho de
+     *  hoja (escenaParaImprimir), JAMAS de una captura de la vista. */
+    private fun imprimirPagina() {
+        val opcionesImpresion = arrayOf("Imprimir", "Guardar PDF")
+        AlertDialog.Builder(this)
+            .setTitle("Imprimir pagina")
+            .setItems(opcionesImpresion) { _, cual ->
+                when (cual) {
+                    0 -> imprimirSistema()
+                    1 -> pedirGuardarPdf()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Documento paginado de la pagina activa (A4, margen por defecto). */
+    private fun documentoImpreso(orientacion: Orientacion): DocumentoPaginado {
+        val ancho = if (orientacion == Orientacion.VERTICAL) {
+            Impresor.A4_ANCHO_PT
+        } else {
+            Impresor.A4_ALTO_PT
+        }
+        val anchoUtil = ancho - 2 * Impresor.MARGEN_DEFECTO_PT
+        val escena = pagina.escenaParaImprimir(anchoUtil)
+        return Impresor.paginar(escena, orientacion)
+    }
+
+    /** Print framework del sistema: preview paginada del propio Android. */
+    private fun imprimirSistema() {
+        try {
+            val doc = documentoImpreso(Orientacion.VERTICAL)
+            val pm = getSystemService(PrintManager::class.java)
+            pm.print("navegador-nia", AdaptadorImpresion(doc), "Pagina del Navegador NIA")
+            estado.text = "Enviando a imprimir (" + doc.numeroPaginas + " paginas)"
+            traza("imprimir", "print framework con " + doc.numeroPaginas + " paginas")
+        } catch (e: Exception) {
+            estado.text = "no se pudo abrir el dialogo de impresion"
+            traza("imprimir", "error imprimiendo: " + e.javaClass.simpleName)
+        }
+    }
+
+    /** Destino del PDF por SAF (ACTION_CREATE_DOCUMENT, application/pdf). */
+    private fun pedirGuardarPdf() {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("application/pdf")
+        intent.putExtra(Intent.EXTRA_TITLE, "pagina.pdf")
+        startActivityForResult(intent, REQUEST_GUARDAR_PDF)
+    }
+
+    /** Pinta una pagina de ops sobre un canvas (PDF o impresion). */
+    private fun pintarOps(canvas: Canvas, hoja: PaginaImpresa) {
+        val brocha = Paint()
+        for (op in hoja.ops) {
+            when (op) {
+                is PaintOp.DrawRect -> {
+                    brocha.color = parseColorImpresion(op.color)
+                    canvas.drawRect(
+                        op.x.toFloat(), op.y.toFloat(),
+                        (op.x + op.width).toFloat(), (op.y + op.height).toFloat(),
+                        brocha
+                    )
+                }
+                is PaintOp.DrawText -> {
+                    brocha.color = parseColorImpresion(op.color)
+                    brocha.textSize = op.fontSize.toFloat()
+                    canvas.drawText(
+                        op.text,
+                        op.x.toFloat(),
+                        (op.y + op.fontSize * 0.8).toFloat(),
+                        brocha
+                    )
+                }
+            }
+        }
+    }
+
+    /** Color de impresion con el mismo fallback claro del PaintView. */
+    private fun parseColorImpresion(hex: String): Int =
+        try {
+            Color.parseColor(hex)
+        } catch (e: IllegalArgumentException) {
+            Color.rgb(176, 176, 192)
+        }
+
+    /** Adaptador del print framework: PDF pagina a pagina con
+     *  cancelacion comprobada antes de cada pagina; sin bitmaps. */
+    private inner class AdaptadorImpresion(private val doc: DocumentoPaginado) :
+        PrintDocumentAdapter() {
+
+        override fun onLayout(
+            oldAttributes: PrintAttributes?,
+            newAttributes: PrintAttributes,
+            cancellationSignal: CancellationSignal?,
+            callback: LayoutResultCallback,
+            extras: Bundle?
+        ) {
+            if (cancellationSignal?.isCanceled == true) {
+                callback.onLayoutCancelled()
+                return
+            }
+            val info = PrintDocumentInfo.Builder("pagina.pdf")
+                .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                .setPageCount(doc.numeroPaginas)
+                .build()
+            callback.onLayoutFinished(info, true)
+        }
+
+        override fun onWrite(
+            pages: Array<out PageRange>,
+            destination: ParcelFileDescriptor,
+            cancellationSignal: CancellationSignal,
+            callback: WriteResultCallback
+        ) {
+            try {
+                PdfDocument().use { pdf ->
+                    for (hoja in doc.paginas) {
+                        if (cancellationSignal.isCanceled) {
+                            callback.onWriteCancelled()
+                            return
+                        }
+                        val info = PdfDocument.PageInfo.Builder(
+                            doc.anchoPt.toInt(), doc.altoPt.toInt(), hoja.numero + 1
+                        ).create()
+                        val paginaPdf = pdf.startPage(info)
+                        pintarOps(paginaPdf.canvas, hoja)
+                        pdf.finishPage(paginaPdf)
+                    }
+                    FileOutputStream(destination.fileDescriptor).use { pdf.writeTo(it) }
+                    callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                }
+            } catch (e: Exception) {
+                callback.onWriteFailed(null)
+            }
+        }
     }
 
     private fun zoomMas() {
@@ -2454,6 +2612,40 @@ class BrowserActivity : Activity() {
                 traza("marcadores", "importar html fallo al leer")
             }
         }
+        if (requestCode == REQUEST_GUARDAR_PDF && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "guardar PDF: sin destino"
+                traza("imprimir", "guardar pdf sin uri")
+                return
+            }
+            try {
+                val doc = documentoImpreso(Orientacion.VERTICAL)
+                PdfDocument().use { pdf ->
+                    for (hoja in doc.paginas) {
+                        val info = PdfDocument.PageInfo.Builder(
+                            doc.anchoPt.toInt(), doc.altoPt.toInt(), hoja.numero + 1
+                        ).create()
+                        val paginaPdf = pdf.startPage(info)
+                        pintarOps(paginaPdf.canvas, hoja)
+                        pdf.finishPage(paginaPdf)
+                    }
+                    val salida = contentResolver.openOutputStream(uri, "wt")
+                    if (salida == null) {
+                        estado.text = "guardar PDF: no se pudo abrir el destino"
+                        traza("imprimir", "openOutputStream nulo")
+                    } else {
+                        salida.use { pdf.writeTo(it) }
+                        val plural = if (doc.numeroPaginas == 1) "pagina" else "paginas"
+                        estado.text = "PDF guardado (" + doc.numeroPaginas + " " + plural + ")"
+                        traza("imprimir", "pdf guardado con " + doc.numeroPaginas + " " + plural)
+                    }
+                }
+            } catch (e: Exception) {
+                estado.text = "no se pudo escribir el PDF"
+                traza("imprimir", "error escribiendo pdf: " + e.javaClass.simpleName)
+            }
+        }
         if (requestCode == REQUEST_INSTALAR_NIAMOD && resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri == null) {
@@ -3004,6 +3196,7 @@ class BrowserActivity : Activity() {
         private const val REQUEST_IMPORT_MARCADORES = 47
         private const val REQUEST_EXPORT_MARCADORES = 48
         private const val REQUEST_INSTALAR_NIAMOD = 49
+        private const val REQUEST_GUARDAR_PDF = 50
     }
 }
 

@@ -274,6 +274,18 @@ class PaintView(context: Context) : View(context) {
     /** R0172 (diagnostico smoke): ops de la escena pintada. */
     fun opsCount(): Int = scene.ops.size
 
+    /** T098 (RES-0108): escena re-maquetada al ancho util de impresion
+     *  (puntos como px logicos del motor) SIN tocar la vista: el mismo
+     *  pipeline del rebuild() con viewport de impresion; la pagina
+     *  impresa es el MISMO render del motor, jamas una captura. */
+    fun escenaParaImprimir(anchoUtil: Double): PaintScene {
+        var css = baseCss + styleTextOf()
+        if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
+        val computed = CssCascade.compute(root, CssStylesheet.parse(css))
+        val laid = LayoutEngine.layout(rootDoc, computed, anchoUtil)
+        return PaintSceneBuilder.build(rootDoc, computed, laid)
+    }
+
     /** Hijos del handle o vacio si el nodo no es contenedor (patron de
      * JsDomBindings para no depender del tipo del nodo). */
     private fun childrenOrEmpty(h: DomHandle): List<DomHandle> =
