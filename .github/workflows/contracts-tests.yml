@@ -216,6 +216,8 @@ jobs:
             engine-core/src/test/java/nia/engine/sitios/DatosSitioTest.kt \
             engine-core/src/main/java/nia/engine/net/GestorCookies.kt \
             engine-core/src/test/java/nia/engine/net/GestorCookiesTest.kt \
+            engine-core/src/main/java/nia/engine/net/EstadoRed.kt \
+            engine-core/src/test/java/nia/engine/net/EstadoRedTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

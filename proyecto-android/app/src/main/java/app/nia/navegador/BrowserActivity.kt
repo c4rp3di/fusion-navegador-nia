@@ -45,6 +45,7 @@ import nia.engine.nav.NavOutcome
 import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
 import nia.engine.net.PanelIdentidad
+import nia.engine.net.RegistroRed
 import nia.engine.omnibox.OmniboxInput
 import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
@@ -230,6 +231,9 @@ class BrowserActivity : Activity() {
     /** T080 v1 (RES-0097): preferencias por sitio persistidas en
      *  sitios.tsv (clave = origen, NUNCA la URL completa). */
     private val sitios by lazy { SitiosManager(File(filesDir, "sitios.tsv")) }
+
+    /** T106 v1 (RES-0100): estado de red contextual por pestana. */
+    private val red = RegistroRed()
 
     /** T080 v1: escala de texto del sitio actual (1.0 = 16px base). */
     private var textoSitio = 1.0
@@ -763,15 +767,22 @@ class BrowserActivity : Activity() {
         progreso.setFraccion(0.2f)
         traza("nav", "navegar " + hostDe(url))
         Thread {
+            val inicio = clock.nowMillis()
             val o = nc.navigate(url)
+            val latencia = clock.nowMillis() - inicio
             runOnUiThread {
                 progreso.setFraccion(0f)
+                when (o) {
+                    is NavOutcome.Loaded -> red.registrar(id, o.page.url, "http", latencia, true, null, "", clock.nowMillis())
+                    is NavOutcome.Failed -> red.registrar(id, o.page?.url ?: url, "http", latencia, false, o.code.name, o.message, clock.nowMillis())
+                }
                 refrescaTarjeta(id, o)
                 if (tabs.activa() == id) {
                     when (o) {
                         is NavOutcome.Loaded -> pintaPagina(o)
                         is NavOutcome.Failed -> manejaFallo(o, dominioImplicito, textoOriginal)
                     }
+                    estado.append(" | red " + latencia + "ms")
                 }
             }
         }.start()
@@ -788,12 +799,18 @@ class BrowserActivity : Activity() {
         progreso.setFraccion(0.2f)
         traza("nav", "back/forward")
         Thread {
+            val inicio = clock.nowMillis()
             val o = accion(nc)
+            val latencia = clock.nowMillis() - inicio
             runOnUiThread {
                 progreso.setFraccion(0f)
                 if (o == null) {
                     estado.text = "sin resultado de navegacion"
                     return@runOnUiThread
+                }
+                when (o) {
+                    is NavOutcome.Loaded -> red.registrar(id, o.page.url, "http", latencia, true, null, "", clock.nowMillis())
+                    is NavOutcome.Failed -> red.registrar(id, o.page?.url ?: "", "http", latencia, false, o.code.name, o.message, clock.nowMillis())
                 }
                 refrescaTarjeta(id, o)
                 if (tabs.activa() == id) {
@@ -801,6 +818,7 @@ class BrowserActivity : Activity() {
                         is NavOutcome.Loaded -> pintaPagina(o)
                         is NavOutcome.Failed -> manejaFallo(o, false, null)
                     }
+                    estado.append(" | red " + latencia + "ms")
                 }
             }
         }.start()
@@ -865,7 +883,8 @@ class BrowserActivity : Activity() {
             "Escritorio (viewport 720)",
             "Restaurar sitio",
             "Datos del sitio",
-            "Cookies"
+            "Cookies",
+            "Red (pestana actual)"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -899,6 +918,7 @@ class BrowserActivity : Activity() {
                     21 -> restaurarSitio()
                     22 -> mostrarDatosSitio()
                     23 -> gestorCookies()
+                    24 -> mostrarRed()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1143,6 +1163,22 @@ class BrowserActivity : Activity() {
             .show()
     }
 
+    /** T106 v1 (RES-0100): estado de red de la pestana ACTIVA: la
+     *  ultima navegacion de esa pestana con sus secretos YA redactados
+     *  en la ingesta (SecretRedactor, T008) y la latencia real medida
+     *  alrededor de la navegacion. Contextual por pestana: red.de(id)
+     *  NUNCA muestra la red de otra pestana. */
+    private fun mostrarRed() {
+        val id = tabs.activa()
+        val linea = red.de(id)
+        traza("red", "estado de red pestana " + id + ": " + (linea?.texto() ?: "sin navegacion"))
+        AlertDialog.Builder(this)
+            .setTitle("Estado de red (pestana)")
+            .setMessage(linea?.texto() ?: "(sin navegacion en esta pestana)")
+            .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
     private fun zoomMas() {
         pagina.fijarZoom(pagina.zoomActual() * 1.25)
         guardarZoomSitio()
@@ -1322,6 +1358,7 @@ class BrowserActivity : Activity() {
     private fun cerrarPestanaYa(id: Long) {
         val titulo = tabs.tarjeta(id)?.title ?: ""
         val cierre = tabs.cerrar(id) ?: return
+        red.borrar(id)
         val mensaje = if (cierre.perfilBorrado) {
             traza("tabs", "ultima incognito cerrada: perfil borrado (wipe)")
             "ultima incognito cerrada: perfil borrado de memoria"
