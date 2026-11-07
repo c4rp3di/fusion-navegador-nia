@@ -224,6 +224,8 @@ jobs:
             engine-core/src/test/java/nia/engine/diag/VersionesTest.kt \
             engine-core/src/main/java/nia/engine/diag/Capacidades.kt \
             engine-core/src/test/java/nia/engine/diag/CapacidadesTest.kt \
+            engine-core/src/main/java/nia/engine/js/CuotasJs.kt \
+            engine-core/src/test/java/nia/engine/js/CuotasJsTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

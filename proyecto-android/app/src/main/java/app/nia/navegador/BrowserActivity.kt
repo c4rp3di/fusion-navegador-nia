@@ -43,6 +43,8 @@ import nia.engine.gestures.ConfigGestos
 import nia.engine.gestures.OcultadorBarra
 import nia.engine.gestures.TironRefresh
 import nia.engine.history.HistoryManager
+import nia.engine.js.CuotasJs
+import nia.engine.js.JsLimits
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
@@ -342,6 +344,22 @@ class BrowserActivity : Activity() {
                 "HTTPS-only",
                 "Bloquear el http salvo excepciones del panel",
                 TipoOpcion.BOOL, "false", disponible = false
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "js.cuotas.pasos", "JS",
+                "Cuota de pasos",
+                "Sentencias/expresiones por evaluacion; tope duro NO eliminable",
+                TipoOpcion.ENTERO, "100000000", 1000000L, 1000000000L
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "js.cuotas.allocs", "JS",
+                "Cuota de allocs",
+                "Objetos/arrays por evaluacion; NO son bytes de heap reales",
+                TipoOpcion.ENTERO, "10000000", 100000L, 100000000L
             )
         )
         // T078 v1 (R0199, RES-0094): la seccion Gestos del motor; los
@@ -768,11 +786,14 @@ class BrowserActivity : Activity() {
             return
         }
         nc.invalidateGeneration()
+        nc.cuotasScript = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
         progreso.setFraccion(0.2f)
         traza("nav", "navegar " + hostDe(url))
         Thread {
             val inicio = clock.nowMillis()
             val o = nc.navigate(url)
+            scriptsInterrumpidos = contarScriptsInterrumpidos(o)
+            if (scriptsInterrumpidos == 0) reintentosCuotas = 0
             val latencia = clock.nowMillis() - inicio
             runOnUiThread {
                 progreso.setFraccion(0f)
@@ -800,11 +821,14 @@ class BrowserActivity : Activity() {
             return
         }
         nc.invalidateGeneration()
+        nc.cuotasScript = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
         progreso.setFraccion(0.2f)
         traza("nav", "back/forward")
         Thread {
             val inicio = clock.nowMillis()
             val o = accion(nc)
+            scriptsInterrumpidos = contarScriptsInterrumpidos(o)
+            if (scriptsInterrumpidos == 0) reintentosCuotas = 0
             val latencia = clock.nowMillis() - inicio
             runOnUiThread {
                 progreso.setFraccion(0f)
@@ -892,7 +916,8 @@ class BrowserActivity : Activity() {
             "Versiones",
             "Importar marcadores (HTML)",
             "Exportar marcadores (HTML)",
-            "Capacidades"
+            "Capacidades",
+            "Cuotas JS"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -931,6 +956,7 @@ class BrowserActivity : Activity() {
                     26 -> importarMarcadoresHtml()
                     27 -> exportarMarcadoresHtml()
                     28 -> mostrarCapacidades()
+                    29 -> mostrarCuotasJs()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1257,6 +1283,69 @@ class BrowserActivity : Activity() {
             .setMessage(Capacidades.resumen(caps))
             .setPositiveButton("Cerrar", null)
             .show()
+    }
+
+    /** T100 v1 (RES-0104): reintentos temporales de cuota concedidos
+     * y scripts interrumpidos de la ultima carga. El reintento dobla
+     * la cuota de la recarga hasta el tope duro; una carga que termina
+     * sin scripts interrumpidos los restablece (temporal de verdad). */
+    @Volatile
+    private var reintentosCuotas = 0
+
+    @Volatile
+    private var scriptsInterrumpidos = 0
+
+    /** Dialogo de cuotas visibles (T100): mapa honesto de la
+     * interrupcion (pasos/allocs/tiempo y lo que NO miden), cuotas
+     * activas tras los reintentos, conteo de scripts interrumpidos y
+     * acciones de reintento temporal (recargar con la cuota doblada)
+     * y de restablecer. La ejecucion sin limite NO existe. */
+    private fun mostrarCuotasJs() {
+        val activas = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
+        val sb = StringBuilder()
+        for (linea in CuotasJs.mapa(activas)) {
+            sb.append(linea).append('\n')
+        }
+        sb.append("reintentos activos: " + reintentosCuotas + " (cada uno dobla la cuota de la recarga)")
+        sb.append('\n')
+        sb.append("scripts interrumpidos en la ultima carga: " + scriptsInterrumpidos)
+        traza("cuotas", "cuotas js pasos=" + activas.maxSteps + " allocs=" + activas.maxAllocs + " reintentos=" + reintentosCuotas)
+        AlertDialog.Builder(this)
+            .setTitle("Cuotas JS")
+            .setMessage(sb.toString())
+            .setPositiveButton("Reintentar con mas cuota") { _, _ ->
+                reintentosCuotas += 1
+                estado.text = "reintento " + reintentosCuotas + ": recargando con mas cuota (temporal)"
+                traza("cuotas", "reintento " + reintentosCuotas)
+                recargar()
+            }
+            .setNeutralButton("Restablecer reintentos") { _, _ ->
+                reintentosCuotas = 0
+                estado.text = "reintentos de cuota restablecidos"
+                traza("cuotas", "reintentos restablecidos")
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Cuotas resueltas de los ajustes (T100): el valor del usuario
+     * ACOTADO por los rangos honestos del motor; JAMAS sin limite. */
+    private fun cuotasResueltas(): JsLimits {
+        val pasos = ajustes.valor("js.cuotas.pasos")?.toLongOrNull() ?: CuotasJs.DEFAULT_PASOS
+        val allocs = ajustes.valor("js.cuotas.allocs")?.toLongOrNull() ?: CuotasJs.DEFAULT_ALLOCS
+        return CuotasJs.resolver(pasos, allocs)
+    }
+
+    /** Cuenta los scripts interrumpidos de una carga (T100): el dump
+     * del motor reporta "interrupted ..." cuando un script aborto por
+     * cuotas o por Stop (T021); null o fallo cuentan 0. */
+    private fun contarScriptsInterrumpidos(o: NavOutcome?): Int {
+        if (o !is NavOutcome.Loaded) return 0
+        var n = 0
+        for (s in o.page.scripts) {
+            if (s.output.contains("interrupted")) n += 1
+        }
+        return n
     }
 
     private fun zoomMas() {

@@ -137,6 +137,11 @@ class NavController(
     private var page: NavPage? = null
     private var lastState: NavState? = null
 
+    /** Cuotas de los scripts de la pagina (T100, RES-0104): el shell
+     * fija el JsLimits resuelto ANTES de navegar; por defecto el del
+     * motor (100M pasos y 10M allocs, T021). */
+    var cuotasScript: JsLimits = JsLimits()
+
     /** Nueva generacion: las respuestas en vuelo quedan stale. */
     fun invalidateGeneration(): Long = manager.invalidate()
 
@@ -285,7 +290,7 @@ class NavController(
                 }
                 is LoadItem.InlineScript -> {
                     inlineCount += 1
-                    val result = JsInterpreter.evaluateWithDom(item.source, document, JsLimits(), fetchApi, storageApi)
+                    val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi)
                     scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
                 }
                 is LoadItem.ScriptSrc -> {
@@ -295,7 +300,7 @@ class NavController(
                         return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                     }
                     if (r is SideResult.Ok) {
-                        val result = JsInterpreter.evaluateWithDom(r.source, document, JsLimits(), fetchApi, storageApi)
+                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi)
                         scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
                     } else {
                         scripts.add(NavScript(ref, describe(r)))
