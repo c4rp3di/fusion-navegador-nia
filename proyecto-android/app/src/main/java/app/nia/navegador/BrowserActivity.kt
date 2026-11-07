@@ -773,8 +773,8 @@ class BrowserActivity : Activity() {
             runOnUiThread {
                 progreso.setFraccion(0f)
                 when (o) {
-                    is NavOutcome.Loaded -> red.registrar(id, o.page.url, "http", latencia, true, null, "", clock.nowMillis())
-                    is NavOutcome.Failed -> red.registrar(id, o.page?.url ?: url, "http", latencia, false, o.code.name, o.message, clock.nowMillis())
+                    is NavOutcome.Loaded -> id?.let { red.registrar(it, o.page.url, "http", latencia, true, null, "", clock.nowMillis()) }
+                    is NavOutcome.Failed -> id?.let { red.registrar(it, o.page?.url ?: url, "http", latencia, false, o.code.name, o.message, clock.nowMillis()) }
                 }
                 refrescaTarjeta(id, o)
                 if (tabs.activa() == id) {
@@ -809,8 +809,8 @@ class BrowserActivity : Activity() {
                     return@runOnUiThread
                 }
                 when (o) {
-                    is NavOutcome.Loaded -> red.registrar(id, o.page.url, "http", latencia, true, null, "", clock.nowMillis())
-                    is NavOutcome.Failed -> red.registrar(id, o.page?.url ?: "", "http", latencia, false, o.code.name, o.message, clock.nowMillis())
+                    is NavOutcome.Loaded -> id?.let { red.registrar(it, o.page.url, "http", latencia, true, null, "", clock.nowMillis()) }
+                    is NavOutcome.Failed -> id?.let { red.registrar(it, o.page?.url ?: "", "http", latencia, false, o.code.name, o.message, clock.nowMillis()) }
                 }
                 refrescaTarjeta(id, o)
                 if (tabs.activa() == id) {
@@ -1170,7 +1170,7 @@ class BrowserActivity : Activity() {
      *  NUNCA muestra la red de otra pestana. */
     private fun mostrarRed() {
         val id = tabs.activa()
-        val linea = red.de(id)
+        val linea = id?.let { red.de(it) }
         traza("red", "estado de red pestana " + id + ": " + (linea?.texto() ?: "sin navegacion"))
         AlertDialog.Builder(this)
             .setTitle("Estado de red (pestana)")
