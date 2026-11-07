@@ -38,12 +38,17 @@ class SeleccionTest {
     }
 
     private fun fragsBase(): List<FragmentoTexto> {
+        // UNA sola escena para las tres palabras: los indices
+        // documentales del extractor solo existen dentro de una
+        // escena (una escena por palabra daba indice 0 a todas).
         val n = nodo()
-        return listOf(
-            frag(n, "Hola", 0.0, 0.0),
-            frag(n, "mundo", 50.0, 0.0),
-            frag(n, "cruel", 110.0, 0.0)
+        val fs = 20.0
+        val ops = listOf(
+            PaintOp.DrawText(0.0, 0.0, "Hola".length * fs / 2.0, fs, "Hola", "#000000", fs, n),
+            PaintOp.DrawText(50.0, 0.0, "mundo".length * fs / 2.0, fs, "mundo", "#000000", fs, n),
+            PaintOp.DrawText(110.0, 0.0, "cruel".length * fs / 2.0, fs, "cruel", "#000000", fs, n)
         )
+        return Fragmentos.de(PaintScene(ops))
     }
 
     // ---- Fragmentos: orden documental, solo DrawText ----
@@ -188,7 +193,7 @@ class SeleccionTest {
     fun fragmentoUrlCodificaUtf8() {
         // trim de extremos; enye multibyte; unreserved pasan tal cual
         assertEquals(
-            "u#:~:text=a\u00f1o-~ok",
+            "u#:~:text=a%C3%B1o-~ok",
             FragmentoUrl.crear("u", " a\u00f1o-~ok ")
         )
         // surrogate: el emoji va entero (4 bytes UTF-8)
