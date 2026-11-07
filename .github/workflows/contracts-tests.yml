@@ -218,6 +218,8 @@ jobs:
             engine-core/src/test/java/nia/engine/net/GestorCookiesTest.kt \
             engine-core/src/main/java/nia/engine/net/EstadoRed.kt \
             engine-core/src/test/java/nia/engine/net/EstadoRedTest.kt \
+            engine-core/src/main/java/nia/engine/diag/Versiones.kt \
+            engine-core/src/test/java/nia/engine/diag/VersionesTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
@@ -248,6 +250,12 @@ jobs:
             echo "Roundtrip OK: todas las fuentes esperadas estan presentes."
           fi
           exit $faltan
+
+      - name: Build info del artefacto (T107, RES-0101)
+        run: |
+          mkdir -p app/src/main/assets
+          printf '%s' "${GITHUB_SHA}" > app/src/main/assets/build-info.txt
+          echo "build-info.txt: ${GITHUB_SHA}"
 
       - name: Tests unitarios (contracts + engine-core)
         run: gradle --no-daemon :contracts:test :engine-core:test

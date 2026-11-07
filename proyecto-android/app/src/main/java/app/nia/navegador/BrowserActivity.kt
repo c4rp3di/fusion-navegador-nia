@@ -23,10 +23,12 @@ import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
 import java.util.concurrent.Executors
+import nia.contracts.ContractsVersion
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
+import nia.engine.diag.Versiones
 import nia.engine.download.DownloadEngine
 import nia.engine.download.DownloadItem
 import nia.engine.download.DownloadSink
@@ -884,7 +886,8 @@ class BrowserActivity : Activity() {
             "Restaurar sitio",
             "Datos del sitio",
             "Cookies",
-            "Red (pestana actual)"
+            "Red (pestana actual)",
+            "Versiones"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -919,6 +922,7 @@ class BrowserActivity : Activity() {
                     22 -> mostrarDatosSitio()
                     23 -> gestorCookies()
                     24 -> mostrarRed()
+                    25 -> mostrarVersiones()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1175,6 +1179,31 @@ class BrowserActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Estado de red (pestana)")
             .setMessage(linea?.texto() ?: "(sin navegacion en esta pestana)")
+            .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
+    /** T107 v1 (RES-0101): versiones del artefacto INSTALADO (nada de
+     *  estado remoto): version real de la app leida del PackageManager,
+     *  sha del build EMBEBIDO en el APK por el workflow (asset
+     *  build-info.txt; un build local sin el asset lo declara), contracts
+     *  con su ContractsVersion real y componentes con estado honesto. */
+    private fun mostrarVersiones() {
+        val version = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (e: Exception) {
+            "?"
+        }
+        val sha = try {
+            assets.open("build-info.txt").bufferedReader().use { it.readText().trim() }
+        } catch (e: Exception) {
+            null
+        }
+        val texto = Versiones.resumen(version, sha, ContractsVersion.toString())
+        traza("diag", "versiones: navegador " + version + ", sha " + (sha ?: "build local"))
+        AlertDialog.Builder(this)
+            .setTitle("Versiones")
+            .setMessage(texto)
             .setPositiveButton("Cerrar", null)
             .show()
     }
