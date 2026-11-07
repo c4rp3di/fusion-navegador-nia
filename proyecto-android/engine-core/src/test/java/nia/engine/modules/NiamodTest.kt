@@ -170,6 +170,59 @@ class NiamodTest {
         return baos.toByteArray()
     }
 
+    /** ZIP clasico de DOS entradas con el MISMO nombre: el duplicado
+     *  vive en la central directory (ZipOutputStream lanza ZipException
+     *  ante entradas duplicadas, asi que el fixture es binario a mano
+     *  igual que el de symlink). */
+    private fun zipDuplicados(): ByteArray {
+        val nombre = "entry.js".toByteArray(Charsets.UTF_8)
+        val contenido = "x".toByteArray(Charsets.UTF_8)
+        val crc = java.util.zip.CRC32()
+        crc.update(contenido)
+        val crcV = crc.value
+        val baos = ByteArrayOutputStream()
+        val offsets = ArrayList<Long>()
+        fun w16(v: Int) {
+            baos.write(v and 0xFF)
+            baos.write((v shr 8) and 0xFF)
+        }
+        fun w32(v: Long) {
+            baos.write((v and 0xFF).toInt())
+            baos.write(((v shr 8) and 0xFF).toInt())
+            baos.write(((v shr 16) and 0xFF).toInt())
+            baos.write(((v shr 24) and 0xFF).toInt())
+        }
+        fun local() {
+            offsets.add(baos.size().toLong())
+            w32(0x04034b50L)
+            w16(20); w16(0); w16(0); w16(0); w16(0)
+            w32(crcV); w32(contenido.size.toLong()); w32(contenido.size.toLong())
+            w16(nombre.size); w16(0)
+            baos.write(nombre)
+            baos.write(contenido)
+        }
+        fun cd(off: Long) {
+            w32(0x02014b50L)
+            w16(20); w16(20); w16(0); w16(0); w16(0); w16(0)
+            w32(crcV); w32(contenido.size.toLong()); w32(contenido.size.toLong())
+            w16(nombre.size); w16(0); w16(0); w16(0); w16(0)
+            w32(0); w32(off)
+            baos.write(nombre)
+        }
+        local()
+        local()
+        val cdOff = baos.size().toLong()
+        cd(offsets[0])
+        cd(offsets[1])
+        val cdTam = baos.size().toLong() - cdOff
+        w32(0x06054b50L)
+        w16(0); w16(0); w16(2); w16(2)
+        w32(cdTam)
+        w32(cdOff)
+        w16(0)
+        return baos.toByteArray()
+    }
+
     @Test
     fun paqueteValidoInspecciona() {
         val kp = par()
@@ -230,16 +283,7 @@ class NiamodTest {
 
     @Test
     fun duplicadosRechazados() {
-        val kp = par()
-        val m = manifiesto(spki(kp)).toByteArray(Charsets.UTF_8)
-        val z = zip(
-            listOf(
-                "manifest.txt" to m,
-                "entry.js" to codigo().toByteArray(Charsets.UTF_8),
-                "entry.js" to "otra cosa".toByteArray()
-            )
-        )
-        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(z)).code)
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(zipDuplicados())).code)
     }
 
     @Test
