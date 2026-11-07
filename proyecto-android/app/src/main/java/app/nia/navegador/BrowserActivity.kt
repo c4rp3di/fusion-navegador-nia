@@ -17,6 +17,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
 import nia.contracts.ErrorCode
+import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
 import nia.engine.errors.ErrorPages
@@ -41,7 +42,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1, RES-0089, R0187): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1 + T076 v1, RES-0090, R0189): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -127,6 +128,18 @@ import app.nia.navegador.ui.NiaUi
  * NO se filtra; sin App Links ajenos ni peticion de rol (honesto
  * hasta el smoke T067-B en dispositivo).
  *
+ * T076 v1 (R0189, RES-0090): pagina de nueva pestana con contenido
+ * REAL: accesos = marcadores fijados (pin) del BookmarkManager
+ * verificado (T060) con su ciclo de vida cableado por fin (archivo
+ * tabulado en filesDir; un corrupto se ignora y el estado vivo
+ * NUNCA toca), recientes del historial NORMAL (la mas reciente
+ * primero; el incognito JAMAS llega, D-001) y gestion por dialogo
+ * en el Menu (anadir con la resolucion REAL del OmniboxInput,
+ * quitar sin borrar el marcador, vaciar con confirmacion ADR-019,
+ * guardar la pagina actual en favoritos). Sin precarga de webs ni
+ * skeleton animado; los enlaces de la pagina NUNCA navegan solos
+ * (exclusion honesta hasta el smoke T067-B).
+ *
  * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
  * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
@@ -147,7 +160,21 @@ class BrowserActivity : Activity() {
     }
 
     private val tabs by lazy { TabsManager(clock, HttpTransport(), File(cacheDir, "perfil-navegador")) }
-    private val marcadores = BookmarkManager()
+    /** Marcadores del motor (T060, verificado) con el ciclo de vida que
+     * T076 cablea por fin: el estado vive en el BookmarkManager y
+     * viaja a un archivo tabulado en filesDir; un archivo corrupto
+     * se ignora (importar NUNCA toca el estado vivo). */
+    private val marcadores by lazy {
+        val m = BookmarkManager()
+        val f = File(filesDir, "marcadores.tsv")
+        if (f.exists()) {
+            val r = m.importar(f.readText())
+            if (r is Outcome.Failure) {
+                traza("accesos", "marcadores corruptos ignorados")
+            }
+        }
+        m
+    }
 
     /** Historial global SOLO del perfil NORMAL (T074): el incognito
      * jamas se registra y la URL se guarda sin query (redaccion).
@@ -303,7 +330,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0187)"
+        omnibox.hint = "Busca o escribe una URL (R0189)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -334,7 +361,7 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0187)"
+        estado.text = "listo (R0189)"
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -428,7 +455,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0187 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0189 con " + tabs.contar() + " pestana(s)")
         aplicarRetencion()
         pintarStrip()
         manejarIntentExterno(intent)
@@ -636,6 +663,7 @@ class BrowserActivity : Activity() {
             "Sugerencias",
             "Identidad de la pagina",
             "Compartir pagina",
+            "Accesos de la pagina nueva",
             "Historial (solo pestanas normales)",
             "Ajustes (busca y cambia)",
             "Diagnostico (traza del shell)",
@@ -652,10 +680,11 @@ class BrowserActivity : Activity() {
                     4 -> mostrarSugerencias()
                     5 -> mostrarIdentidad()
                     6 -> compartirPagina()
-                    7 -> mostrarHistorial()
-                    8 -> mostrarAjustes()
-                    9 -> mostrarDiagnostico()
-                    10 -> startActivity(Intent(this, MainActivity::class.java))
+                    7 -> mostrarAccesos()
+                    8 -> mostrarHistorial()
+                    9 -> mostrarAjustes()
+                    10 -> mostrarDiagnostico()
+                    11 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -950,6 +979,171 @@ class BrowserActivity : Activity() {
                 estado.text = "externo cancelado"
             }
             .show()
+    }
+
+    /** T076 v1 (R0189): gestion de accesos de la pagina nueva: los
+     * accesos son marcadores fijados (pin) del motor T060 y la
+     * pagina los pinta junto a los recientes no privados. */
+    private fun mostrarAccesos() {
+        traza("accesos", "accesos abierto con " + marcadores.accesosRapidos().size)
+        AlertDialog.Builder(this)
+            .setTitle("Accesos de la pagina nueva")
+            .setItems(arrayOf("Anadir un acceso", "Quitar un acceso", "Vaciar accesos", "Guardar esta pagina en favoritos")) { _, cual ->
+                when (cual) {
+                    0 -> pedirAcceso()
+                    1 -> elegirQuitarAcceso()
+                    2 -> confirmarVaciarAccesos()
+                    3 -> guardarEnFavoritos()
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Pide titulo y URL; la URL se valida con la resolucion REAL
+     * del OmniboxInput y el acceso se fija (pin) sin abrir nada. */
+    private fun pedirAcceso() {
+        val campoTitulo = EditText(this)
+        campoTitulo.hint = "Titulo del acceso"
+        val campoUrl = EditText(this)
+        campoUrl.hint = "URL (http o https)"
+        val caja = LinearLayout(this)
+        caja.orientation = LinearLayout.VERTICAL
+        caja.addView(campoTitulo)
+        caja.addView(campoUrl)
+        AlertDialog.Builder(this)
+            .setTitle("Anadir un acceso")
+            .setView(caja)
+            .setPositiveButton("Anadir") { _, _ ->
+                val titulo = campoTitulo.text.toString().trim()
+                val texto = campoUrl.text.toString().trim()
+                if (titulo.isEmpty() || texto.isEmpty()) {
+                    estado.text = "acceso sin titulo o sin url"
+                    return@setPositiveButton
+                }
+                when (val r = OmniboxInput.resolver(texto)) {
+                    is OmniboxInput.Resolucion.Navegar -> fijarAcceso(titulo, r.url)
+                    is OmniboxInput.Resolucion.Buscar -> fijarAcceso(titulo, r.url)
+                    is OmniboxInput.Resolucion.EsquemaNoSoportado ->
+                        estado.text = "acceso con esquema no soportado: " + r.esquema
+                    is OmniboxInput.Resolucion.ErrorDeParseo ->
+                        estado.text = "acceso invalido: " + r.motivo
+                    is OmniboxInput.Resolucion.Vacio -> estado.text = "acceso vacio"
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Crea el marcador, lo fija como acceso y persiste (T076). */
+    private fun fijarAcceso(titulo: String, url: String) {
+        val bm = when (val r = marcadores.add(titulo, url)) {
+            is Outcome.Success -> r.value
+            is Outcome.Failure -> null
+        }
+        if (bm == null) {
+            estado.text = "acceso no creado (titulo o url no validos)"
+            traza("accesos", "no creado")
+            return
+        }
+        val p = marcadores.pin(bm.id)
+        if (p is Outcome.Failure) {
+            estado.text = "acceso creado sin fijar"
+            traza("accesos", "pin fallo")
+        } else {
+            estado.text = "acceso anadido: " + bm.titulo
+            traza("accesos", "anadido " + hostDe(bm.url))
+        }
+        guardarMarcadores()
+        repintarSiNueva()
+    }
+
+    /** Lista los accesos fijados para quitar uno (solo el pin: el
+     * marcador vive y la sugerencia del omnibox lo sigue usando). */
+    private fun elegirQuitarAcceso() {
+        val pins = marcadores.accesosRapidos()
+        if (pins.isEmpty()) {
+            estado.text = "sin accesos que quitar"
+            return
+        }
+        val lineas = pins.map { it.titulo + " - " + hostDe(it.url) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Quitar un acceso")
+            .setItems(lineas) { _, cual ->
+                val r = marcadores.unpin(pins[cual].id)
+                if (r is Outcome.Failure) {
+                    estado.text = "acceso no quitado"
+                } else {
+                    estado.text = "acceso quitado: " + pins[cual].titulo
+                    traza("accesos", "quitado " + hostDe(pins[cual].url))
+                }
+                guardarMarcadores()
+                repintarSiNueva()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Vacia los accesos con confirmacion (ADR-019): los marcadores
+     * vivos NUNCA se borran, solo se desfijan. */
+    private fun confirmarVaciarAccesos() {
+        AlertDialog.Builder(this)
+            .setTitle("Vaciar accesos")
+            .setMessage("Se quitaran todos los accesos de la pagina nueva. Los marcadores vivos NO se borran. Vaciar?")
+            .setPositiveButton("Vaciar") { _, _ ->
+                val antes = marcadores.accesosRapidos().size
+                for (bm in marcadores.accesosRapidos()) {
+                    marcadores.unpin(bm.id)
+                }
+                estado.text = "accesos vaciados (" + antes + ")"
+                traza("accesos", "vaciados (" + antes + ")")
+                guardarMarcadores()
+                repintarSiNueva()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Guarda la pagina ACTUAL en favoritos y la fija como acceso
+     * (about: JAMAS se guarda: no es una pagina real). */
+    private fun guardarEnFavoritos() {
+        val url = navActual()?.currentPage()?.url
+        if (url == null || url.startsWith("about:")) {
+            estado.text = "sin pagina actual para guardar"
+            return
+        }
+        val bm = when (val r = marcadores.add(hostDe(url), url)) {
+            is Outcome.Success -> r.value
+            is Outcome.Failure -> null
+        }
+        if (bm == null) {
+            estado.text = "favorito no creado"
+            return
+        }
+        marcadores.pin(bm.id)
+        estado.text = "guardado en favoritos: " + hostDe(url)
+        traza("accesos", "guardado " + hostDe(url))
+        guardarMarcadores()
+        repintarSiNueva()
+    }
+
+    /** Persiste los marcadores tras cada cambio (T076): un fallo de
+     * escritura JAMAS rompe el estado vivo (solo avisa). */
+    private fun guardarMarcadores() {
+        try {
+            File(filesDir, "marcadores.tsv").writeText(marcadores.exportar())
+        } catch (e: Exception) {
+            estado.text = "no se pudieron guardar los marcadores"
+            traza("accesos", "escritura fallo")
+        }
+    }
+
+    /** Repinta la pagina nueva si la activa es about: (T076). */
+    private fun repintarSiNueva() {
+        val actual = navActual()?.currentPage()?.url
+        if (actual != null && actual.startsWith("about:")) {
+            pintar(paginaNueva())
+        }
     }
 
     /** La tarjeta de la pestana refleja la URL cargada; la carga en vuelo
@@ -1306,13 +1500,35 @@ class BrowserActivity : Activity() {
     private fun textoHtml(s: String): String =
         s.replace('<', ' ').replace('>', ' ').replace('&', ' ')
 
-    private fun paginaNueva(): String =
-        "<html><body><h1>Navegador NIA (R0187)</h1>" +
-            "<p>Motor propio, sin WebView. Busca o escribe una URL arriba.</p>" +
-            "<p>Pestanas arriba: toca una para cambiar, x para cerrar, + para abrir. Incognito y reabrir en el Menu.</p>" +
-            "<p>El Menu trae Historial (solo pestanas normales), Cerradas (recientes, reabre la elegida), Ajustes (busca y cambia; Limpieza: borrar historial por rango, Fire de sesion/total con confirmacion, Retencion del historial y Borrar cache con conteo) y Diagnostico: la traza del shell (tambien en adb logcat -s NIA.Shell).</p>" +
-            "<p>Las paginas reales se pintan con el layout del motor; hoy se ven simples (exclusion honesta del shell).</p>" +
-            "</body></html>"
+    private fun paginaNueva(): String {
+        val sb = StringBuilder()
+        sb.append("<html><body><h1>Navegador NIA (R0189)</h1>")
+        sb.append("<p>Motor propio, sin WebView. Busca o escribe una URL arriba. Toca una pestana para cambiar, x para cerrar, + para abrir.</p>")
+        sb.append("<h2>Accesos</h2>")
+        val pins = marcadores.accesosRapidos()
+        if (pins.isEmpty()) {
+            sb.append("<p>Sin accesos: anade o guarda uno desde el Menu (Accesos de la pagina nueva).</p>")
+        } else {
+            for (bm in pins) {
+                sb.append("<p>" + textoHtml(bm.titulo) + " - " + hostDe(bm.url) + "</p>")
+            }
+        }
+        sb.append("<h2>Recientes (solo pestanas normales)</h2>")
+        val recientes = historial.entradas()
+        if (recientes.isEmpty()) {
+            sb.append("<p>Sin paginas recientes todavia.</p>")
+        } else {
+            var n = 0
+            for (e in recientes) {
+                if (n >= 6) break
+                sb.append("<p>" + textoHtml(e.titulo) + " - " + hostDe(e.url) + "</p>")
+                n += 1
+            }
+        }
+        sb.append("<p>Los accesos y la nueva incognito se gestionan en el Menu; las paginas reales se pintan con el layout del motor.</p>")
+        sb.append("</body></html>")
+        return sb.toString()
+    }
 
     /** CSS del navegador: tokens del tema activo (T069/ADR-021); inputs
      * con fondo oscuro para que el value pintado sea legible. */
