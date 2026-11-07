@@ -3,6 +3,9 @@ package app.nia.navegador
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -29,6 +32,8 @@ import nia.engine.download.DownloadSink
 import nia.engine.download.DownloadState
 import nia.engine.download.ReopenableSink
 import nia.engine.errors.ErrorPages
+import nia.engine.gestures.AccionBorde
+import nia.engine.gestures.OcultadorBarra
 import nia.engine.history.HistoryManager
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
@@ -323,6 +328,11 @@ class BrowserActivity : Activity() {
     private lateinit var progreso: NiaProgressBar
     private lateinit var pagina: PaintView
     private lateinit var scroll: ScrollView
+    private lateinit var filaOmnibox: LinearLayout
+    /** T077 v1 (R0195, RES-0093): la barra de URL se oculta al bajar y
+     * reaparece al subir o al llegar al borde superior (histeresis de
+     * la logica del motor, sin parpadeo con micro-scrolls). */
+    private val ocultadorBarra = OcultadorBarra()
     private lateinit var filaPestanas: LinearLayout
     private var panelIdentidad: String = ""
 
@@ -350,7 +360,7 @@ class BrowserActivity : Activity() {
 
         val espacio = NiaUi.dp(this, NiaTokens.ESPACIADO[3])
 
-        val filaOmnibox = LinearLayout(this)
+        filaOmnibox = LinearLayout(this)
         filaOmnibox.orientation = LinearLayout.HORIZONTAL
         filaOmnibox.setPadding(espacio, espacio, espacio, 0)
 
@@ -446,6 +456,44 @@ class BrowserActivity : Activity() {
             scroll,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
+
+        // T077 v1 (R0195, RES-0093): gestos base cableados a capacidades
+        // REALES del shell. El swipe de borde decide en el MOTOR
+        // (RastreadorBorde del PaintView) y ejecuta el mismo back/forward
+        // de la barra (rutas equivalentes); la barra de URL se oculta con
+        // el scroll (OcultadorBarra del motor); el long-press resuelve el
+        // contenido con el hitTest del motor y abre el menu propio;
+        // pull-to-refresh OFF por defecto (PoliticaPullRefresh, T078 lo
+        // configurara). Nada de esto roba gestos del sistema: el borde
+        // solo nace en banda propia y el vertical manda siempre.
+        pagina.setOnGestoBorde { accion ->
+            when (accion) {
+                AccionBorde.ATRAS -> {
+                    val nc = navActual()
+                    if (nc == null || !nc.canGoBack()) {
+                        estado.text = "gesto atras: sin historial"
+                    } else {
+                        estado.text = "gesto atras"
+                        navegarOutcome { n -> n.back() }
+                    }
+                }
+                AccionBorde.ADELANTE -> {
+                    val nc = navActual()
+                    if (nc == null || !nc.canGoForward()) {
+                        estado.text = "gesto adelante: sin historial"
+                    } else {
+                        estado.text = "gesto adelante"
+                        navegarOutcome { n -> n.forward() }
+                    }
+                }
+                else -> {}
+            }
+        }
+        pagina.setOnToqueLargo { info -> mostrarMenuToque(info) }
+        scroll.setOnScrollChangeListener { _, _, nuevaY, _, viejaY ->
+            val mostrar = ocultadorBarra.scroll((nuevaY - viejaY).toDouble(), nuevaY <= 0)
+            filaOmnibox.visibility = if (mostrar) LinearLayout.VISIBLE else LinearLayout.GONE
+        }
 
         // T075 v1 (R0184): aviso de deshacer al cerrar una pestana.
         avisoCierre = LinearLayout(this)
@@ -712,7 +760,10 @@ class BrowserActivity : Activity() {
             "Historial (solo pestanas normales)",
             "Ajustes (busca y cambia)",
             "Diagnostico (traza del shell)",
-            "Demos del motor"
+            "Demos del motor",
+            "Zoom + (acercar)",
+            "Zoom - (alejar)",
+            "Zoom 100%"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -732,10 +783,29 @@ class BrowserActivity : Activity() {
                     11 -> mostrarAjustes()
                     12 -> mostrarDiagnostico()
                     13 -> startActivity(Intent(this, MainActivity::class.java))
+                    14 -> zoomMas()
+                    15 -> zoomMenos()
+                    16 -> {
+                        pagina.fijarZoom(1.0)
+                        estado.text = "zoom 100%"
+                    }
                 }
             }
             .setNegativeButton("Cerrar", null)
             .show()
+    }
+
+    /** T077 v1 (R0195, RES-0093): rutas equivalentes POR MENU de los
+     * gestos de zoom (la pinza y el doble tap viven en el PaintView);
+     * el zoom es REAL del motor (re-maqueteo, no bitmap). */
+    private fun zoomMas() {
+        pagina.fijarZoom(pagina.zoomActual() * 1.25)
+        estado.text = "zoom " + (pagina.zoomActual() * 100).toInt() + "%"
+    }
+
+    private fun zoomMenos() {
+        pagina.fijarZoom(pagina.zoomActual() / 1.25)
+        estado.text = "zoom " + (pagina.zoomActual() * 100).toInt() + "%"
     }
 
     private fun mostrarIdentidad() {
@@ -980,6 +1050,77 @@ class BrowserActivity : Activity() {
         val envio = Intent(Intent.ACTION_SEND)
         envio.type = "text/plain"
         envio.putExtra(Intent.EXTRA_TEXT, url)
+        startActivity(Intent.createChooser(envio, "Compartir"))
+    }
+
+    /** T077 v1 (R0195, RES-0093): menu propio ANCLADO al contenido bajo
+     * el toque largo (enlace/imagen/texto resueltos con el hitTest del
+     * motor). El portapapeles es explicito y solo copia lo resuelto;
+     * Abrir pasa por el mismo camino que el omnibox (navegar), nunca un
+     * esquema privilegiado; Cancelar no hace nada. */
+    private fun mostrarMenuToque(info: PaintView.InfoToqueLargo) {
+        val opciones = when (info.tipo) {
+            "enlace" -> arrayOf(
+                "Abrir enlace",
+                "Copiar enlace",
+                "Copiar texto del enlace",
+                "Compartir enlace"
+            )
+            "imagen" -> arrayOf(
+                "Abrir imagen",
+                "Copiar URL de imagen",
+                "Compartir imagen"
+            )
+            else -> arrayOf("Copiar texto")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Toque largo (" + info.tipo + ")")
+            .setMessage(if (info.url.isEmpty()) recorta(info.texto) else info.url)
+            .setItems(opciones) { _, cual ->
+                when (info.tipo) {
+                    "enlace" -> when (cual) {
+                        0 -> navegar(info.url, false, info.url)
+                        1 -> copiarAlPortapapeles(info.url)
+                        2 -> copiarAlPortapapeles(info.texto)
+                        3 -> compartirTexto(info.url)
+                    }
+                    "imagen" -> when (cual) {
+                        0 -> navegar(info.url, false, info.url)
+                        1 -> copiarAlPortapapeles(info.url)
+                        2 -> compartirTexto(info.url)
+                    }
+                    else -> copiarAlPortapapeles(info.texto)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Texto recortado para el dialogo del toque largo. */
+    private fun recorta(s: String): String =
+        if (s.length > 120) s.substring(0, 120) + "..." else s
+
+    /** Copia EXPLICITAMENTE al portapapeles del sistema; vacio no copia. */
+    private fun copiarAlPortapapeles(texto: String) {
+        if (texto.isEmpty()) {
+            estado.text = "nada que copiar"
+            return
+        }
+        val clip = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clip.setPrimaryClip(ClipData.newPlainText("Navegador NIA", texto))
+        estado.text = "copiado al portapapeles (" + texto.length + " chars)"
+        traza("gestos", "copiado al portapapeles")
+    }
+
+    /** Comparte un texto resuelto (enlace/imagen del toque largo). */
+    private fun compartirTexto(texto: String) {
+        if (texto.isEmpty()) {
+            estado.text = "sin nada para compartir"
+            return
+        }
+        val envio = Intent(Intent.ACTION_SEND)
+        envio.type = "text/plain"
+        envio.putExtra(Intent.EXTRA_TEXT, texto)
         startActivity(Intent.createChooser(envio, "Compartir"))
     }
 
@@ -1798,3 +1939,4 @@ class BrowserActivity : Activity() {
         private const val REQUEST_DESCARGA = 46
     }
 }
+

@@ -9,8 +9,10 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.Selection
 import android.text.SpannableStringBuilder
+import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
@@ -25,6 +27,10 @@ import nia.engine.devtools.DevToolsModel
 import nia.engine.dom.DomDocument
 import nia.engine.dom.DomException
 import nia.engine.dom.DomHandle
+import nia.engine.gestures.AccionBorde
+import nia.engine.gestures.ConfigGestos
+import nia.engine.gestures.RastreadorBorde
+import nia.engine.gestures.ZoomToque
 import nia.engine.html.DomNode
 import nia.engine.layout.LayoutEngine
 import nia.engine.layout.LayoutResult
@@ -76,7 +82,18 @@ import nia.engine.paint.PaintSceneBuilder
  */
 class PaintView(context: Context) : View(context) {
 
-    private val viewport = 360.0
+    /** T077 v1 (R0195, RES-0093): zoom REAL del documento — el viewport
+     * logico baja de 360 a 360/zoom y el motor RE-MAQUETA el documento
+     * (reflow del layout propio), nunca se escala un bitmap. 1.0 = ancho
+     * de lectura por defecto. */
+    var factorZoom = 1.0
+        private set
+
+    /** Configuracion de gestos del motor (T077, defaults medidos en tests). */
+    private val cfgGestos = ConfigGestos()
+
+    /** Viewport logico efectivo tras el zoom (medida, dibujo y toque). */
+    private val viewport: Double get() = 360.0 / factorZoom
 
     private var document: DomDocument = DomDocument.parse(DemoPage.HTML)
     private var devtoolsModel: DevToolsModel = DevToolsModel(document, DemoPage.CSS)
@@ -113,6 +130,46 @@ class PaintView(context: Context) : View(context) {
     }
 
     private var lastHit: PaintOp? = null
+
+    /** T077 v1 (R0195, RES-0093): gestos base sobre la pagina pintada.
+     * El borde (atras/adelante) y el doble tap se deciden con la logica
+     * PURA del motor (RastreadorBorde/ZoomToque, tests en CI); el
+     * long-press usa el detector del sistema (se cancela solo con el
+     * scroll, sin robar input); la pinza acumula el factor y lo aplica
+     * al SOLTAR para re-maquetear una sola vez por gesto completo. */
+    private var onGestoBorde: ((AccionBorde) -> Unit)? = null
+    private var onToqueLargo: ((InfoToqueLargo) -> Unit)? = null
+    private var rastreadorBorde: RastreadorBorde? = null
+    private val zoomToque = ZoomToque(cfgGestos) { System.currentTimeMillis() }
+    private var pinzaActiva = false
+    private var pinzaBase = 1.0
+    private var pinzaFactor = 1.0
+
+    private val detectorToque = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onLongPress(e: MotionEvent) {
+            val info = infoToqueLargo(e.x, e.y)
+            if (info != null) onToqueLargo?.invoke(info)
+        }
+    })
+
+    private val detectorPinza = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            pinzaActiva = true
+            pinzaBase = factorZoom
+            pinzaFactor = 1.0
+            return true
+        }
+
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            pinzaFactor *= detector.scaleFactor
+            return true
+        }
+
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            pinzaActiva = false
+            fijarZoom(pinzaBase * pinzaFactor)
+        }
+    })
 
     /** T035 v1 (IME): input del documento enfocado; el editor es la
      * verdad mientras el IME esta activo y se vuelca al value del DOM. */
@@ -343,26 +400,125 @@ class PaintView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.action == MotionEvent.ACTION_DOWN) {
-            val scale = width / viewport.toFloat()
-            val docX = (event.x / scale).toDouble()
-            val docY = (event.y / scale).toDouble()
-            val hit = scene.hitTest(docX, docY)
-            lastHit = hit
-            if (hit != null) {
-                val h = devtoolsModel.handleOf(hit.node)
-                if (h != null) DevToolsState.selectedNodeId = h.nodeId
+        // T077 v1 (R0195, RES-0093): los detectores del sistema se
+        // alimentan SIEMPRE (long-press y pinza viven aqui); el borde y
+        // el doble tap se deciden con la logica del motor. La vista
+        // NUNCA roba el scroll: el ScrollView padre intercepta lo
+        // vertical (no se toca el gesto del sistema).
+        detectorToque.onTouchEvent(event)
+        detectorPinza.onTouchEvent(event)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                rastreadorBorde = RastreadorBorde(width.toDouble(), cfgGestos)
+                rastreadorBorde?.down(event.x.toDouble(), event.y.toDouble())
+                if (!pinzaActiva) {
+                    val nuevoZoom = zoomToque.toque(event.x.toDouble(), event.y.toDouble(), factorZoom)
+                    if (nuevoZoom != null) fijarZoom(nuevoZoom)
+                }
+                val scale = width / viewport.toFloat()
+                val docX = (event.x / scale).toDouble()
+                val docY = (event.y / scale).toDouble()
+                val hit = scene.hitTest(docX, docY)
+                lastHit = hit
+                if (hit != null) {
+                    val h = devtoolsModel.handleOf(hit.node)
+                    if (h != null) DevToolsState.selectedNodeId = h.nodeId
+                }
+                focusInput(hit?.node as? DomNode.Element)
+                performClick()
+                invalidate()
+                return true
             }
-            focusInput(hit?.node as? DomNode.Element)
-            performClick()
-            invalidate()
-            return true
+            MotionEvent.ACTION_MOVE -> {
+                if (!pinzaActiva) {
+                    val accion = rastreadorBorde?.move(event.x.toDouble(), event.y.toDouble())
+                        ?: AccionBorde.NINGUNA
+                    if (accion != AccionBorde.NINGUNA) onGestoBorde?.invoke(accion)
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                rastreadorBorde?.up()
+                return true
+            }
+            else -> return super.onTouchEvent(event)
         }
-        return super.onTouchEvent(event)
     }
 
     override fun performClick(): Boolean {
         return super.performClick()
+    }
+
+    /** T077 v1: registra el ejecutor del gesto de borde del shell. */
+    fun setOnGestoBorde(accion: (AccionBorde) -> Unit) {
+        onGestoBorde = accion
+    }
+
+    /** T077 v1: registra el menu propio del toque largo (lo resuelto
+     * via hitTest del motor viaja al shell, nunca al reves). */
+    fun setOnToqueLargo(accion: (InfoToqueLargo) -> Unit) {
+        onToqueLargo = accion
+    }
+
+    /** T077 v1: zoom actual del documento (1.0 = ancho de lectura). */
+    fun zoomActual(): Double = factorZoom
+
+    /** T077 v1: aplica el zoom REAL del motor — RE-MAQUETEO con viewport
+     * 360/zoom (reflow del layout propio), limitado por ConfigGestos;
+     * sin cambios no re-maquetea. Ruta equivalente por menu: Zoom +,
+     * Zoom - y Zoom 100% del BrowserActivity. */
+    fun fijarZoom(factor: Double) {
+        val nuevo = ZoomToque.limitar(factor, cfgGestos)
+        if (nuevo == factorZoom) return
+        factorZoom = nuevo
+        rebuild()
+        requestLayout()
+        invalidate()
+    }
+
+    /** T077 v1: contenido resuelto bajo el toque largo (enlace, imagen
+     * o texto), anclado al documento real del motor. */
+    class InfoToqueLargo(val tipo: String, val url: String, val texto: String)
+
+    /** Resuelve el contenido bajo (x, y): hitTest del motor y subida por
+     * los padres hasta <a href> o <img src>; si no, el texto del nodo. */
+    private fun infoToqueLargo(x: Float, y: Float): InfoToqueLargo? {
+        val scale = width / viewport.toFloat()
+        val hit = scene.hitTest((x / scale).toDouble(), (y / scale).toDouble()) ?: return null
+        var enlace: String? = null
+        var imagen: String? = null
+        var h = devtoolsModel.handleOf(hit.node)
+        var vueltas = 0
+        while (h != null && vueltas < 64) {
+            val n = document.nodeOf(h)
+            if (n is DomNode.Element) {
+                val nombre = n.name.lowercase()
+                if (enlace == null && nombre == "a") {
+                    enlace = try {
+                        document.attributeOf(h, "href")
+                    } catch (e: DomException) {
+                        null
+                    }
+                }
+                if (imagen == null && nombre == "img") {
+                    imagen = try {
+                        document.attributeOf(h, "src")
+                    } catch (e: DomException) {
+                        null
+                    }
+                }
+                if (enlace != null) break
+            }
+            h = parentHandleOf(h)
+            vueltas += 1
+        }
+        val texto = (hit.node as? DomNode.Text)?.data ?: ""
+        return when {
+            enlace != null -> InfoToqueLargo("enlace", enlace ?: "", texto.trim())
+            imagen != null -> InfoToqueLargo("imagen", imagen ?: "", texto.trim())
+            texto.isNotBlank() -> InfoToqueLargo("texto", "", texto.trim())
+            else -> null
+        }
     }
 
     /** T035 v1 (IME): enfoca el input tocado y muestra el teclado; tocar
@@ -568,3 +724,4 @@ class PaintView(context: Context) : View(context) {
             Color.rgb(176, 176, 192)
         }
 }
+
