@@ -977,7 +977,7 @@ class BrowserActivity : Activity() {
             "Cuotas JS",
             "Modulos",
             "Imprimir / PDF",
-            "Permisos por sitio"
+            "Permisos por sitio",
             "Workers / SW"
         )
         AlertDialog.Builder(this)
