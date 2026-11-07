@@ -23,22 +23,45 @@ import nia.engine.broker.Renderer
  * Limitaciones v1: sin firma/hash del paquete (el contenido llega aparte en
  * fases posteriores), sin versiones multiples del mismo id (reinstalar
  * exige uninstall primero), sin activacion parcial y sin eventos.
+ *
+ * T094 v1 (R0226, ADR-005 APROBADO en R0225): schema v2 con claves
+ * OPCIONALES name, description, api-version, category y capabilities
+ * (ADR-005); una version de manifiesto o una api-version futuras se
+ * rechazan con UNSUPPORTED, y capabilities = bloquear exige el
+ * permiso network.fetch (paquete incoherente, ADR-005). Los
+ * manifiestos v1 siguen validos TAL CUAL.
  */
 
 data class ModuleManifest(
     val id: String,
     val version: Int,
     val entry: String,
-    val permissions: Set<String>
+    val permissions: Set<String>,
+    val name: String = "",
+    val description: String = "",
+    val apiVersion: Int = 1,
+    val categories: Set<String> = emptySet(),
+    val capabilities: Set<String> = emptySet()
 )
 
 object ModuleSchema {
-    const val CURRENT_VERSION = 1
+    const val CURRENT_VERSION = 2
     const val MANIFEST_MAX_CHARS = 4096
     const val MAX_ID_CHARS = 64
     const val MAX_ENTRY_CHARS = 256
+    const val MAX_NAME_CHARS = 64
+    const val MAX_DESCRIPTION_CHARS = 256
 
-    val KEYS = setOf("id", "version", "entry", "permissions")
+    val KEYS = setOf(
+        "id", "version", "entry", "permissions",
+        "name", "description", "api-version", "category", "capabilities"
+    )
+
+    /** Categorias combinables del gestor (ADR-005, Delta P9). */
+    val ALLOWED_CATEGORIES = setOf("background", "contextual", "panel")
+
+    /** Capabilities diferenciadas del gestor (ADR-005, Delta P9). */
+    val ALLOWED_CAPABILITIES = setOf("observar", "bloquear", "modificar")
 
     /**
      * Permisos declarables v1: solo operaciones de datos del broker; las
@@ -121,7 +144,53 @@ object ModuleParser {
                 permissions.add(p)
             }
         }
-        return Outcome.success(ModuleManifest(id, version, entry, permissions))
+        val name = values["name"] ?: ""
+        if (name.length > ModuleSchema.MAX_NAME_CHARS) return invalid("name demasiado largo")
+        val description = values["description"] ?: ""
+        if (description.length > ModuleSchema.MAX_DESCRIPTION_CHARS) return invalid("description demasiado larga")
+        val apiRaw = values["api-version"]
+        if (apiRaw != null) {
+            val api = apiRaw.toIntOrNull() ?: return invalid("api-version no valida")
+            if (api != 1) {
+                return Outcome.failure(
+                    ErrorInfo(ErrorCode.UNSUPPORTED, "api-version no soportada")
+                )
+            }
+        }
+        val categories = LinkedHashSet<String>()
+        val catRaw = values["category"]
+        if (catRaw != null) {
+            for (token in catRaw.split(',')) {
+                val c = token.trim()
+                if (c.isEmpty()) return invalid("categoria vacia")
+                if (categories.contains(c)) return invalid("categoria repetida: " + c)
+                if (!ModuleSchema.ALLOWED_CATEGORIES.contains(c)) {
+                    return invalid("categoria no permitida: " + c)
+                }
+                categories.add(c)
+            }
+        }
+        val capabilities = LinkedHashSet<String>()
+        val capRaw = values["capabilities"]
+        if (capRaw != null) {
+            for (token in capRaw.split(',')) {
+                val c = token.trim()
+                if (c.isEmpty()) return invalid("capability vacia")
+                if (capabilities.contains(c)) return invalid("capability repetida: " + c)
+                if (!ModuleSchema.ALLOWED_CAPABILITIES.contains(c)) {
+                    return invalid("capability no permitida: " + c)
+                }
+                capabilities.add(c)
+            }
+        }
+        if (capabilities.contains("bloquear") && !permissions.contains(BrokerOps.NETWORK_FETCH)) {
+            return invalid("bloquear exige el permiso network.fetch")
+        }
+        return Outcome.success(
+            ModuleManifest(
+                id, version, entry, permissions, name, description, 1, categories, capabilities
+            )
+        )
     }
 
     private fun invalid(safe: String): Outcome<ModuleManifest> =

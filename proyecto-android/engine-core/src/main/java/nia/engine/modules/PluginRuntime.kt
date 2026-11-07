@@ -241,6 +241,18 @@ class PluginRuntime(
         if (m.permissions.isNotEmpty()) {
             sb.append("\npermissions = ").append(m.permissions.joinToString(","))
         }
+        if (m.name.isNotEmpty()) {
+            sb.append("\nname = ").append(m.name)
+        }
+        if (m.description.isNotEmpty()) {
+            sb.append("\ndescription = ").append(m.description)
+        }
+        if (m.categories.isNotEmpty()) {
+            sb.append("\ncategory = ").append(m.categories.joinToString(","))
+        }
+        if (m.capabilities.isNotEmpty()) {
+            sb.append("\ncapabilities = ").append(m.capabilities.joinToString(","))
+        }
         return sb.toString()
     }
 

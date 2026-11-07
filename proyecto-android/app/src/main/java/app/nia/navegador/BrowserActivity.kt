@@ -48,6 +48,11 @@ import nia.engine.js.JsLimits
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
+import nia.engine.modules.EstadoModulo
+import nia.engine.modules.FichaModulo
+import nia.engine.modules.GestorModulos
+import nia.engine.modules.ModuleRegistry
+import nia.engine.modules.PluginRuntime
 import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
 import nia.engine.net.PanelIdentidad
@@ -237,6 +242,15 @@ class BrowserActivity : Activity() {
     /** T080 v1 (RES-0097): preferencias por sitio persistidas en
      *  sitios.tsv (clave = origen, NUNCA la URL completa). */
     private val sitios by lazy { SitiosManager(File(filesDir, "sitios.tsv")) }
+
+    /** T094 v1 (R0226, RES-0106, ADR-005): registro y runtime de
+     *  modulos del motor (T009/T029/T030) con el gestor del shell;
+     *  el alcance por sitio persiste en modulos.tsv (lineas
+     *  corruptas ignoradas, ADR-005). */
+    private val registroModulos by lazy { ModuleRegistry() }
+    private val gestorModulos by lazy {
+        GestorModulos(registroModulos, PluginRuntime(registroModulos), File(filesDir, "modulos.tsv"))
+    }
 
     /** T106 v1 (RES-0100): estado de red contextual por pestana. */
     private val red = RegistroRed()
@@ -787,6 +801,7 @@ class BrowserActivity : Activity() {
         }
         nc.invalidateGeneration()
         nc.cuotasScript = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
+        resumenModulos = ""
         progreso.setFraccion(0.2f)
         traza("nav", "navegar " + hostDe(url))
         Thread {
@@ -794,6 +809,7 @@ class BrowserActivity : Activity() {
             val o = nc.navigate(url)
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
             if (scriptsInterrumpidos == 0) reintentosCuotas = 0
+            dispararModulos(o)
             val latencia = clock.nowMillis() - inicio
             runOnUiThread {
                 progreso.setFraccion(0f)
@@ -808,6 +824,7 @@ class BrowserActivity : Activity() {
                         is NavOutcome.Failed -> manejaFallo(o, dominioImplicito, textoOriginal)
                     }
                     estado.append(" | red " + latencia + "ms")
+                    if (resumenModulos.isNotEmpty()) estado.append(" | " + resumenModulos)
                 }
             }
         }.start()
@@ -822,12 +839,14 @@ class BrowserActivity : Activity() {
         }
         nc.invalidateGeneration()
         nc.cuotasScript = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
+        resumenModulos = ""
         progreso.setFraccion(0.2f)
         traza("nav", "back/forward")
         Thread {
             val inicio = clock.nowMillis()
             val o = accion(nc)
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
+            dispararModulos(o)
             if (scriptsInterrumpidos == 0) reintentosCuotas = 0
             val latencia = clock.nowMillis() - inicio
             runOnUiThread {
@@ -847,6 +866,7 @@ class BrowserActivity : Activity() {
                         is NavOutcome.Failed -> manejaFallo(o, false, null)
                     }
                     estado.append(" | red " + latencia + "ms")
+                    if (resumenModulos.isNotEmpty()) estado.append(" | " + resumenModulos)
                 }
             }
         }.start()
@@ -917,7 +937,8 @@ class BrowserActivity : Activity() {
             "Importar marcadores (HTML)",
             "Exportar marcadores (HTML)",
             "Capacidades",
-            "Cuotas JS"
+            "Cuotas JS",
+            "Modulos"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -957,6 +978,7 @@ class BrowserActivity : Activity() {
                     27 -> exportarMarcadoresHtml()
                     28 -> mostrarCapacidades()
                     29 -> mostrarCuotasJs()
+                    30 -> mostrarModulos()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1295,6 +1317,11 @@ class BrowserActivity : Activity() {
     @Volatile
     private var scriptsInterrumpidos = 0
 
+    /** T094 v1: resumen de la ultima ronda de onNavigate a modulos
+     * (escrito en el hilo de navegacion, leido en la UI). */
+    @Volatile
+    private var resumenModulos = ""
+
     /** Dialogo de cuotas visibles (T100): mapa honesto de la
      * interrupcion (pasos/allocs/tiempo y lo que NO miden), cuotas
      * activas tras los reintentos, conteo de scripts interrumpidos y
@@ -1346,6 +1373,212 @@ class BrowserActivity : Activity() {
             if (s.output.contains("interrupted")) n += 1
         }
         return n
+    }
+
+    /** T094 v1 (R0226, RES-0106, ADR-005): gestor de modulos del
+     *  shell sobre el registro (T009) y el runtime (T029/T030) del
+     *  motor. Lista fichas con estado y actividad; sin modulos
+     *  ofrece instalar el demo embebido (el canal .niamod con firma
+     *  llega con el instalador T095); tocar una ficha abre el
+     *  detalle con las acciones reales del runtime. */
+    private fun mostrarModulos() {
+        val fichas = gestorModulos.fichas()
+        traza("modulos", "gestor abierto con " + fichas.size + " modulo(s)")
+        if (fichas.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Modulos")
+                .setMessage(
+                    "Sin modulos instalados. El instalador de paquetes .niamod con firma llega con la tarea de instalacion (T095); por ahora puede instalarse el modulo demo embebido, que observa navegaciones sin bloquear nada (ADR-005)."
+                )
+                .setPositiveButton("Instalar demo") { _, _ -> instalarDemoModulo() }
+                .setNegativeButton("Cerrar", null)
+                .show()
+            return
+        }
+        val lineas = ArrayList<String>()
+        for (f in fichas) {
+            lineas.add(f.id + " - " + textoEstadoModulo(f) + " (" + f.disparos + " disparos)")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Modulos (" + fichas.size + ")")
+            .setItems(lineas.toTypedArray()) { _, cual -> detalleModulo(fichas[cual].id) }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Texto honesto del estado (T094, ADR-005): DESACTIVADO sin
+     *  sesion, ACTIVO con hooks, ERROR con fallos contados (fail-open:
+     *  sigue activo, un modulo roto JAMAS rompe la navegacion). */
+    private fun textoEstadoModulo(f: FichaModulo): String = when (f.estado) {
+        EstadoModulo.DESACTIVADO -> "desactivado"
+        EstadoModulo.ACTIVO -> "activo"
+        EstadoModulo.ERROR -> "activo con errores"
+    }
+
+    private fun instalarDemoModulo() {
+        val r = gestorModulos.instalarDemo()
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo instalar el demo: " + r.error.safeMessage
+            traza("modulos", "instalar demo fallo")
+            return
+        }
+        estado.text = "modulo demo instalado y activo"
+        traza("modulos", "demo instalado y activo")
+    }
+
+    /** Detalle del modulo (T094): metadatos del manifiesto, hooks
+     *  registrados, actividad explicada (disparos/errores/ultimo
+     *  veredicto), alcance y estado honesto de firma/actualizacion
+     *  (el canal .niamod llega con T095); las acciones viven en un
+     *  dialogo propio para no mezclar lectura y ejecucion. */
+    private fun detalleModulo(id: String) {
+        val f = gestorModulos.ficha(id)
+        if (f == null) {
+            estado.text = "modulo no encontrado: " + id
+            return
+        }
+        val sb = StringBuilder()
+        sb.append("id: ").append(f.id).append('\n')
+        sb.append("nombre: ").append(f.name).append('\n')
+        if (f.description.isNotEmpty()) {
+            sb.append("descripcion: ").append(f.description).append('\n')
+        }
+        sb.append("version: ").append(f.version).append(" (api-version 1)").append('\n')
+        sb.append("entry: ").append(f.entry).append('\n')
+        sb.append("permisos: ")
+            .append(if (f.permissions.isEmpty()) "ninguno" else f.permissions.joinToString(", "))
+            .append('\n')
+        sb.append("categorias: ")
+            .append(if (f.categories.isEmpty()) "sin declarar" else f.categories.joinToString(", "))
+            .append('\n')
+        sb.append("capabilities: ")
+            .append(if (f.capabilities.isEmpty()) "sin declarar" else f.capabilities.joinToString(", "))
+            .append('\n')
+        sb.append("estado: ").append(textoEstadoModulo(f)).append('\n')
+        sb.append("hooks: startup=").append(f.hooksStartup)
+            .append(" navigate=").append(f.hooksNavigate)
+            .append(" request=").append(f.hooksRequest).append('\n')
+        sb.append("actividad: disparos=").append(f.disparos)
+            .append(" errores=").append(f.errores).append('\n')
+        if (f.ultimoVeredicto.isNotEmpty()) {
+            sb.append("ultimo veredicto: ").append(f.ultimoVeredicto).append('\n')
+        }
+        sb.append("alcance: ")
+            .append(if (f.alcanceGlobal) "global" else "solo " + f.alcanceOrigenes.size + " origen(es)")
+            .append('\n')
+        sb.append("firma: no (paquete demo in-process; el canal .niamod llega con T095)")
+        AlertDialog.Builder(this)
+            .setTitle("Modulo: " + f.id)
+            .setMessage(sb.toString())
+            .setPositiveButton("Acciones") { _, _ -> accionesModulo(id) }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Acciones del modulo (T094): activar/desactivar, alcance
+     *  global/sitio (es del HOST, ADR-005) y desinstalar con
+     *  confirmacion explicita (ADR-019). */
+    private fun accionesModulo(id: String) {
+        val acciones = arrayOf(
+            "Activar o desactivar",
+            "Solo en este sitio",
+            "Hacer global",
+            "Desinstalar"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Acciones del modulo: " + id)
+            .setItems(acciones) { _, cual ->
+                when (cual) {
+                    0 -> alternarModulo(id)
+                    1 -> limitarModuloASitio(id)
+                    2 -> globalizarModulo(id)
+                    3 -> confirmarDesinstalarModulo(id)
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun alternarModulo(id: String) {
+        val f = gestorModulos.ficha(id) ?: return
+        if (f.estado == EstadoModulo.DESACTIVADO) {
+            val r = gestorModulos.activar(id)
+            if (r is Outcome.Failure) {
+                estado.text = "no se pudo activar: " + r.error.safeMessage
+                traza("modulos", "activar fallo: " + id)
+                return
+            }
+            estado.text = "modulo activo: " + id
+            traza("modulos", "activado: " + id)
+        } else {
+            val r = gestorModulos.desactivar(id)
+            if (r is Outcome.Failure) {
+                estado.text = "no se pudo desactivar: " + r.error.safeMessage
+                traza("modulos", "desactivar fallo: " + id)
+                return
+            }
+            estado.text = "modulo desactivado: " + id
+            traza("modulos", "desactivado: " + id)
+        }
+    }
+
+    private fun limitarModuloASitio(id: String) {
+        val o = origenSitioActual()
+        if (o == null) {
+            estado.text = "sin origen en la pagina actual"
+            return
+        }
+        val clave = o.scheme + "://" + o.host + ":" + o.port
+        val r = gestorModulos.soloEnEsteSitio(id, clave)
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo limitar: " + r.error.safeMessage
+            return
+        }
+        estado.text = "modulo solo en " + o.host
+        traza("modulos", "alcance sitio: " + id + " (" + o.host + ")")
+    }
+
+    private fun globalizarModulo(id: String) {
+        val r = gestorModulos.hacerGlobal(id)
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo globalizar: " + r.error.safeMessage
+            return
+        }
+        estado.text = "modulo global: " + id
+        traza("modulos", "alcance global: " + id)
+    }
+
+    private fun confirmarDesinstalarModulo(id: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Desinstalar modulo")
+            .setMessage("Se retira el modulo " + id + " por completo: sesion, permisos del broker, alcance y contadores. Desinstalar?")
+            .setPositiveButton("Desinstalar") { _, _ ->
+                val r = gestorModulos.desinstalar(id)
+                if (r is Outcome.Failure) {
+                    estado.text = "no se pudo desinstalar: " + r.error.safeMessage
+                    traza("modulos", "desinstalar fallo: " + id)
+                    return@setPositiveButton
+                }
+                estado.text = "modulo desinstalado: " + id
+                traza("modulos", "desinstalado: " + id)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** T094 v1: notifica onNavigate a los modulos activos con alcance
+     *  en el origen de la carga (fail-open, ADR-005); corre en el hilo
+     *  de navegacion y solo deja el resumen en un campo volatile para
+     *  el estado de la UI: JAMAS lanza y JAMAS toca la traza desde el
+     *  hilo de fondo. */
+    private fun dispararModulos(o: NavOutcome?) {
+        if (o !is NavOutcome.Loaded) return
+        val t = o.page.origin as? Origin.Tuple ?: return
+        val clave = t.scheme + "://" + t.host + ":" + t.port
+        val res = gestorModulos.dispararNavegar(clave, o.page.url)
+        if (res.disparados > 0) {
+            resumenModulos = "modulos " + res.disparados + " notificado(s), errores: " + res.errores
+        }
     }
 
     private fun zoomMas() {

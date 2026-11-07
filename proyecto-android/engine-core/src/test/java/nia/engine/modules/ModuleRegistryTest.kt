@@ -85,7 +85,7 @@ class ModuleRegistryTest {
     }
 
     @Test fun versionFuturaRechazado() {
-        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n"
+        val texto = "id = demo.modulo" + "\n" + "version = 3" + "\n" + "entry = main.js" + "\n"
         assertEquals(ErrorCode.UNSUPPORTED, fallo(ModuleRegistry().install(texto)).code)
     }
 
@@ -200,5 +200,56 @@ class ModuleRegistryTest {
         ok(rb.handshake())
         assertEquals(ErrorCode.DENIED, fallo(ra.request(BrokerOps.NETWORK_FETCH)).code)
         assertEquals(ErrorCode.DENIED, fallo(rb.request(BrokerOps.STORAGE_READ)).code)
+    }
+
+    @Test fun v2AceptaClavesOpcionales() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" +
+            "entry = main.js" + "\n" +
+            "name = Modulo demo" + "\n" +
+            "description = Observa navegaciones sin bloquear nada" + "\n" +
+            "category = background, panel" + "\n" +
+            "capabilities = observar" + "\n" +
+            "api-version = 1" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals("Modulo demo", mod.manifest.name)
+        assertEquals(2, mod.manifest.version)
+        assertTrue(mod.manifest.categories.contains("background"))
+        assertTrue(mod.manifest.categories.contains("panel"))
+        assertTrue(mod.manifest.capabilities.contains("observar"))
+        assertEquals(1, mod.manifest.apiVersion)
+    }
+
+    @Test fun v2SinClavesOpcionalesValido() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals("", mod.manifest.name)
+        assertTrue(mod.manifest.categories.isEmpty())
+        assertTrue(mod.manifest.capabilities.isEmpty())
+        assertEquals(1, mod.manifest.apiVersion)
+    }
+
+    @Test fun apiVersionFuturaRechazado() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "api-version = 2" + "\n"
+        assertEquals(ErrorCode.UNSUPPORTED, fallo(ModuleRegistry().install(texto)).code)
+    }
+
+    @Test fun bloquearSinRedRechazado() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "capabilities = bloquear" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
+    }
+
+    @Test fun bloquearConRedValido() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch" + "\n" + "capabilities = bloquear, observar" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertTrue(mod.manifest.capabilities.contains("bloquear"))
+    }
+
+    @Test fun categoriaInvalidaRechazado() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "category = toolbar" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
     }
 }
