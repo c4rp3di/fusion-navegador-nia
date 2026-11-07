@@ -111,6 +111,20 @@ class CookieJar(private val clock: WallClock) {
         return true
     }
 
+    /** T101 v1 (RES-0099): borra la cookie con identidad compuesta
+     *  (nombre, dominio, ruta, host-only) - la MISMA identidad del
+     *  reemplazo de storeFromResponse (RFC 6265 5.3) - y devuelve si
+     *  existia; el resto de cookies queda intacto. */
+    fun borrarUna(nombre: String, dominio: String, ruta: String, hostOnly: Boolean): Boolean {
+        val idx = cookies.indexOfFirst {
+            it.name == nombre && it.domain == dominio &&
+                it.path == ruta && it.hostOnly == hostOnly
+        }
+        if (idx < 0) return false
+        cookies.removeAt(idx)
+        return true
+    }
+
     /**
      * Cabecera Cookie para una peticion hacia (host, path): las cookies
      * caducadas fuera, ordenadas por longitud de ruta y creacion.

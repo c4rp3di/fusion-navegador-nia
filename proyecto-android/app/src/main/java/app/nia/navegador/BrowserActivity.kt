@@ -42,6 +42,7 @@ import nia.engine.history.HistoryManager
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
+import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
 import nia.engine.net.PanelIdentidad
 import nia.engine.omnibox.OmniboxInput
@@ -863,7 +864,8 @@ class BrowserActivity : Activity() {
             "Texto - (reducir)",
             "Escritorio (viewport 720)",
             "Restaurar sitio",
-            "Datos del sitio"
+            "Datos del sitio",
+            "Cookies"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -896,6 +898,7 @@ class BrowserActivity : Activity() {
                     20 -> alternarEscritorio()
                     21 -> restaurarSitio()
                     22 -> mostrarDatosSitio()
+                    23 -> gestorCookies()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1080,6 +1083,61 @@ class BrowserActivity : Activity() {
                 val borrado = DatosSitio.borrar(perfil.cookies, perfil.cache, o.scheme, o.host, o.port)
                 traza("datos-sitio", "borrado cookies=" + borrado.cookies + " cache=" + borrado.cache)
                 estado.text = "sitio borrado: cookies=" + borrado.cookies + " cache=" + borrado.cache
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** T101 v1 (RES-0099): gestor de cookies del perfil de la
+     *  pestana: filas REALES del CookieJar con los SECRETOS OCULTOS
+     *  por defecto (revelar es consentimiento explicito), borrado
+     *  individual por identidad compuesta (nombre, dominio, ruta,
+     *  host-only) con confirmacion y borrado total con confirmacion
+     *  ADR-019; el borrado por sitio vive en Datos del sitio (T085). */
+    private fun gestorCookies(mostrarValores: Boolean = false) {
+        val perfil = tabs.perfil(tipoActivo())
+        if (perfil == null) {
+            estado.text = "sin perfil vivo"
+            return
+        }
+        val jar = perfil.cookies
+        val ahora = clock.nowMillis()
+        val filas = GestorCookies.filas(jar, mostrarValores, ahora)
+        val lineas = ArrayList<String>()
+        for (f in filas) lineas.add(GestorCookies.texto(f))
+        if (lineas.isEmpty()) lineas.add("(sin cookies)")
+        traza("cookies", "gestor abierto con " + filas.size + " cookies")
+        AlertDialog.Builder(this)
+            .setTitle("Cookies (" + filas.size + ")")
+            .setItems(lineas.toTypedArray()) { _, cual ->
+                if (filas.isEmpty()) return@setItems
+                val f = filas[cual]
+                AlertDialog.Builder(this)
+                    .setTitle("Borrar cookie")
+                    .setMessage(GestorCookies.texto(f))
+                    .setPositiveButton("Borrar") { _, _ ->
+                        val ok = jar.borrarUna(f.nombre, f.dominio, f.ruta, f.hostOnly)
+                        estado.text = if (ok) "cookie borrada: " + f.nombre else "cookie no encontrada"
+                        traza("cookies", "borrada " + f.nombre + "@" + f.dominio + f.ruta + (if (ok) "" else " (no encontrada)"))
+                        gestorCookies(mostrarValores)
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+            .setPositiveButton(if (mostrarValores) "Ocultar valores" else "Mostrar valores") { _, _ ->
+                gestorCookies(!mostrarValores)
+            }
+            .setNeutralButton("Borrar todas") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("Borrar todas las cookies")
+                    .setMessage("Se borraran TODAS las cookies del perfil de la pestana. Borrar?")
+                    .setPositiveButton("Borrar") { _, _ ->
+                        val n = jar.clear()
+                        estado.text = "cookies borradas (" + n + ")"
+                        traza("cookies", "borradas todas (" + n + ")")
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
             }
             .setNegativeButton("Cerrar", null)
             .show()
