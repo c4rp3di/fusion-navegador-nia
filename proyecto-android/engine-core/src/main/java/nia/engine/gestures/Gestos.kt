@@ -15,8 +15,8 @@ import kotlin.math.abs
  *   vertical domina: el scroll del sistema manda y NUNCA se roba un
  *   gesto que empieza vertical. Solo dispara UNA vez por toque y solo
  *   hacia dentro de la pantalla.
- * - Pull-to-refresh OFF por defecto (PoliticaPullRefresh): v1 se
- *   niega siempre; T078 lo hara configurable.
+ * - Pull-to-refresh OFF por defecto (PoliticaPullRefresh): T078 lo
+ *   configura (gestos.pull-refresh, OFF por defecto).
  * - Zoom por doble tap (toggle 1x/2x) y por pinza (factor acumulado
  *   con limites): el zoom es REAL del motor — el viewport logico baja
  *   de 360 a 360/zoom y el documento se RE-MAQUETA (reflow), no se
@@ -46,8 +46,20 @@ data class ConfigGestos(
     val ocultarDpx: Double = 24.0,
     /** Scroll ascendente acumulado que la vuelve a mostrar. */
     val mostrarDpx: Double = 12.0,
-    /** Pull-to-refresh desactivado por defecto (T078 lo configurara). */
-    val pullToRefresh: Boolean = false
+    /** Pull-to-refresh desactivado por defecto (T078 lo configura). */
+    val pullToRefresh: Boolean = false,
+    /** T078: toggle del swipe de borde atras/adelante. */
+    val swipe: Boolean = true,
+    /** T078: toggle del zoom por doble tap. */
+    val dobleTap: Boolean = true,
+    /** T078: toggle del zoom por pinza. */
+    val pinza: Boolean = true,
+    /** T078: toggle del auto-ocultado de la barra de URL. */
+    val barra: Boolean = true,
+    /** T078: sobrescroll acumulado que dispara el pull-to-refresh. */
+    val pullUmbralPx: Double = 64.0,
+    /** T078: el tiron debe completarse en menos de este tiempo (ms). */
+    val pullMaxMs: Long = 800L
 )
 
 /** Accion de borde decidida por el rastreador. */
@@ -218,4 +230,65 @@ class PoliticaPullRefresh(private val cfg: ConfigGestos = ConfigGestos()) {
 
     /** Estado de la politica (OFF por defecto en T077). */
     fun habilitado(): Boolean = cfg.pullToRefresh
+}
+
+/**
+ * T078 v1 (R0199, RES-0094): tiron de pull-to-refresh decidido en el
+ * MOTOR. El shell alimenta con el sobrescroll REAL del borde
+ * superior (deltaY > 0 = tirar hacia abajo) y el reloj se inyecta
+ * como en ZoomToque; refresca SOLO si el gesto esta habilitado
+ * (ConfigGestos.pullToRefresh), el acumulado cruza pullUmbralPx y el
+ * tiron entero dura menos de pullMaxMs (los tirones lentos se
+ * descartan). Soltar o cancelar dejan el rastreador listo para el
+ * siguiente tiron: el acumulado NUNCA se arrastra.
+ */
+class TironRefresh(private val cfg: ConfigGestos = ConfigGestos()) {
+    private var activo = false
+    private var acumulado = 0.0
+    private var t0 = 0L
+    private var dentroTiempo = true
+
+    /** Acumula un trozo de sobrescroll descendente; el tiron arranca
+     * solo con el primero (el padre puede interceptar el gesto y
+     * este ver solo los move). deltaY <= 0 no ensucia el acumulado
+     * (el scroll normal vive fuera del tiron). */
+    fun mover(deltaY: Double, t: Long) {
+        if (!cfg.pullToRefresh) {
+            return
+        }
+        if (!activo) {
+            activo = true
+            acumulado = 0.0
+            t0 = t
+            dentroTiempo = true
+        }
+        if (deltaY <= 0.0) {
+            return
+        }
+        acumulado += deltaY
+        if (t - t0 > cfg.pullMaxMs) {
+            dentroTiempo = false
+        }
+    }
+
+    /** Suelta del toque: decide si refresca y queda listo para el
+     * siguiente tiron. */
+    fun soltar(t: Long): Boolean {
+        if (activo && t - t0 > cfg.pullMaxMs) {
+            dentroTiempo = false
+        }
+        val refrescar = activo && dentroTiempo && acumulado >= cfg.pullUmbralPx
+        activo = false
+        acumulado = 0.0
+        return refrescar
+    }
+
+    /** Cancela el tiron en curso (el scroll robo el gesto). */
+    fun cancelar() {
+        activo = false
+        acumulado = 0.0
+    }
+
+    /** Sobrescroll acumulado del tiron en curso (feedback). */
+    fun distancia(): Double = acumulado
 }

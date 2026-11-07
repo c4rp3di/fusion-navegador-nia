@@ -203,6 +203,7 @@ jobs:
             engine-core/src/test/java/nia/engine/settings/SettingsManagerTest.kt \
             engine-core/src/main/java/nia/engine/lectura/Lector.kt \
             engine-core/src/test/java/nia/engine/lectura/LectorTest.kt \
+            engine-core/src/main/java/nia/engine/gestures/AjustesGestos.kt \
             engine-core/src/main/java/nia/engine/gestures/Gestos.kt \
             engine-core/src/test/java/nia/engine/gestures/GestosTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \

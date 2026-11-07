@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -33,7 +34,10 @@ import nia.engine.download.DownloadState
 import nia.engine.download.ReopenableSink
 import nia.engine.errors.ErrorPages
 import nia.engine.gestures.AccionBorde
+import nia.engine.gestures.AjustesGestos
+import nia.engine.gestures.ConfigGestos
 import nia.engine.gestures.OcultadorBarra
+import nia.engine.gestures.TironRefresh
 import nia.engine.history.HistoryManager
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
@@ -316,6 +320,9 @@ class BrowserActivity : Activity() {
                 TipoOpcion.BOOL, "false", disponible = false
             )
         )
+        // T078 v1 (R0199, RES-0094): la seccion Gestos del motor; los
+        // ids, los rangos y los defectos viven en AjustesGestos.
+        AjustesGestos.registrar(s)
         s.recargar()
         s
     }
@@ -327,12 +334,18 @@ class BrowserActivity : Activity() {
     private lateinit var estado: TextView
     private lateinit var progreso: NiaProgressBar
     private lateinit var pagina: PaintView
-    private lateinit var scroll: ScrollView
+    private lateinit var scroll: ScrollTiron
     private lateinit var filaOmnibox: LinearLayout
     /** T077 v1 (R0195, RES-0093): la barra de URL se oculta al bajar y
      * reaparece al subir o al llegar al borde superior (histeresis de
      * la logica del motor, sin parpadeo con micro-scrolls). */
     private val ocultadorBarra = OcultadorBarra()
+
+    /** T078 v1 (R0199, RES-0094): cfg de gestos VIVA reconstruida
+     * desde Ajustes (aplicarGestos) y tiron de pull-to-refresh del
+     * motor alimentado por el ScrollTiron. */
+    private var cfgGestos = ConfigGestos()
+    private var tiron = TironRefresh()
     private lateinit var filaPestanas: LinearLayout
     private var panelIdentidad: String = ""
 
@@ -446,7 +459,7 @@ class BrowserActivity : Activity() {
 
         pagina = PaintView(this)
         pagina.loadPagina(paginaNueva(), cssNavegador(), true)
-        scroll = ScrollView(this)
+        scroll = ScrollTiron(this)
         scroll.setBackgroundColor(NiaUi.color(colores.bg))
         scroll.addView(
             pagina,
@@ -491,9 +504,34 @@ class BrowserActivity : Activity() {
         }
         pagina.setOnToqueLargo { info -> mostrarMenuToque(info) }
         scroll.setOnScrollChangeListener { _, _, nuevaY, _, viejaY ->
-            val mostrar = ocultadorBarra.scroll((nuevaY - viejaY).toDouble(), nuevaY <= 0)
+            // T078 v1: con la barra fija (gestos.barra off) el
+            // ocultador se ignora y la barra queda SIEMPRE visible.
+            val mostrar = if (cfgGestos.barra) {
+                ocultadorBarra.scroll((nuevaY - viejaY).toDouble(), nuevaY <= 0)
+            } else {
+                true
+            }
             filaOmnibox.visibility = if (mostrar) LinearLayout.VISIBLE else LinearLayout.GONE
         }
+
+        // T078 v1 (R0199, RES-0094): el tiron de pull-to-refresh se
+        // decide en el MOTOR (TironRefresh con umbral y tiempo de
+        // Ajustes); el ScrollTiron observa el sobrescroll REAL del
+        // borde superior y al soltar se recarga por la MISMA ruta del
+        // boton (rutas equivalentes). OFF por defecto.
+        scroll.onTiron = { dy ->
+            tiron.mover(dy, System.currentTimeMillis())
+        }
+        scroll.onSoltar = {
+            if (tiron.soltar(System.currentTimeMillis())) {
+                estado.text = "tiron: recargando"
+                traza("gestos", "tiron: recarga por pull-to-refresh")
+                recargar()
+            }
+        }
+
+        // T078 v1: aplica la cfg PERSISTIDA de gestos desde el arranque.
+        aplicarGestos()
 
         // T075 v1 (R0184): aviso de deshacer al cerrar una pestana.
         avisoCierre = LinearLayout(this)
@@ -806,6 +844,29 @@ class BrowserActivity : Activity() {
     private fun zoomMenos() {
         pagina.fijarZoom(pagina.zoomActual() / 1.25)
         estado.text = "zoom " + (pagina.zoomActual() * 100).toInt() + "%"
+    }
+
+    /** T078 v1 (R0199, RES-0094): reconstruye la cfg de gestos desde
+     * Ajustes y la aplica EN CALIENTE (al arrancar y con cada cambio
+     * de la seccion Gestos): toggles por gesto, banda y umbral del
+     * borde, umbral y tiempo del tiron; recovery a los defectos del
+     * motor si algo falta. Con gestos.barra off la barra vuelve a
+     * verse y queda fija. */
+    private fun aplicarGestos() {
+        cfgGestos = AjustesGestos.config(ajustes)
+        pagina.actualizarGestos(cfgGestos)
+        tiron = TironRefresh(cfgGestos)
+        if (!cfgGestos.barra) {
+            ocultadorBarra.reset()
+            filaOmnibox.visibility = LinearLayout.VISIBLE
+        }
+        traza(
+            "gestos",
+            "cfg: swipe=" + cfgGestos.swipe + " dobleTap=" + cfgGestos.dobleTap +
+                " pinza=" + cfgGestos.pinza + " barra=" + cfgGestos.barra +
+                " pull=" + cfgGestos.pullToRefresh + " borde=" + cfgGestos.bordePx +
+                " umbral=" + cfgGestos.umbralSwipePx
+        )
     }
 
     private fun mostrarIdentidad() {
@@ -1841,6 +1902,7 @@ class BrowserActivity : Activity() {
                 if (ajustes.asignar(op.id, nuevo)) {
                     estado.text = op.titulo + " = " + ajustes.valor(op.id)
                     traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                    if (op.id.startsWith("gestos.")) aplicarGestos()
                 }
             }
             TipoOpcion.ENTERO -> pedirAjuste(op, "entre " + op.minimo + " y " + op.maximo)
@@ -1882,6 +1944,7 @@ class BrowserActivity : Activity() {
                 if (ajustes.asignar(op.id, nuevo)) {
                     estado.text = op.titulo + " = " + ajustes.valor(op.id)
                     traza("ajustes", "cambiado " + op.id + " a " + nuevo)
+                    if (op.id.startsWith("gestos.")) aplicarGestos()
                 } else {
                     estado.text = "valor invalido para " + op.titulo
                     traza("ajustes", "valor invalido para " + op.id)
@@ -1934,6 +1997,38 @@ class BrowserActivity : Activity() {
             "p{margin-top:8px}" +
             "input{display:block;padding:10px;border-width:1px;border-color:" + colores.surface +
             ";background-color:#23233f;color:#f0eef8;font-size:14px;margin-top:8px}"
+
+    /** T078 v1 (R0199, RES-0094): ScrollView que expone el
+     * SOBRESCROLL REAL del borde superior al TironRefresh del motor
+     * (deltaY > 0 = tirar hacia abajo) y avisa al soltar; NUNCA roba
+     * el scroll: solo observa. */
+    private class ScrollTiron(context: Context) : ScrollView(context) {
+        var onTiron: ((Double) -> Unit)? = null
+        var onSoltar: (() -> Unit)? = null
+
+        override fun overScrollBy(
+            deltaX: Int, deltaY: Int, scrollX: Int, scrollY: Int,
+            scrollRangeX: Int, scrollRangeY: Int, maxOverScrollX: Int,
+            maxOverScrollY: Int, isTouchEvent: Boolean
+        ): Boolean {
+            if (isTouchEvent && scrollY <= 0 && deltaY < 0) {
+                onTiron?.invoke(-deltaY.toDouble())
+            }
+            return super.overScrollBy(
+                deltaX, deltaY, scrollX, scrollY, scrollRangeX, scrollRangeY,
+                maxOverScrollX, maxOverScrollY, isTouchEvent
+            )
+        }
+
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            if (ev.actionMasked == MotionEvent.ACTION_UP ||
+                ev.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                onSoltar?.invoke()
+            }
+            return super.onTouchEvent(ev)
+        }
+    }
 
     companion object {
         private const val REQUEST_DESCARGA = 46

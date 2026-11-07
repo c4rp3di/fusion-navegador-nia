@@ -1,5 +1,6 @@
 package nia.engine.gestures
 
+import nia.engine.settings.SettingsManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -207,5 +208,182 @@ class GestosTest {
         assertTrue(p.habilitado())
         assertTrue(p.debeRefrescar(true))
         assertFalse(p.debeRefrescar(false))
+    }
+
+    // ---- T078 v1 (R0199, RES-0094): tiron de pull-to-refresh ----
+
+    @Test
+    fun tironApagadoNuncaRefresca() {
+        val t = TironRefresh()
+        t.mover(100.0, 0L)
+        t.mover(100.0, 100L)
+        assertFalse(t.soltar(200L))
+    }
+
+    @Test
+    fun tironBajoElUmbralNoRefresca() {
+        val t = TironRefresh(ConfigGestos(pullToRefresh = true))
+        t.mover(30.0, 0L)
+        t.mover(30.0, 100L)
+        assertFalse(t.soltar(200L))
+    }
+
+    @Test
+    fun tironSobreElUmbralEnTiempoRefresca() {
+        val t = TironRefresh(ConfigGestos(pullToRefresh = true))
+        t.mover(30.0, 0L)
+        t.mover(40.0, 100L)
+        assertTrue(t.soltar(200L))
+    }
+
+    @Test
+    fun tironLentoSeDescarta() {
+        val t = TironRefresh(ConfigGestos(pullToRefresh = true))
+        t.mover(60.0, 0L)
+        t.mover(40.0, 400L)
+        t.mover(40.0, 900L)
+        assertFalse(t.soltar(950L))
+    }
+
+    @Test
+    fun tironCanceladoNoRefresca() {
+        val t = TironRefresh(ConfigGestos(pullToRefresh = true))
+        t.mover(40.0, 0L)
+        t.mover(40.0, 100L)
+        t.cancelar()
+        assertFalse(t.soltar(200L))
+    }
+
+    @Test
+    fun tironSueltaYArrancaDeNuevoLimpio() {
+        val t = TironRefresh(ConfigGestos(pullToRefresh = true))
+        t.mover(70.0, 0L)
+        assertTrue(t.soltar(100L))
+        t.mover(30.0, 200L)
+        assertFalse(t.soltar(300L))
+    }
+
+    @Test
+    fun tironIgnoraElMovimientoHaciaArriba() {
+        val t = TironRefresh(ConfigGestos(pullToRefresh = true))
+        t.mover(70.0, 0L)
+        t.mover(-50.0, 100L)
+        assertEquals(70.0, t.distancia(), 1e-9)
+        assertTrue(t.soltar(200L))
+    }
+
+    // ---- T078 v1: AjustesGestos (seccion Gestos del armazon) ----
+
+    @Test
+    fun ajustesGestosRegistranNueveOpciones() {
+        val s = SettingsManager()
+        assertTrue(AjustesGestos.registrar(s))
+        assertEquals(9, s.contar())
+        assertTrue(s.secciones().contains("Gestos"))
+    }
+
+    @Test
+    fun ajustesGestosNoRegistranDosVeces() {
+        val s = SettingsManager()
+        assertTrue(AjustesGestos.registrar(s))
+        assertFalse(AjustesGestos.registrar(s))
+    }
+
+    @Test
+    fun configDeGestosPorDefectoEsLaDelMotor() {
+        val s = SettingsManager()
+        AjustesGestos.registrar(s)
+        val c = AjustesGestos.config(s)
+        val d = ConfigGestos()
+        assertEquals(d.bordePx, c.bordePx, 1e-9)
+        assertEquals(d.umbralSwipePx, c.umbralSwipePx, 1e-9)
+        assertEquals(d.swipe, c.swipe)
+        assertEquals(d.dobleTap, c.dobleTap)
+        assertEquals(d.pinza, c.pinza)
+        assertEquals(d.barra, c.barra)
+        assertEquals(d.pullToRefresh, c.pullToRefresh)
+        assertEquals(d.pullUmbralPx, c.pullUmbralPx, 1e-9)
+        assertEquals(d.pullMaxMs, c.pullMaxMs)
+    }
+
+    @Test
+    fun configAplicaLosCambiosEnCaliente() {
+        val s = SettingsManager()
+        AjustesGestos.registrar(s)
+        assertTrue(s.asignar("gestos.swipe", "false"))
+        assertTrue(s.asignar("gestos.borde", "8"))
+        assertTrue(s.asignar("gestos.umbral-swipe", "200"))
+        assertTrue(s.asignar("gestos.pull-refresh", "true"))
+        assertTrue(s.asignar("gestos.pull-umbral", "240"))
+        assertTrue(s.asignar("gestos.pull-tiempo", "2000"))
+        val c = AjustesGestos.config(s)
+        assertFalse(c.swipe)
+        assertEquals(8.0, c.bordePx, 1e-9)
+        assertEquals(200.0, c.umbralSwipePx, 1e-9)
+        assertTrue(c.pullToRefresh)
+        assertEquals(240.0, c.pullUmbralPx, 1e-9)
+        assertEquals(2000L, c.pullMaxMs)
+    }
+
+    @Test
+    fun configRecuperaADefectosSinRegistro() {
+        val s = SettingsManager()
+        val c = AjustesGestos.config(s)
+        val d = ConfigGestos()
+        assertEquals(d.bordePx, c.bordePx, 1e-9)
+        assertEquals(d.umbralSwipePx, c.umbralSwipePx, 1e-9)
+        assertEquals(d.swipe, c.swipe)
+        assertFalse(c.pullToRefresh)
+    }
+
+    @Test
+    fun elArmazonRechazaValoresFueraDeRango() {
+        val s = SettingsManager()
+        AjustesGestos.registrar(s)
+        assertFalse(s.asignar("gestos.borde", "999"))
+        assertFalse(s.asignar("gestos.borde", "4"))
+        assertFalse(s.asignar("gestos.umbral-swipe", "201"))
+        assertFalse(s.asignar("gestos.pull-tiempo", "100"))
+        assertEquals("24", s.valor("gestos.borde"))
+        assertEquals("72", s.valor("gestos.umbral-swipe"))
+        assertEquals("800", s.valor("gestos.pull-tiempo"))
+    }
+
+    @Test
+    fun restablecerGestosVuelveADefectos() {
+        val s = SettingsManager()
+        AjustesGestos.registrar(s)
+        s.asignar("gestos.swipe", "false")
+        s.asignar("gestos.pull-refresh", "true")
+        s.asignar("gestos.borde", "8")
+        assertTrue(s.restablecer("gestos.swipe"))
+        assertTrue(s.restablecer("gestos.pull-refresh"))
+        assertTrue(s.restablecer("gestos.borde"))
+        val c = AjustesGestos.config(s)
+        assertTrue(c.swipe)
+        assertFalse(c.pullToRefresh)
+        assertEquals(24.0, c.bordePx, 1e-9)
+    }
+
+    @Test
+    fun restablecerTodoCubreLosGestos() {
+        val s = SettingsManager()
+        AjustesGestos.registrar(s)
+        s.asignar("gestos.swipe", "false")
+        s.asignar("gestos.pull-umbral", "32")
+        assertEquals(2, s.restablecerTodo())
+        val c = AjustesGestos.config(s)
+        assertTrue(c.swipe)
+        assertEquals(64.0, c.pullUmbralPx, 1e-9)
+    }
+
+    @Test
+    fun gestosViajanEnElExportSinSecretos() {
+        val s = SettingsManager()
+        AjustesGestos.registrar(s)
+        s.asignar("gestos.pull-refresh", "true")
+        val e = s.exportar()
+        assertTrue(e.contains("S	gestos.swipe	true"))
+        assertTrue(e.contains("S	gestos.pull-refresh	true"))
     }
 }

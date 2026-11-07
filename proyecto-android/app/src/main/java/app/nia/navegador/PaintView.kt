@@ -89,8 +89,9 @@ class PaintView(context: Context) : View(context) {
     var factorZoom = 1.0
         private set
 
-    /** Configuracion de gestos del motor (T077, defaults medidos en tests). */
-    private val cfgGestos = ConfigGestos()
+    /** T078 v1 (R0199, RES-0094): configuracion VIVA de gestos; se
+     * aplica EN CALIENTE desde Ajustes (actualizarGestos). */
+    private var cfgGestos = ConfigGestos()
 
     /** Viewport logico efectivo tras el zoom (medida, dibujo y toque). */
     private val viewport: Double get() = 360.0 / factorZoom
@@ -140,7 +141,7 @@ class PaintView(context: Context) : View(context) {
     private var onGestoBorde: ((AccionBorde) -> Unit)? = null
     private var onToqueLargo: ((InfoToqueLargo) -> Unit)? = null
     private var rastreadorBorde: RastreadorBorde? = null
-    private val zoomToque = ZoomToque(cfgGestos) { System.currentTimeMillis() }
+    private var zoomToque = ZoomToque(cfgGestos) { System.currentTimeMillis() }
     private var pinzaActiva = false
     private var pinzaBase = 1.0
     private var pinzaFactor = 1.0
@@ -154,6 +155,9 @@ class PaintView(context: Context) : View(context) {
 
     private val detectorPinza = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            if (!cfgGestos.pinza) {
+                return false
+            }
             pinzaActiva = true
             pinzaBase = factorZoom
             pinzaFactor = 1.0
@@ -409,9 +413,9 @@ class PaintView(context: Context) : View(context) {
         detectorPinza.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                rastreadorBorde = RastreadorBorde(width.toDouble(), cfgGestos)
+                rastreadorBorde = if (cfgGestos.swipe) RastreadorBorde(width.toDouble(), cfgGestos) else null
                 rastreadorBorde?.down(event.x.toDouble(), event.y.toDouble())
-                if (!pinzaActiva) {
+                if (!pinzaActiva && cfgGestos.dobleTap) {
                     val nuevoZoom = zoomToque.toque(event.x.toDouble(), event.y.toDouble(), factorZoom)
                     if (nuevoZoom != null) fijarZoom(nuevoZoom)
                 }
@@ -462,6 +466,16 @@ class PaintView(context: Context) : View(context) {
 
     /** T077 v1: zoom actual del documento (1.0 = ancho de lectura). */
     fun zoomActual(): Double = factorZoom
+
+    /** T078 v1 (R0199, RES-0094): configura los gestos EN CALIENTE
+     * desde Ajustes (toggle por gesto, banda y umbral del borde): el
+     * rastreador nace por toque con la cfg nueva, el ZoomToque se
+     * reconstruye limpio y los limites de zoom aplican al proximo
+     * fijarZoom. Sin re-maquetar la pagina ni tocar el scroll. */
+    fun actualizarGestos(cfg: ConfigGestos) {
+        cfgGestos = cfg
+        zoomToque = ZoomToque(cfg) { System.currentTimeMillis() }
+    }
 
     /** T077 v1: aplica el zoom REAL del motor — RE-MAQUETEO con viewport
      * 360/zoom (reflow del layout propio), limitado por ConfigGestos;
