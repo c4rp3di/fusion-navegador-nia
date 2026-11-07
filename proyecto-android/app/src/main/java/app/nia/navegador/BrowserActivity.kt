@@ -21,6 +21,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executors
 import nia.contracts.ContractsVersion
@@ -48,11 +49,14 @@ import nia.engine.js.JsLimits
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
+import nia.engine.modules.AprobacionPaquete
+import nia.engine.modules.EstadoClave
 import nia.engine.modules.EstadoModulo
 import nia.engine.modules.FichaModulo
 import nia.engine.modules.GestorModulos
 import nia.engine.modules.ModuleRegistry
 import nia.engine.modules.PluginRuntime
+import nia.engine.modules.PreviaPaquete
 import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
 import nia.engine.net.PanelIdentidad
@@ -1391,6 +1395,7 @@ class BrowserActivity : Activity() {
                     "Sin modulos instalados. El instalador de paquetes .niamod con firma llega con la tarea de instalacion (T095); por ahora puede instalarse el modulo demo embebido, que observa navegaciones sin bloquear nada (ADR-005)."
                 )
                 .setPositiveButton("Instalar demo") { _, _ -> instalarDemoModulo() }
+                .setNeutralButton("Instalar .niamod") { _, _ -> pedirNiamod() }
                 .setNegativeButton("Cerrar", null)
                 .show()
             return
@@ -1402,6 +1407,7 @@ class BrowserActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Modulos (" + fichas.size + ")")
             .setItems(lineas.toTypedArray()) { _, cual -> detalleModulo(fichas[cual].id) }
+            .setNeutralButton("Instalar .niamod") { _, _ -> pedirNiamod() }
             .setNegativeButton("Cerrar", null)
             .show()
     }
@@ -1579,6 +1585,68 @@ class BrowserActivity : Activity() {
         if (res.disparados > 0) {
             resumenModulos = "modulos " + res.disparados + " notificado(s), errores: " + res.errores
         }
+    }
+
+    /** T095 v1 (RES-0107, ADR-005): pide un paquete .niamod por SAF. */
+    private fun pedirNiamod() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.setType("*/*")
+        startActivityForResult(i, REQUEST_INSTALAR_NIAMOD)
+        traza("modulos", "instalar niamod: pidiendo documento")
+    }
+
+    /** Previa del paquete (T095, ADR-028): el usuario ve id, permisos,
+     *  huellas y estado de confianza ANTES de confirmar; los permisos
+     *  nuevos de un update se destacan porque exigen reconfirmacion. */
+    private fun instalarDesdeNiamod(bytes: ByteArray) {
+        val previa = when (val p = gestorModulos.previsualizarPaquete(bytes)) {
+            is Outcome.Failure -> {
+                estado.text = "paquete rechazado: " + p.error.safeMessage
+                traza("modulos", "niamod rechazado: " + p.error.code.name)
+                return
+            }
+            is Outcome.Success -> p.value
+        }
+        val sb = StringBuilder()
+        sb.append("id: ").append(previa.id)
+        sb.append("\nnombre: ").append(previa.name)
+        sb.append("\nversion: ").append(previa.version)
+        sb.append("\nentry: ").append(previa.entry)
+        sb.append("\npermisos: ").append(previa.permisos.joinToString(", "))
+        if (previa.permisosNuevos.isNotEmpty()) {
+            sb.append("\nPERMISOS NUEVOS: ").append(previa.permisosNuevos.joinToString(", "))
+        }
+        sb.append("\nhuella paquete: ").append(previa.huellaPaquete)
+        sb.append("\nhuella clave: ").append(previa.huellaClave)
+        sb.append("\n").append(textoConfianza(previa.estadoClave))
+        AlertDialog.Builder(this)
+            .setTitle("Instalar modulo")
+            .setMessage(sb.toString())
+            .setPositiveButton("Confirmar") { _, _ -> confirmarNiamod(bytes, previa) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Texto honesto de la confianza (T095, ADR-005/ADR-028). */
+    private fun textoConfianza(estado: EstadoClave): String = when (estado) {
+        EstadoClave.NUEVA_AUTORIA -> "confianza: autor nuevo (confirmar ancla su clave)"
+        EstadoClave.MISMA_CLAVE -> "confianza: clave anclada (mismo autor)"
+        EstadoClave.ROTACION_PENDIENTE -> "confianza: rotacion declarada por el autor (next-key)"
+        EstadoClave.CAMBIO_MANUAL -> "confianza: CAMBIO DE CLAVE SIN next-key (reaprobacion manual)"
+    }
+
+    /** Instala con la aprobacion que vio la previa (T095, ADR-028). */
+    private fun confirmarNiamod(bytes: ByteArray, previa: PreviaPaquete) {
+        val r = gestorModulos.instalarPaquete(bytes, AprobacionPaquete(previa.huellaClave, true))
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo instalar: " + r.error.safeMessage
+            traza("modulos", "niamod rechazado al instalar: " + r.error.code.name)
+            return
+        }
+        estado.text = "modulo instalado: " + previa.id
+        traza("modulos", "niamod instalado: " + previa.id)
+        mostrarModulos()
     }
 
     private fun zoomMas() {
@@ -2386,6 +2454,38 @@ class BrowserActivity : Activity() {
                 traza("marcadores", "importar html fallo al leer")
             }
         }
+        if (requestCode == REQUEST_INSTALAR_NIAMOD && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "instalar modulo: sin documento"
+                return
+            }
+            try {
+                val entrada = contentResolver.openInputStream(uri)
+                if (entrada == null) {
+                    estado.text = "instalar modulo: no se pudo leer el documento"
+                    return
+                }
+                val baos = ByteArrayOutputStream()
+                val buf = ByteArray(65536)
+                entrada.use { s ->
+                    while (true) {
+                        val n = s.read(buf)
+                        if (n < 0) break
+                        if (baos.size() > 4 * 1024 * 1024) {
+                            estado.text = "paquete demasiado grande (tope 4 MiB)"
+                            traza("modulos", "niamod rechazado: demasiado grande")
+                            return
+                        }
+                        baos.write(buf, 0, n)
+                    }
+                }
+                instalarDesdeNiamod(baos.toByteArray())
+            } catch (e: Exception) {
+                estado.text = "instalar modulo: no se pudo leer el documento"
+                traza("modulos", "niamod fallo al leer")
+            }
+        }
         if (requestCode == REQUEST_EXPORT_MARCADORES && resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri == null) {
@@ -2903,6 +3003,7 @@ class BrowserActivity : Activity() {
         private const val REQUEST_DESCARGA = 46
         private const val REQUEST_IMPORT_MARCADORES = 47
         private const val REQUEST_EXPORT_MARCADORES = 48
+        private const val REQUEST_INSTALAR_NIAMOD = 49
     }
 }
 

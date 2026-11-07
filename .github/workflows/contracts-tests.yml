@@ -228,6 +228,8 @@ jobs:
             engine-core/src/test/java/nia/engine/js/CuotasJsTest.kt \
             engine-core/src/main/java/nia/engine/modules/GestorModulos.kt \
             engine-core/src/test/java/nia/engine/modules/GestorModulosTest.kt \
+            engine-core/src/main/java/nia/engine/modules/Niamod.kt \
+            engine-core/src/test/java/nia/engine/modules/NiamodTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

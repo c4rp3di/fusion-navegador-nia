@@ -54,17 +54,48 @@ data class FichaModulo(
     val ultimoVeredicto: String
 )
 
+/** Confianza de un paquete frente al ancla del id (T095, ADR-005). */
+enum class EstadoClave { NUEVA_AUTORIA, MISMA_CLAVE, ROTACION_PENDIENTE, CAMBIO_MANUAL }
+
+/** Previa de un paquete .niamod para pedir la aprobacion del usuario
+ *  (ADR-028: instalar = anclar con consentimiento explicito). */
+data class PreviaPaquete(
+    val id: String,
+    val name: String,
+    val version: Int,
+    val entry: String,
+    val permisos: Set<String>,
+    val categories: Set<String>,
+    val capabilities: Set<String>,
+    val huellaPaquete: String,
+    val huellaClave: String,
+    val nextHuella: String?,
+    val esUpdate: Boolean,
+    val permisosNuevos: List<String>,
+    val estadoClave: EstadoClave
+)
+
+/** Aprobacion explicita del usuario: cita la huella de clave que EL
+ *  VIO en la previa (el gestor rechaza una aprobacion de otra huella). */
+data class AprobacionPaquete(
+    val huellaAprobada: String,
+    val aceptaNuevosPermisos: Boolean
+)
+
 /** Gestor sobre el registro y el runtime del motor. */
 class GestorModulos(
     private val registry: ModuleRegistry,
     private val runtime: PluginRuntime,
-    private val almacen: File? = null
+    private val almacen: File? = null,
+    private val claves: File? = null
 ) {
     private val codigos = HashMap<String, String>()
     private val disparos = HashMap<String, Int>()
     private val errores = HashMap<String, Int>()
     private val veredictos = HashMap<String, String>()
     private val alcances = HashMap<String, Alcance>()
+    private val ancladas = HashMap<String, String>()
+    private val pendientes = HashMap<String, String>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
     data class Alcance(val global: Boolean, val origenes: Set<String>) {
@@ -73,6 +104,7 @@ class GestorModulos(
 
     init {
         if (almacen != null) cargar()
+        if (claves != null) cargarClaves()
     }
 
     /** Fichas de todos los modulos instalados, en orden de instalacion. */
@@ -142,6 +174,128 @@ class GestorModulos(
             return Outcome.failure(carga.error)
         }
         codigos[mod.id] = codigo
+        return Outcome.success(Unit)
+    }
+
+    /** Previa del paquete .niamod (T095, ADR-005): el usuario ve TODO
+     *  (id, permisos, huella del paquete y de la clave, estado de
+     *  confianza, permisos nuevos en update) ANTES de aprobar. */
+    @Synchronized
+    fun previsualizarPaquete(bytes: ByteArray): Outcome<PreviaPaquete> {
+        return when (val p = Niamod.inspeccionar(bytes)) {
+            is Outcome.Failure -> Outcome.failure(p.error)
+            is Outcome.Success -> Outcome.success(previa(p.value)
+            )
+        }
+    }
+
+    private fun previa(p: PaqueteNiamod): PreviaPaquete {
+        val id = p.manifest.id
+        val anclada = ancladas[id]
+        val estado = when {
+            anclada == null -> EstadoClave.NUEVA_AUTORIA
+            p.huellaClave == anclada -> EstadoClave.MISMA_CLAVE
+            pendientes[id] == p.huellaClave -> EstadoClave.ROTACION_PENDIENTE
+            else -> EstadoClave.CAMBIO_MANUAL
+        }
+        val actuales = if (registry.isInstalled(id)) {
+            registry.manifestOf(id)?.permissions ?: emptySet()
+        } else {
+            emptySet()
+        }
+        val nuevos = ArrayList<String>()
+        for (perm in p.manifest.permissions) {
+            if (!actuales.contains(perm)) nuevos.add(perm)
+        }
+        return PreviaPaquete(
+            id, p.manifest.name, p.manifest.version, p.manifest.entry,
+            p.manifest.permissions, p.manifest.categories, p.manifest.capabilities,
+            p.huellaPaquete, p.huellaClave, p.nextHuella,
+            registry.isInstalled(id), nuevos, estado
+        )
+    }
+
+    /**
+     * Instala un paquete .niamod validado por Niamod (T095, ADR-005):
+     * instalar = anclar la huella sha256(SPKI) del autor con la
+     * aprobacion explicita que EL VIO (la aprobacion debe citar la
+     * huella real: una aprobacion de otra huella se rechaza); update
+     * firmado por la clave anclada; rotacion de UN paso via next-key;
+     * sin next-key, un cambio de clave exige reaprobacion manual
+     * JAMAS silenciosa; permisos nuevos reconfirmados. Si el modulo
+     * estaba activo el update usa el rollback de T030 (si falla, el
+     * modulo viejo revive); si estaba desactivado, el registro se
+     * sustituye sin sesion (sigue desactivado, nada a medias).
+     */
+    @Synchronized
+    fun instalarPaquete(bytes: ByteArray, aprobacion: AprobacionPaquete): Outcome<Unit> {
+        val p = when (val r = Niamod.inspeccionar(bytes)) {
+            is Outcome.Failure -> return Outcome.failure(r.error)
+            is Outcome.Success -> r.value
+        }
+        val id = p.manifest.id
+        val anclada = ancladas[id]
+        if (anclada == null) {
+            if (aprobacion.huellaAprobada != p.huellaClave) {
+                return Outcome.failure(
+                    ErrorInfo(ErrorCode.DENIED, "instalar exige aprobar la huella del autor")
+                )
+            }
+        } else if (p.huellaClave != anclada &&
+            pendientes[id] != p.huellaClave &&
+            aprobacion.huellaAprobada != p.huellaClave
+        ) {
+            return Outcome.failure(
+                ErrorInfo(ErrorCode.DENIED, "cambio de clave exige reaprobacion manual")
+            )
+        }
+        val esUpdate = registry.isInstalled(id)
+        if (esUpdate) {
+            val actuales = registry.manifestOf(id)?.permissions ?: emptySet()
+            val nuevos = ArrayList<String>()
+            for (perm in p.manifest.permissions) {
+                if (!actuales.contains(perm)) nuevos.add(perm)
+            }
+            if (!nuevos.isEmpty() && !aprobacion.aceptaNuevosPermisos) {
+                return Outcome.failure(
+                    ErrorInfo(ErrorCode.DENIED, "permisos nuevos exigen reconfirmacion")
+                )
+            }
+            if (runtime.sessionOf(id) != null) {
+                val upd = runtime.update(id, p.manifiestoTexto, p.entryTexto)
+                if (upd is Outcome.Failure) return Outcome.failure(upd.error)
+            } else {
+                val viejo = registry.manifestOf(id)
+                if (viejo == null) {
+                    return Outcome.failure(
+                        ErrorInfo(ErrorCode.INVALID_INPUT, "modulo sin manifiesto: " + id)
+                    )
+                }
+                val textoViejo = runtime.manifestTexto(viejo)
+                registry.uninstall(id)
+                val instalado = registry.install(p.manifiestoTexto)
+                if (instalado is Outcome.Failure) {
+                    registry.install(textoViejo)
+                    return Outcome.failure(instalado.error)
+                }
+            }
+        } else {
+            val instalado = registry.install(p.manifiestoTexto)
+            if (instalado is Outcome.Failure) return Outcome.failure(instalado.error)
+            val carga = runtime.load(id, p.entryTexto)
+            if (carga is Outcome.Failure) {
+                registry.uninstall(id)
+                return Outcome.failure(carga.error)
+            }
+        }
+        codigos[id] = p.entryTexto
+        ancladas[id] = p.huellaClave
+        if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
+            pendientes[id] = p.nextHuella
+        } else {
+            pendientes.remove(id)
+        }
+        guardarClaves()
         return Outcome.success(Unit)
     }
 
@@ -274,6 +428,42 @@ class GestorModulos(
                     }
                     else -> {} // linea corrupta: se ignora
                 }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Persistencia best-effort del anillo de confianza (T095,
+     *  ADR-005): id, huella anclada y pendiente de rotacion; lineas
+     *  corruptas se ignoran; desinstalar NO borra el anillo (el autor
+     *  ya aprobado no exige reaprobacion al reinstalar). */
+    private fun guardarClaves() {
+        if (claves == null) return
+        try {
+            val sb = StringBuilder()
+            for ((id, h) in ancladas) {
+                sb.append(id).append('\t').append(h)
+                val pend = pendientes[id]
+                if (pend != null) sb.append('\t').append(pend)
+                sb.append('\n')
+            }
+            claves.writeText(sb.toString())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun cargarClaves() {
+        if (claves == null || !claves.exists()) return
+        try {
+            for (linea in claves.readText().lines()) {
+                val t = linea.trim()
+                if (t.isEmpty()) continue
+                val p = t.split('\t')
+                if (p.size < 2) continue
+                if (!ModuleSchema.validId(p[0])) continue
+                if (p[1].length != 64) continue
+                ancladas[p[0]] = p[1]
+                if (p.size >= 3 && p[2].length == 64) pendientes[p[0]] = p[2]
             }
         } catch (_: Exception) {
         }

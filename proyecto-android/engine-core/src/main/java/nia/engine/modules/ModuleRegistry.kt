@@ -30,6 +30,11 @@ import nia.engine.broker.Renderer
  * rechazan con UNSUPPORTED, y capabilities = bloquear exige el
  * permiso network.fetch (paquete incoherente, ADR-005). Los
  * manifiestos v1 siguen validos TAL CUAL.
+ *
+ * T095 v1 (R0227, ADR-005): claves OPCIONALES author-key y next-key
+ * (SPKI base64; next-key exige author-key y debe diferir); el ancla
+ * de confianza sha256(SPKI) y la firma ECDSA viven en Niamod y en el
+ * gestor (instalar = anclar, ADR-028).
  */
 
 data class ModuleManifest(
@@ -41,7 +46,9 @@ data class ModuleManifest(
     val description: String = "",
     val apiVersion: Int = 1,
     val categories: Set<String> = emptySet(),
-    val capabilities: Set<String> = emptySet()
+    val capabilities: Set<String> = emptySet(),
+    val authorKey: String = "",
+    val nextKey: String = ""
 )
 
 object ModuleSchema {
@@ -54,7 +61,8 @@ object ModuleSchema {
 
     val KEYS = setOf(
         "id", "version", "entry", "permissions",
-        "name", "description", "api-version", "category", "capabilities"
+        "name", "description", "api-version", "category", "capabilities",
+        "author-key", "next-key"
     )
 
     /** Categorias combinables del gestor (ADR-005, Delta P9). */
@@ -186,11 +194,38 @@ object ModuleParser {
         if (capabilities.contains("bloquear") && !permissions.contains(BrokerOps.NETWORK_FETCH)) {
             return invalid("bloquear exige el permiso network.fetch")
         }
+        val authorKey = values["author-key"] ?: ""
+        if (authorKey.isNotEmpty() && !spkiValida(authorKey)) {
+            return invalid("author-key no es un SPKI base64 valido")
+        }
+        val nextKey = values["next-key"] ?: ""
+        if (nextKey.isNotEmpty() && !spkiValida(nextKey)) {
+            return invalid("next-key no es un SPKI base64 valido")
+        }
+        if (nextKey.isNotEmpty() && authorKey.isEmpty()) {
+            return invalid("next-key exige author-key")
+        }
+        if (nextKey.isNotEmpty() && nextKey == authorKey) {
+            return invalid("next-key debe diferir de author-key")
+        }
         return Outcome.success(
             ModuleManifest(
-                id, version, entry, permissions, name, description, 1, categories, capabilities
+                id, version, entry, permissions, name, description, 1,
+                categories, capabilities, authorKey, nextKey
             )
         )
+    }
+
+    /** SPKI base64 plausible (T095): decodifica a un DER SEQUENCE de
+     *  tamano acotado; el parseo criptografico lo hace Niamod. */
+    private fun spkiValida(s: String): Boolean {
+        if (s.isEmpty() || s.length > 1024) return false
+        return try {
+            val dec = java.util.Base64.getDecoder().decode(s)
+            dec.isNotEmpty() && dec.size <= 512 && dec[0].toInt() == 0x30
+        } catch (_: IllegalArgumentException) {
+            false
+        }
     }
 
     private fun invalid(safe: String): Outcome<ModuleManifest> =

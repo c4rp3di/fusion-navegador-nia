@@ -253,6 +253,12 @@ class PluginRuntime(
         if (m.capabilities.isNotEmpty()) {
             sb.append("\ncapabilities = ").append(m.capabilities.joinToString(","))
         }
+        if (m.authorKey.isNotEmpty()) {
+            sb.append("\nauthor-key = ").append(m.authorKey)
+        }
+        if (m.nextKey.isNotEmpty()) {
+            sb.append("\nnext-key = ").append(m.nextKey)
+        }
         return sb.toString()
     }
 
