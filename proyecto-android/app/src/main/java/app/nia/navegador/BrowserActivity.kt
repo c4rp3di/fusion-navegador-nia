@@ -70,6 +70,10 @@ import nia.engine.modules.ModuleRegistry
 import nia.engine.modules.PluginRuntime
 import nia.engine.modules.PreviaPaquete
 import nia.engine.paint.PaintOp
+import nia.engine.permisos.AmbitoPermiso
+import nia.engine.permisos.FilaPermiso
+import nia.engine.permisos.GestorPermisos
+import nia.engine.permisos.TipoPermiso
 import nia.engine.print.DocumentoPaginado
 import nia.engine.print.Impresor
 import nia.engine.print.Orientacion
@@ -263,6 +267,11 @@ class BrowserActivity : Activity() {
     /** T080 v1 (RES-0097): preferencias por sitio persistidas en
      *  sitios.tsv (clave = origen, NUNCA la URL completa). */
     private val sitios by lazy { SitiosManager(File(filesDir, "sitios.tsv")) }
+
+    /** T089 v1 (RES-0109): broker de permisos por sitio del motor
+     *  (permisos.tsv, solo decisiones permanentes): sin backend
+     *  registrado NINGUNA API se anuncia habilitada. */
+    private val permisos by lazy { GestorPermisos(File(filesDir, "permisos.tsv")) }
 
     /** T094 v1 (R0226, RES-0106, ADR-005): registro y runtime de
      *  modulos del motor (T009/T029/T030) con el gestor del shell;
@@ -960,7 +969,8 @@ class BrowserActivity : Activity() {
             "Capacidades",
             "Cuotas JS",
             "Modulos",
-            "Imprimir / PDF"
+            "Imprimir / PDF",
+            "Permisos por sitio"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -1002,10 +1012,95 @@ class BrowserActivity : Activity() {
                     29 -> mostrarCuotasJs()
                     30 -> mostrarModulos()
                     31 -> imprimirPagina()
+                    32 -> mostrarPermisos()
                 }
             }
             .setNegativeButton("Cerrar", null)
             .show()
+    }
+
+    /** T089 v1 (RES-0109): dialogo de permisos POR SITIO sobre el
+     *  GestorPermisos del motor: estado REAL de disponibilidad (sin
+     *  backend NINGUNA API se anuncia habilitada), decisiones
+     *  guardadas con revocacion por sitio y revocacion total con
+     *  confirmacion (ADR-019). Revocar sube la generacion: las
+     *  respuestas de dialogos en vuelo quedan STALE y el acceso se
+     *  corta EN SEGUIDA (la tabla del gestor es la unica fuente). */
+    private fun mostrarPermisos() {
+        val filas = permisos.listar()
+        val disponibles = TipoPermiso.values().filter { permisos.disponible(it) }
+        val mensaje = if (disponibles.isEmpty()) {
+            "Ningun backend de permisos existe en esta version: camara, microfono, geolocalizacion, notificaciones y portapapeles NO se anuncian habilitadas y ninguna pagina puede solicitarlos."
+        } else {
+            "Backends disponibles: " + disponibles.joinToString(", ") { nombrePermiso(it) } + "."
+        }
+        traza("permisos", "abiertos con " + filas.size + " decisiones")
+        AlertDialog.Builder(this)
+            .setTitle("Permisos por sitio")
+            .setMessage(mensaje)
+            .setItems(etiquetasPermisos(filas).toTypedArray()) { _, cual ->
+                if (filas.isEmpty()) return@setItems
+                detallePermiso(filas[cual])
+            }
+            .setPositiveButton("Revocar todo") { _, _ -> confirmarRevocarTodo() }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** T089 v1: una linea por decision (origen, tipo, veredicto y ambito). */
+    private fun etiquetasPermisos(filas: List<FilaPermiso>): List<String> {
+        if (filas.isEmpty()) return listOf("(sin decisiones guardadas)")
+        val etiquetas = ArrayList<String>()
+        for (f in filas) {
+            etiquetas.add(
+                f.clave + " | " + nombrePermiso(f.tipo) + " | " +
+                    (if (f.permitido) "permitido" else "denegado") + " (" +
+                    (if (f.ambito == AmbitoPermiso.SESION) "sesion" else "permanente") + ")"
+            )
+        }
+        return etiquetas
+    }
+
+    /** T089 v1: detalle de una decision con revocacion inmediata. */
+    private fun detallePermiso(fila: FilaPermiso) {
+        AlertDialog.Builder(this)
+            .setTitle(nombrePermiso(fila.tipo) + " - " + fila.clave)
+            .setMessage(
+                "Decision: " + (if (fila.permitido) "permitido" else "denegado") +
+                    " (" + (if (fila.ambito == AmbitoPermiso.SESION) "hasta el fin de sesion" else "permanente") +
+                    "). Revocar la devuelve a preguntar y corta el acceso de inmediato."
+            )
+            .setPositiveButton("Revocar") { _, _ ->
+                val ok = permisos.revocar(fila.clave, fila.tipo)
+                estado.text = if (ok) "permiso revocado" else "sin permiso que revocar"
+                traza("permisos", "revocado " + fila.clave + " " + fila.tipo.name)
+                mostrarPermisos()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** T089 v1: revocacion total con confirmacion (ADR-019). */
+    private fun confirmarRevocarTodo() {
+        AlertDialog.Builder(this)
+            .setTitle("Revocar todos los permisos")
+            .setMessage("Se borran TODAS las decisiones de permisos de todos los sitios (vuelven a preguntar). Seguro?")
+            .setPositiveButton("Revocar todo") { _, _ ->
+                val n = permisos.revocarTodo()
+                estado.text = "permisos revocados (" + n + ")"
+                traza("permisos", "revocadas todas (" + n + ")")
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** T089 v1: nombre legible de un tipo de permiso. */
+    private fun nombrePermiso(t: TipoPermiso): String = when (t) {
+        TipoPermiso.CAMARA -> "camara"
+        TipoPermiso.MICROFONO -> "microfono"
+        TipoPermiso.GEOLOCALIZACION -> "geolocalizacion"
+        TipoPermiso.NOTIFICACIONES -> "notificaciones"
+        TipoPermiso.PORTAPAPELES -> "portapapeles"
     }
 
     /** T077 v1 (R0195, RES-0093): rutas equivalentes POR MENU de los
