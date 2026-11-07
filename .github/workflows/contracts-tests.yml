@@ -2,6 +2,8 @@ name: contracts-tests
 
 on:
   push:
+    paths-ignore:
+      - ESTADO*.md
   workflow_dispatch:
 
 defaults:
