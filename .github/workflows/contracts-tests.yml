@@ -210,6 +210,8 @@ jobs:
             engine-core/src/test/java/nia/engine/seleccion/SeleccionTest.kt \
             engine-core/src/main/java/nia/engine/busqueda/Busqueda.kt \
             engine-core/src/test/java/nia/engine/busqueda/BusquedaTest.kt \
+            engine-core/src/main/java/nia/engine/sitios/AjustesSitio.kt \
+            engine-core/src/test/java/nia/engine/sitios/AjustesSitioTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

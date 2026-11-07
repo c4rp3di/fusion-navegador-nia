@@ -98,8 +98,12 @@ class PaintView(context: Context) : View(context) {
      * aplica EN CALIENTE desde Ajustes (actualizarGestos). */
     private var cfgGestos = ConfigGestos()
 
+    /** T080 v1 (RES-0097): viewport logico de BASE por sitio — 360
+     *  (movil) o 720 (escritorio); el zoom sigue aplicando encima. */
+    var baseViewport: Double = 360.0
+
     /** Viewport logico efectivo tras el zoom (medida, dibujo y toque). */
-    private val viewport: Double get() = 360.0 / factorZoom
+    private val viewport: Double get() = baseViewport / factorZoom
 
     private var document: DomDocument = DomDocument.parse(DemoPage.HTML)
     private var devtoolsModel: DevToolsModel = DevToolsModel(document, DemoPage.CSS)
@@ -537,6 +541,18 @@ class PaintView(context: Context) : View(context) {
         val nuevo = ZoomToque.limitar(factor, cfgGestos)
         if (nuevo == factorZoom) return
         factorZoom = nuevo
+        rebuild()
+        requestLayout()
+        invalidate()
+    }
+
+    /** T080 v1 (RES-0097): fija el viewport logico de base (720 en
+     *  escritorio, 360 en movil); re-maqueta como el zoom, NUNCA un
+     *  bitmap. Ruta del shell: aplicarSitio y menu Escritorio. */
+    fun fijarBaseViewport(px: Double) {
+        val nuevo = if (px <= 0.0) 360.0 else px
+        if (nuevo == baseViewport) return
+        baseViewport = nuevo
         rebuild()
         requestLayout()
         invalidate()

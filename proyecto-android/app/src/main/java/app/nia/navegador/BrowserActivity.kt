@@ -59,6 +59,12 @@ import nia.engine.themes.NiaTokens
 import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 import nia.engine.seleccion.FragmentoUrl
+import nia.engine.sitios.AjustesSitio
+import nia.engine.sitios.PrefSitio
+import nia.engine.sitios.SitiosManager
+import nia.engine.url.Origin
+import nia.engine.url.UrlParseException
+import nia.engine.url.UrlParser
 
 /**
  * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1 + T076 v1 + T086 v1 + T082 v1, RES-0091 + RES-0092, R0191): shell estetico
@@ -218,6 +224,13 @@ class BrowserActivity : Activity() {
      * jamas se registra y la URL se guarda sin query (redaccion).
      * Persiste en filesDir; un archivo corrupto se ignora. */
     private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
+
+    /** T080 v1 (RES-0097): preferencias por sitio persistidas en
+     *  sitios.tsv (clave = origen, NUNCA la URL completa). */
+    private val sitios by lazy { SitiosManager(File(filesDir, "sitios.tsv")) }
+
+    /** T080 v1: escala de texto del sitio actual (1.0 = 16px base). */
+    private var textoSitio = 1.0
 
     /** Cola de descargas del navegador (T086 v1): DownloadEngine real
      * del motor (T046) sobre el transporte de la app con reintentos y
@@ -844,7 +857,11 @@ class BrowserActivity : Activity() {
             "Buscar en la pagina",
             "Zoom + (acercar)",
             "Zoom - (alejar)",
-            "Zoom 100%"
+            "Zoom 100%",
+            "Texto + (agrandar)",
+            "Texto - (reducir)",
+            "Escritorio (viewport 720)",
+            "Restaurar sitio"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -869,8 +886,13 @@ class BrowserActivity : Activity() {
                     16 -> zoomMenos()
                     17 -> {
                         pagina.fijarZoom(1.0)
+                        guardarZoomSitio()
                         estado.text = "zoom 100%"
                     }
+                    18 -> textoMas()
+                    19 -> textoMenos()
+                    20 -> alternarEscritorio()
+                    21 -> restaurarSitio()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -937,13 +959,98 @@ class BrowserActivity : Activity() {
         scroll.smoothScrollTo(0, (y - 200f).coerceAtLeast(0f).toInt())
     }
 
+    /** T080 v1 (RES-0097): clave de ORIGEN del sitio actual o null
+     *  sin URL/origen definido (about:, opacos): SIN origen NO se
+     *  persiste nada y aplican los defectos. */
+    private fun claveSitioActual(): String? {
+        val url = navActual()?.currentPage()?.url ?: return null
+        return claveSitio(url)
+    }
+
+    /** T080 v1: clave (scheme://host:puerto efectivo) de una URL. */
+    private fun claveSitio(url: String): String? {
+        return try {
+            when (val o = Origin.of(UrlParser.parse(url))) {
+                is Origin.Tuple -> o.scheme + "://" + o.host + ":" + o.port
+                else -> null
+            }
+        } catch (e: UrlParseException) {
+            null
+        }
+    }
+
+    /** T080 v1: aplica al motor las preferencias del sitio (viewport
+     *  de base, zoom y escala de texto para el CSS); SIN origen
+     *  aplica los defectos. La recarga conserva las preferencias. */
+    private fun aplicarSitio(url: String) {
+        val clave = claveSitio(url)
+        val pref = if (clave == null) PrefSitio() else sitios.obtener(clave)
+        textoSitio = pref.texto
+        pagina.fijarBaseViewport(AjustesSitio.viewportBase(pref.escritorio))
+        pagina.fijarZoom(pref.zoom)
+    }
+
+    /** T080 v1: persiste el zoom actual como preferencia del sitio. */
+    private fun guardarZoomSitio() {
+        val clave = claveSitioActual() ?: return
+        val p = sitios.obtener(clave)
+        sitios.fijar(clave, p.copy(zoom = pagina.zoomActual()))
+    }
+
+    /** T080 v1: agranda el texto del sitio y recarga (re-maquetar). */
+    private fun textoMas() {
+        cambiarTexto(1.1)
+    }
+
+    /** T080 v1: reduce el texto del sitio y recarga. */
+    private fun textoMenos() {
+        cambiarTexto(0.9)
+    }
+
+    /** T080 v1: cambia la escala de texto; con origen se persiste,
+     *  sin origen solo escala en vivo (nada que guardar). */
+    private fun cambiarTexto(factor: Double) {
+        val clave = claveSitioActual()
+        if (clave == null) {
+            textoSitio = AjustesSitio.limitarTexto(textoSitio * factor)
+        } else {
+            val p = sitios.obtener(clave)
+            val nuevo = AjustesSitio.limitarTexto(p.texto * factor)
+            textoSitio = nuevo
+            sitios.fijar(clave, p.copy(texto = nuevo))
+        }
+        recargar()
+        estado.text = "texto " + (textoSitio * 100).toInt() + "%"
+    }
+
+    /** T080 v1: alterna el modo escritorio del sitio (viewport 720;
+     *  el UA real NO se toca: no se simulan capacidades ausentes). */
+    private fun alternarEscritorio() {
+        val clave = claveSitioActual() ?: return
+        val p = sitios.obtener(clave)
+        sitios.fijar(clave, p.copy(escritorio = !p.escritorio))
+        recargar()
+        estado.text = if (sitios.obtener(clave).escritorio) "escritorio 720px" else "movil 360px"
+    }
+
+    /** T080 v1: restaura el sitio a los defectos (zoom/texto/escritorio). */
+    private fun restaurarSitio() {
+        val clave = claveSitioActual() ?: return
+        sitios.borrar(clave)
+        textoSitio = 1.0
+        recargar()
+        estado.text = "sitio restaurado"
+    }
+
     private fun zoomMas() {
         pagina.fijarZoom(pagina.zoomActual() * 1.25)
+        guardarZoomSitio()
         estado.text = "zoom " + (pagina.zoomActual() * 100).toInt() + "%"
     }
 
     private fun zoomMenos() {
         pagina.fijarZoom(pagina.zoomActual() / 1.25)
+        guardarZoomSitio()
         estado.text = "zoom " + (pagina.zoomActual() * 100).toInt() + "%"
     }
 
@@ -1032,6 +1139,7 @@ class BrowserActivity : Activity() {
             }
         }
         panelIdentidad = panel.toString()
+        aplicarSitio(page.url)
         val cifrada = page.url.startsWith("https")
         indicador.text = if (cifrada) "https" else "http"
         indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
@@ -1086,6 +1194,7 @@ class BrowserActivity : Activity() {
         indicador.text = if (cifrada) "https" else "http"
         indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
         omnibox.setText(page.url)
+        aplicarSitio(page.url)
         estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
         val html = page.html
         if (html != null) {
@@ -2166,7 +2275,7 @@ class BrowserActivity : Activity() {
     /** CSS del navegador: tokens del tema activo (T069/ADR-021); inputs
      * con fondo oscuro para que el value pintado sea legible. */
     private fun cssNavegador(): String =
-        "body{background-color:" + colores.bg + ";color:" + colores.fg + ";font-size:16px;padding:12px}" +
+        "body{background-color:" + colores.bg + ";color:" + colores.fg + ";font-size:" + (16 * textoSitio).toInt() + "px;padding:12px}" +
             "h1{font-size:24px;color:" + colores.accent + "}" +
             "h2{font-size:20px;color:" + colores.accent + "}" +
             "p{margin-top:8px}" +
