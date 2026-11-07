@@ -67,6 +67,24 @@ class CookieJar(private val clock: WallClock) {
         return removed
     }
 
+    /** T085 v1 (RES-0098): conteo de las cookies del sitio: las que
+     *  hacen domain-match con el host (RFC 6265 5.1.3); cuenta todas
+     *  las almacenadas del dominio, tambien las caducadas (el conteo
+     *  es del almacen, no de la peticion). */
+    fun contarDe(host: String): Int {
+        val h = host.lowercase()
+        return cookies.count { domainMatch(h, it) }
+    }
+
+    /** T085 v1: borra SOLO las cookies del sitio (domain-match con
+     *  el host); los demas dominios quedan intactos. */
+    fun borrarDe(host: String): Int {
+        val h = host.lowercase()
+        val prev = cookies.size
+        cookies.removeAll { domainMatch(h, it) }
+        return prev - cookies.size
+    }
+
     /**
      * Almacena la cookie de una respuesta hacia [host]. El que llama
      * entrega UNA cabecera Set-Cookie por llamada. Devuelve false si la

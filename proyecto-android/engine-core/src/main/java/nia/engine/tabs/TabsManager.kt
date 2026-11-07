@@ -270,4 +270,9 @@ class TabsManager(
         for (p in perfiles.values) n += p.cache.clear()
         return n
     }
+
+    /** T085 v1 (RES-0098): perfil del tipo vivo para los datos por
+     *  sitio del shell (conteo/borrado por origen sobre los motores
+     *  reales); null si el tipo aun no tiene perfil creado. */
+    fun perfil(kind: ProfileKind): BrowserProfile? = perfiles[kind]
 }

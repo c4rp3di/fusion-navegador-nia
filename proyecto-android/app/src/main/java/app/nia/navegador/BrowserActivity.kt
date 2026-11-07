@@ -62,6 +62,7 @@ import nia.engine.seleccion.FragmentoUrl
 import nia.engine.sitios.AjustesSitio
 import nia.engine.sitios.PrefSitio
 import nia.engine.sitios.SitiosManager
+import nia.engine.sitios.DatosSitio
 import nia.engine.url.Origin
 import nia.engine.url.UrlParseException
 import nia.engine.url.UrlParser
@@ -861,7 +862,8 @@ class BrowserActivity : Activity() {
             "Texto + (agrandar)",
             "Texto - (reducir)",
             "Escritorio (viewport 720)",
-            "Restaurar sitio"
+            "Restaurar sitio",
+            "Datos del sitio"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -893,6 +895,7 @@ class BrowserActivity : Activity() {
                     19 -> textoMenos()
                     20 -> alternarEscritorio()
                     21 -> restaurarSitio()
+                    22 -> mostrarDatosSitio()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1040,6 +1043,46 @@ class BrowserActivity : Activity() {
         textoSitio = 1.0
         recargar()
         estado.text = "sitio restaurado"
+    }
+
+    /** T085 v1 (RES-0098): origen REAL de la pagina activa: el
+     *  mismo Origin del commit del motor, sin re-parsing. */
+    private fun origenSitioActual(): Origin.Tuple? {
+        val p = navActual()?.currentPage() ?: return null
+        return p.origin as? Origin.Tuple
+    }
+
+    /** T085 v1: dialogo con los DATOS REALES del sitio (cookies y
+     *  cache del perfil vivo de la pestana) y borrado SOLO del
+     *  origen actual; el resto de origenes queda intacto. */
+    private fun mostrarDatosSitio() {
+        val o = origenSitioActual()
+        if (o == null) {
+            estado.text = "sin origen en la pagina actual"
+            return
+        }
+        val perfil = tabs.perfil(tipoActivo())
+        if (perfil == null) {
+            estado.text = "sin perfil vivo"
+            return
+        }
+        val clave = o.scheme + "://" + o.host + ":" + o.port
+        val pref = sitios.obtener(clave)
+        val conteo = DatosSitio.conteo(perfil.cookies, perfil.cache, o.scheme, o.host, o.port)
+        val mensaje = "cookies=" + conteo.cookies + " cache=" + conteo.cache +
+            " | preferencias: zoom=" + (pref.zoom * 100).toInt() + "%" +
+            " texto=" + (pref.texto * 100).toInt() + "%" +
+            (if (pref.escritorio) " escritorio" else " movil")
+        AlertDialog.Builder(this)
+            .setTitle("Datos del sitio")
+            .setMessage(mensaje)
+            .setPositiveButton("Borrar datos del sitio") { _, _ ->
+                val borrado = DatosSitio.borrar(perfil.cookies, perfil.cache, o.scheme, o.host, o.port)
+                traza("datos-sitio", "borrado cookies=" + borrado.cookies + " cache=" + borrado.cache)
+                estado.text = "sitio borrado: cookies=" + borrado.cookies + " cache=" + borrado.cache
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
     }
 
     private fun zoomMas() {

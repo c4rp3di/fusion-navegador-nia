@@ -5,6 +5,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 
 import nia.contracts.WallClock
+import nia.engine.url.UrlParseException
+import nia.engine.url.UrlParser
 
 /**
  * T026 v2 (R0060, RES-0035): cache HTTP para el motor de red.
@@ -57,6 +59,31 @@ class HttpCache(private val clock: WallClock) {
         val removed = entries.size
         entries.clear()
         return removed
+    }
+
+    /** T085 v1 (RES-0098): conteo de las entradas de cache del
+     *  origen (scheme, host, puerto efectivo); una URL ilegible
+     *  guardada simplemente no matchea (jamas revienta). */
+    fun contarDe(scheme: String, host: String, port: Int): Int =
+        entries.values.count { esDeOrigen(it.url, scheme, host, port) }
+
+    /** T085 v1: borra SOLO las entradas del origen; los demas
+     *  origenes quedan intactos. */
+    fun borrarDe(scheme: String, host: String, port: Int): Int {
+        val victimas = entries.filter { esDeOrigen(it.value.url, scheme, host, port) }.keys.toList()
+        for (k in victimas) entries.remove(k)
+        return victimas.size
+    }
+
+    private fun esDeOrigen(url: String, scheme: String, host: String, port: Int): Boolean {
+        return try {
+            val u = UrlParser.parse(url)
+            u.scheme.equals(scheme, ignoreCase = true) &&
+                u.host.equals(host, ignoreCase = true) &&
+                u.effectivePort == port
+        } catch (e: UrlParseException) {
+            false
+        }
     }
 
     /** Guarda una respuesta 200; no-store -> null (no se almacena). */
