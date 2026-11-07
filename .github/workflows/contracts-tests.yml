@@ -185,6 +185,8 @@ jobs:
             engine-core/src/test/java/nia/engine/themes/NiaTokensTest.kt \
             engine-core/src/main/java/nia/engine/bookmarks/BookmarkManager.kt \
             engine-core/src/test/java/nia/engine/bookmarks/BookmarkManagerTest.kt \
+            engine-core/src/main/java/nia/engine/bookmarks/MarcadoresHtml.kt \
+            engine-core/src/test/java/nia/engine/bookmarks/MarcadoresHtmlTest.kt \
             engine-core/src/main/java/nia/engine/nav/NavController.kt \
             engine-core/src/test/java/nia/engine/nav/NavControllerTest.kt \
             engine-core/src/main/java/nia/engine/omnibox/OmniboxInput.kt \

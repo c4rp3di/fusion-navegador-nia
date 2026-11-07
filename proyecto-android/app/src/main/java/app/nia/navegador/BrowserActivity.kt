@@ -28,6 +28,7 @@ import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
+import nia.engine.bookmarks.MarcadoresHtml
 import nia.engine.diag.Versiones
 import nia.engine.download.DownloadEngine
 import nia.engine.download.DownloadItem
@@ -887,7 +888,9 @@ class BrowserActivity : Activity() {
             "Datos del sitio",
             "Cookies",
             "Red (pestana actual)",
-            "Versiones"
+            "Versiones",
+            "Importar marcadores (HTML)",
+            "Exportar marcadores (HTML)"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -923,6 +926,8 @@ class BrowserActivity : Activity() {
                     23 -> gestorCookies()
                     24 -> mostrarRed()
                     25 -> mostrarVersiones()
+                    26 -> importarMarcadoresHtml()
+                    27 -> exportarMarcadoresHtml()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1206,6 +1211,29 @@ class BrowserActivity : Activity() {
             .setMessage(texto)
             .setPositiveButton("Cerrar", null)
             .show()
+    }
+
+    /** T099 v1 (RES-0102): importa marcadores Netscape HTML (el formato
+     *  de Firefox y Chrome) via SAF. El parseo valida TODO a temporales
+     *  antes de tocar la coleccion y la mezcla deduplica por url
+     *  reutilizando carpetas por nombre. */
+    private fun importarMarcadoresHtml() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.setType("text/html")
+        startActivityForResult(i, REQUEST_IMPORT_MARCADORES)
+        traza("marcadores", "importar html: pidiendo documento")
+    }
+
+    /** T099 v1 (RES-0102): exporta la coleccion viva a Netscape HTML
+     *  via SAF (crear documento); los pins no viajan (exclusion v1). */
+    private fun exportarMarcadoresHtml() {
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.setType("text/html")
+        i.putExtra(Intent.EXTRA_TITLE, "marcadores.html")
+        startActivityForResult(i, REQUEST_EXPORT_MARCADORES)
+        traza("marcadores", "exportar html: pidiendo destino")
     }
 
     private fun zoomMas() {
@@ -1985,6 +2013,51 @@ class BrowserActivity : Activity() {
             estado.text = "descarga #" + id + " en cola: " + hostDe(url)
             traza("descargas", "encolada #" + id + " " + hostDe(url))
         }
+        if (requestCode == REQUEST_IMPORT_MARCADORES && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "importar marcadores: sin documento"
+                return
+            }
+            try {
+                val texto = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
+                when (val r = MarcadoresHtml.parsear(texto)) {
+                    is Outcome.Success -> {
+                        val mezcla = MarcadoresHtml.mezclar(marcadores, r.value)
+                        guardarMarcadores()
+                        estado.text = "importados " + mezcla.agregados + " (duplicados " +
+                            mezcla.duplicados + ", rechazados " + r.value.rechazados + ")"
+                        traza("marcadores", "importar html: +" + mezcla.agregados +
+                            " dup " + mezcla.duplicados + " carp " + mezcla.carpetas +
+                            " fallo " + mezcla.fallidos)
+                    }
+                    is Outcome.Failure -> {
+                        estado.text = "importar marcadores: html no valido (" + r.error.code.name + ")"
+                        traza("marcadores", "importar html rechazado: " + r.error.code.name)
+                    }
+                }
+            } catch (e: Exception) {
+                estado.text = "importar marcadores: no se pudo leer el documento"
+                traza("marcadores", "importar html fallo al leer")
+            }
+        }
+        if (requestCode == REQUEST_EXPORT_MARCADORES && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "exportar marcadores: sin destino"
+                return
+            }
+            try {
+                contentResolver.openOutputStream(uri, "wt")?.use { s ->
+                    s.write(MarcadoresHtml.escribir(marcadores).toByteArray())
+                }
+                estado.text = "marcadores exportados a html"
+                traza("marcadores", "exportar html ok")
+            } catch (e: Exception) {
+                estado.text = "exportar marcadores: no se pudo escribir"
+                traza("marcadores", "exportar html fallo al escribir")
+            }
+        }
     }
 
     /** Sink reabrible sobre el documento SAF (patron T046 v2): wt
@@ -2483,6 +2556,8 @@ class BrowserActivity : Activity() {
 
     companion object {
         private const val REQUEST_DESCARGA = 46
+        private const val REQUEST_IMPORT_MARCADORES = 47
+        private const val REQUEST_EXPORT_MARCADORES = 48
     }
 }
 
