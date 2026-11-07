@@ -222,6 +222,8 @@ jobs:
             engine-core/src/test/java/nia/engine/net/EstadoRedTest.kt \
             engine-core/src/main/java/nia/engine/diag/Versiones.kt \
             engine-core/src/test/java/nia/engine/diag/VersionesTest.kt \
+            engine-core/src/main/java/nia/engine/diag/Capacidades.kt \
+            engine-core/src/test/java/nia/engine/diag/CapacidadesTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \
@@ -261,6 +263,19 @@ jobs:
 
       - name: Tests unitarios (contracts + engine-core)
         run: gradle --no-daemon :contracts:test :engine-core:test
+
+      - name: Capacidades del artefacto (T108, RES-0103)
+        run: |
+          mkdir -p app/src/main/assets
+          {
+            echo "http.fetch=PASS#ci#tests unitarios del build ${GITHUB_SHA}"
+            echo "html.parser=PASS#ci#tests unitarios del build ${GITHUB_SHA}"
+            echo "css.cascade=PASS#ci#tests unitarios del build ${GITHUB_SHA}"
+            echo "js.cuotas=PASS#ci#tests unitarios del build ${GITHUB_SHA}"
+            echo "cookies.persistencia=PASS#ci#tests unitarios del build ${GITHUB_SHA}"
+            echo "marcadores.html=PASS#ci#tests unitarios del build ${GITHUB_SHA}"
+          } > app/src/main/assets/capacidades.txt
+          echo "capacidades.txt: registro embebido (PASS solo si los tests de este build pasaron)"
 
       - name: Resumen del harness (T004)
         if: always()

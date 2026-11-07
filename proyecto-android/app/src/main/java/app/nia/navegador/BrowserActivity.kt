@@ -29,6 +29,7 @@ import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
 import nia.engine.bookmarks.MarcadoresHtml
+import nia.engine.diag.Capacidades
 import nia.engine.diag.Versiones
 import nia.engine.download.DownloadEngine
 import nia.engine.download.DownloadItem
@@ -890,7 +891,8 @@ class BrowserActivity : Activity() {
             "Red (pestana actual)",
             "Versiones",
             "Importar marcadores (HTML)",
-            "Exportar marcadores (HTML)"
+            "Exportar marcadores (HTML)",
+            "Capacidades"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -928,6 +930,7 @@ class BrowserActivity : Activity() {
                     25 -> mostrarVersiones()
                     26 -> importarMarcadoresHtml()
                     27 -> exportarMarcadoresHtml()
+                    28 -> mostrarCapacidades()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1234,6 +1237,26 @@ class BrowserActivity : Activity() {
         i.putExtra(Intent.EXTRA_TITLE, "marcadores.html")
         startActivityForResult(i, REQUEST_EXPORT_MARCADORES)
         traza("marcadores", "exportar html: pidiendo destino")
+    }
+
+    /** T108 v1 (RES-0103): capacidades del build instalado con los
+     *  estados del harness (PASS/NOT_RUN/FAIL separados por alcance y
+     *  evidencia). El registro embebido (asset del workflow) manda;
+     *  sin el todo es NOT_RUN honesto y la UI NUNCA cambia un
+     *  resultado medido por optimismo. */
+    private fun mostrarCapacidades() {
+        val texto = try {
+            assets.open("capacidades.txt").bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            null
+        }
+        val caps = Capacidades.registro(texto)
+        traza("diag", "capacidades: " + caps.count { it.estado == nia.contracts.TestStatus.PASS } + " PASS embebidas")
+        AlertDialog.Builder(this)
+            .setTitle("Capacidades")
+            .setMessage(Capacidades.resumen(caps))
+            .setPositiveButton("Cerrar", null)
+            .show()
     }
 
     private fun zoomMas() {
