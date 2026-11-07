@@ -58,6 +58,7 @@ import nia.engine.tabs.TabsManager
 import nia.engine.themes.NiaTokens
 import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
+import nia.engine.seleccion.FragmentoUrl
 
 /**
  * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1 + T076 v1 + T086 v1 + T082 v1, RES-0091 + RES-0092, R0191): shell estetico
@@ -503,6 +504,7 @@ class BrowserActivity : Activity() {
             }
         }
         pagina.setOnToqueLargo { info -> mostrarMenuToque(info) }
+        pagina.setOnSeleccionMenu { texto -> mostrarMenuSeleccion(texto) }
         scroll.setOnScrollChangeListener { _, _, nuevaY, _, viejaY ->
             // T078 v1: con la barra fija (gestos.barra off) el
             // ocultador se ignora y la barra queda SIEMPRE visible.
@@ -1155,6 +1157,80 @@ class BrowserActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    /** T079 v1 (RES-0095): menu propio de la seleccion de texto:
+     *  Copiar / Compartir / Buscar / Guardar en favoritos con el
+     *  fragmento :~:text=. Todo explicito, sin caminos privilegiados. */
+    private fun mostrarMenuSeleccion(texto: String) {
+        if (texto.isEmpty()) return
+        val opciones = arrayOf(
+            "Copiar",
+            "Compartir",
+            "Buscar",
+            "Guardar en favoritos con fragmento"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Seleccion de texto")
+            .setMessage(recorta(texto))
+            .setItems(opciones) { _, cual ->
+                when (cual) {
+                    0 -> {
+                        copiarAlPortapapeles(texto)
+                        pagina.limpiarSeleccion()
+                    }
+                    1 -> {
+                        compartirTexto(texto)
+                        pagina.limpiarSeleccion()
+                    }
+                    2 -> {
+                        omnibox.setText(texto)
+                        resolverYnavegar()
+                        pagina.limpiarSeleccion()
+                    }
+                    else -> guardarFavoritoConFragmento(texto)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** T079 v1: guarda la pagina actual en favoritos con el fragmento
+     *  de texto (:~:text=); si el texto no es anclable se guarda la URL
+     *  sola y se avisa (fallback honesto). */
+    private fun guardarFavoritoConFragmento(texto: String) {
+        val url = navActual()?.currentPage()?.url
+        if (url == null || url.startsWith("about:")) {
+            estado.text = "sin pagina actual para guardar"
+            return
+        }
+        val urlCon = FragmentoUrl.crear(url, texto)
+        val bm = when (val r = marcadores.add(tituloDe(texto), urlCon)) {
+            is Outcome.Success -> r.value
+            is Outcome.Failure -> null
+        }
+        if (bm == null) {
+            estado.text = "favorito no creado"
+            return
+        }
+        marcadores.pin(bm.id)
+        if (urlCon == url) {
+            estado.text = "favorito sin fragmento (texto no anclable): " + hostDe(url)
+            traza("accesos", "favorito fallback " + hostDe(url))
+        } else {
+            estado.text = "favorito con fragmento: " + hostDe(url)
+            traza("accesos", "favorito con fragmento " + hostDe(url))
+        }
+        guardarMarcadores()
+        repintarSiNueva()
+    }
+
+    /** Titulo del favorito: el texto seleccionado recortado a 60
+     *  chars sin partir nunca un surrogate par. */
+    private fun tituloDe(texto: String): String {
+        var fin = if (texto.length > 60) 60 else texto.length
+        if (fin > 0 && fin < texto.length && texto[fin - 1].isHighSurrogate()) fin--
+        return texto.substring(0, fin)
     }
 
     /** Texto recortado para el dialogo del toque largo. */

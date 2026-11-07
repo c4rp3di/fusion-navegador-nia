@@ -206,6 +206,8 @@ jobs:
             engine-core/src/main/java/nia/engine/gestures/AjustesGestos.kt \
             engine-core/src/main/java/nia/engine/gestures/Gestos.kt \
             engine-core/src/test/java/nia/engine/gestures/GestosTest.kt \
+            engine-core/src/main/java/nia/engine/seleccion/Seleccion.kt \
+            engine-core/src/test/java/nia/engine/seleccion/SeleccionTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

@@ -37,6 +37,10 @@ import nia.engine.layout.LayoutResult
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
 import nia.engine.paint.PaintSceneBuilder
+import nia.engine.seleccion.FragmentoTexto
+import nia.engine.seleccion.Fragmentos
+import nia.engine.seleccion.PosSeleccion
+import nia.engine.seleccion.Seleccion
 
 /**
  * Adaptador Android del motor (v2, R0023): ejecuta el pipeline completo
@@ -132,6 +136,20 @@ class PaintView(context: Context) : View(context) {
 
     private var lastHit: PaintOp? = null
 
+    /** T079 v1 (RES-0095): seleccion de texto del shell: ancla/foco,
+     *  handle arrastrado (1 ancla, 2 foco) y menu via callback. */
+    private var seleccionTexto: Pair<PosSeleccion, PosSeleccion>? = null
+    private var arrastrandoHandle = 0
+    private val selectionFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(96, 255, 214, 10)
+        style = Paint.Style.FILL
+    }
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 214, 10)
+        style = Paint.Style.FILL
+    }
+    private var onSeleccionMenu: ((String) -> Unit)? = null
+
     /** T077 v1 (R0195, RES-0093): gestos base sobre la pagina pintada.
      * El borde (atras/adelante) y el doble tap se deciden con la logica
      * PURA del motor (RastreadorBorde/ZoomToque, tests en CI); el
@@ -148,7 +166,13 @@ class PaintView(context: Context) : View(context) {
 
     private val detectorToque = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onLongPress(e: MotionEvent) {
+            // T079: sobre texto plano abre la seleccion propia; los
+            // enlaces e imagenes conservan el menu T077 intacto.
             val info = infoToqueLargo(e.x, e.y)
+            if (info != null && info.tipo == "texto") {
+                iniciarSeleccion(e.x, e.y)
+                return
+            }
             if (info != null) onToqueLargo?.invoke(info)
         }
     })
@@ -198,6 +222,7 @@ class PaintView(context: Context) : View(context) {
         DevToolsState.selectedNodeId = null
         focusedInput = null
         editor.clear()
+        seleccionTexto = null
         rebuild()
     }
 
@@ -215,6 +240,7 @@ class PaintView(context: Context) : View(context) {
         DevToolsState.selectedNodeId = null
         focusedInput = null
         editor.clear()
+        seleccionTexto = null
         rebuild()
         requestLayout()
         invalidate()
@@ -370,6 +396,7 @@ class PaintView(context: Context) : View(context) {
             }
             canvas.drawText("seleccion #" + sel, 24f, height - 80f, footnote)
         }
+        dibujarSeleccion(canvas, scale)
         if (modoDemo) {
             canvas.drawText("dibujo del motor propio · sin WebView", 24f, height - 48f, footnote)
             canvas.drawText("contracts v$ContractsVersion", 24f, height - 16f, footnote)
@@ -413,6 +440,7 @@ class PaintView(context: Context) : View(context) {
         detectorPinza.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (manejarDownSeleccion(event)) return true
                 rastreadorBorde = if (cfgGestos.swipe) RastreadorBorde(width.toDouble(), cfgGestos) else null
                 rastreadorBorde?.down(event.x.toDouble(), event.y.toDouble())
                 if (!pinzaActiva && cfgGestos.dobleTap) {
@@ -434,6 +462,10 @@ class PaintView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (arrastrandoHandle != 0) {
+                    moverHandleSeleccion(event)
+                    return true
+                }
                 if (!pinzaActiva) {
                     val accion = rastreadorBorde?.move(event.x.toDouble(), event.y.toDouble())
                         ?: AccionBorde.NINGUNA
@@ -442,6 +474,7 @@ class PaintView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                arrastrandoHandle = 0
                 rastreadorBorde?.up()
                 return true
             }
@@ -488,6 +521,107 @@ class PaintView(context: Context) : View(context) {
         rebuild()
         requestLayout()
         invalidate()
+    }
+
+    /** T079 v1 (RES-0095): registra el menu propio de la seleccion
+     * de texto (el texto resuelto viaja al shell, nunca al reves). */
+    fun setOnSeleccionMenu(accion: (String) -> Unit) {
+        onSeleccionMenu = accion
+    }
+
+    /** T079 v1: hay seleccion de texto activa (para el shell). */
+    fun haySeleccion(): Boolean = seleccionTexto != null
+
+    /** T079 v1: texto de la seleccion activa, "" si no la hay. */
+    fun textoSeleccionado(): String {
+        val sel = seleccionTexto ?: return ""
+        return Seleccion.texto(Fragmentos.de(scene), sel.first, sel.second)
+    }
+
+    /** T079 v1: limpia la seleccion y repinta. */
+    fun limpiarSeleccion() {
+        seleccionTexto = null
+        invalidate()
+    }
+
+    /** Fragmentos de texto de la escena, en coordenadas de documento. */
+    private fun fragmentosSeleccion(): List<FragmentoTexto> = Fragmentos.de(scene)
+
+    /** T079 v1: abre la seleccion con la palabra completa bajo el
+     *  toque largo; sin texto bajo el punto no hace nada. */
+    private fun iniciarSeleccion(x: Float, y: Float) {
+        val scale = width / viewport.toFloat()
+        val frags = fragmentosSeleccion()
+        val sel = Seleccion.palabraBajo(frags, (x / scale).toDouble(), (y / scale).toDouble())
+        if (sel == null) return
+        seleccionTexto = sel
+        arrastrandoHandle = 0
+        invalidate()
+        onSeleccionMenu?.invoke(textoSeleccionado())
+    }
+
+    /** T079 v1: DOWN con seleccion activa: arranca el arrastre del
+     *  handle mas cercano o limpia con un tap fuera de los handles. */
+    private fun manejarDownSeleccion(event: MotionEvent): Boolean {
+        val sel = seleccionTexto ?: return false
+        val scale = width / viewport.toFloat()
+        val frags = fragmentosSeleccion()
+        val radioPx = 32.0
+        var mejorHandle = 0
+        var mejorD = Double.MAX_VALUE
+        for (h in 1..2) {
+            val pos = if (h == 1) sel.first else sel.second
+            val p = Seleccion.punto(frags, pos)
+            val dx = (event.x - (p.x * scale).toFloat()).toDouble()
+            val dy = (event.y - (p.y * scale).toFloat()).toDouble()
+            val d = Math.hypot(dx, dy)
+            if (d < mejorD) {
+                mejorD = d
+                mejorHandle = h
+            }
+        }
+        if (mejorD <= radioPx) {
+            arrastrandoHandle = mejorHandle
+            return true
+        }
+        seleccionTexto = null
+        invalidate()
+        return false
+    }
+
+    /** T079 v1: mueve el handle arrastrado anclando al fragmento mas
+     *  cercano en radio; sin ancla en radio el handle se queda. */
+    private fun moverHandleSeleccion(event: MotionEvent) {
+        val sel = seleccionTexto ?: return
+        val scale = width / viewport.toFloat()
+        val frags = fragmentosSeleccion()
+        val ancla = Seleccion.anclarMasCercano(
+            frags,
+            (event.x / scale).toDouble(),
+            (event.y / scale).toDouble(),
+            64.0
+        ) ?: return
+        seleccionTexto = if (arrastrandoHandle == 1) Pair(ancla, sel.second) else Pair(sel.first, ancla)
+        invalidate()
+    }
+
+    /** T079 v1: dibuja las cajas de resaltado y los dos handles. */
+    private fun dibujarSeleccion(canvas: Canvas, scale: Float) {
+        val sel = seleccionTexto ?: return
+        val frags = fragmentosSeleccion()
+        for (c in Seleccion.cajas(frags, sel.first, sel.second)) {
+            canvas.drawRect(
+                (c.x * scale).toFloat(),
+                (c.y * scale).toFloat(),
+                ((c.x + c.width) * scale).toFloat(),
+                ((c.y + c.height) * scale).toFloat(),
+                selectionFill
+            )
+        }
+        for (pos in listOf(sel.first, sel.second)) {
+            val p = Seleccion.punto(frags, pos)
+            canvas.drawCircle((p.x * scale).toFloat(), (p.y * scale).toFloat(), 10f, handlePaint)
+        }
     }
 
     /** T077 v1: contenido resuelto bajo el toque largo (enlace, imagen
