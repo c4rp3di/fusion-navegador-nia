@@ -41,6 +41,7 @@ import nia.engine.seleccion.FragmentoTexto
 import nia.engine.seleccion.Fragmentos
 import nia.engine.seleccion.PosSeleccion
 import nia.engine.seleccion.Seleccion
+import nia.engine.busqueda.Busqueda
 
 /**
  * Adaptador Android del motor (v2, R0023): ejecuta el pipeline completo
@@ -150,6 +151,19 @@ class PaintView(context: Context) : View(context) {
     }
     private var onSeleccionMenu: ((String) -> Unit)? = null
 
+    /** T081 v1 (RES-0096): busqueda en la pagina del shell: matches
+     *  como pares de anclas del motor y match activo (0-based, -1 = sin). */
+    private var matchesBusqueda: List<Busqueda.Coincidencia> = emptyList()
+    private var matchActual = -1
+    private val matchFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(72, 80, 200, 255)
+        style = Paint.Style.FILL
+    }
+    private val matchActualPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(160, 255, 140, 0)
+        style = Paint.Style.FILL
+    }
+
     /** T077 v1 (R0195, RES-0093): gestos base sobre la pagina pintada.
      * El borde (atras/adelante) y el doble tap se deciden con la logica
      * PURA del motor (RastreadorBorde/ZoomToque, tests en CI); el
@@ -223,6 +237,8 @@ class PaintView(context: Context) : View(context) {
         focusedInput = null
         editor.clear()
         seleccionTexto = null
+        matchesBusqueda = emptyList()
+        matchActual = -1
         rebuild()
     }
 
@@ -241,6 +257,8 @@ class PaintView(context: Context) : View(context) {
         focusedInput = null
         editor.clear()
         seleccionTexto = null
+        matchesBusqueda = emptyList()
+        matchActual = -1
         rebuild()
         requestLayout()
         invalidate()
@@ -397,6 +415,7 @@ class PaintView(context: Context) : View(context) {
             canvas.drawText("seleccion #" + sel, 24f, height - 80f, footnote)
         }
         dibujarSeleccion(canvas, scale)
+        dibujarBusqueda(canvas, scale)
         if (modoDemo) {
             canvas.drawText("dibujo del motor propio · sin WebView", 24f, height - 48f, footnote)
             canvas.drawText("contracts v$ContractsVersion", 24f, height - 16f, footnote)
@@ -621,6 +640,70 @@ class PaintView(context: Context) : View(context) {
         for (pos in listOf(sel.first, sel.second)) {
             val p = Seleccion.punto(frags, pos)
             canvas.drawCircle((p.x * scale).toFloat(), (p.y * scale).toFloat(), 10f, handlePaint)
+        }
+    }
+
+    /** T081 v1 (RES-0096): busca la consulta sobre los fragmentos
+     *  del documento y resalta; devuelve el total de coincidencias. */
+    fun buscarEnPagina(consulta: String): Int {
+        matchesBusqueda = Busqueda.buscar(Fragmentos.de(scene), consulta)
+        matchActual = if (matchesBusqueda.isEmpty()) -1 else 0
+        invalidate()
+        return matchesBusqueda.size
+    }
+
+    /** T081 v1: siguiente match con vuelta circular definida. */
+    fun siguienteMatch() {
+        if (matchesBusqueda.isEmpty()) return
+        matchActual = (matchActual + 1) % matchesBusqueda.size
+        invalidate()
+    }
+
+    /** T081 v1: anterior match con vuelta circular definida. */
+    fun anteriorMatch() {
+        if (matchesBusqueda.isEmpty()) return
+        matchActual = (matchActual - 1 + matchesBusqueda.size) % matchesBusqueda.size
+        invalidate()
+    }
+
+    /** T081 v1: total de coincidencias de la busqueda activa. */
+    fun totalMatches(): Int = matchesBusqueda.size
+
+    /** T081 v1: match activo en base 1 para el N de M del shell. */
+    fun matchActual(): Int = matchActual + 1
+
+    /** T081 v1: limpia la busqueda (carga o cierre de la barra). */
+    fun limpiarBusqueda() {
+        matchesBusqueda = emptyList()
+        matchActual = -1
+        invalidate()
+    }
+
+    /** T081 v1: Y en px de la vista del match activo para que el
+     *  scroll del shell lo deje visible. */
+    fun yMatchActualPx(): Float? {
+        if (matchActual < 0 || matchActual >= matchesBusqueda.size) return null
+        val scale = width / viewport.toFloat()
+        val p = Seleccion.punto(Fragmentos.de(scene), matchesBusqueda[matchActual].inicio)
+        return (p.y * scale).toFloat()
+    }
+
+    /** T081 v1: dibuja las cajas de las coincidencias; la activa con
+     *  color propio para distinguir el N de M. */
+    private fun dibujarBusqueda(canvas: Canvas, scale: Float) {
+        if (matchesBusqueda.isEmpty()) return
+        val frags = Fragmentos.de(scene)
+        for ((idx, m) in matchesBusqueda.withIndex()) {
+            val pintura = if (idx == matchActual) matchActualPaint else matchFill
+            for (caja in Seleccion.cajas(frags, m.inicio, m.fin)) {
+                canvas.drawRect(
+                    (caja.x * scale).toFloat(),
+                    (caja.y * scale).toFloat(),
+                    ((caja.x + caja.width) * scale).toFloat(),
+                    ((caja.y + caja.height) * scale).toFloat(),
+                    pintura
+                )
+            }
         }
     }
 

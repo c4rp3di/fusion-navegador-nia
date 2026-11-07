@@ -358,6 +358,11 @@ class BrowserActivity : Activity() {
     private lateinit var bannerIncognito: TextView
     private lateinit var avisoCierre: LinearLayout
     private lateinit var avisoTexto: TextView
+
+    /** T081 v1 (R0204, RES-0096): barra temporal de buscar en pagina. */
+    private lateinit var barraBusqueda: LinearLayout
+    private lateinit var campoBusqueda: EditText
+    private lateinit var contadorBusqueda: TextView
     private val esconderAviso = Runnable { avisoCierre.visibility = LinearLayout.GONE }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -554,6 +559,41 @@ class BrowserActivity : Activity() {
         })
         avisoCierre.visibility = LinearLayout.GONE
         raiz.addView(avisoCierre)
+
+        // T081 v1 (R0204, RES-0096): barra TEMPORAL de buscar en la
+        // pagina: vive justo encima de la barra inferior, GONE por
+        // defecto. La consulta es LOCAL y sincrona sobre los
+        // fragmentos del motor: cada cambio de texto REEMPLAZA la
+        // consulta anterior (nunca queda una consulta vieja activa).
+        barraBusqueda = LinearLayout(this)
+        barraBusqueda.orientation = LinearLayout.HORIZONTAL
+        barraBusqueda.setBackgroundColor(NiaUi.color(colores.surface))
+        campoBusqueda = EditText(this)
+        campoBusqueda.hint = "buscar en la pagina"
+        campoBusqueda.setSingleLine()
+        campoBusqueda.imeOptions = EditorInfo.IME_ACTION_SEARCH
+        campoBusqueda.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
+        campoBusqueda.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) {
+                ejecutarBusqueda()
+            }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
+        barraBusqueda.addView(
+            campoBusqueda,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        contadorBusqueda = TextView(this)
+        contadorBusqueda.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
+        contadorBusqueda.setTextColor(NiaUi.color(colores.fg))
+        contadorBusqueda.setPadding(espacio, 0, 0, 0)
+        barraBusqueda.addView(contadorBusqueda)
+        barraBusqueda.addView(boton("Ant") { irAlMatch(-1) })
+        barraBusqueda.addView(boton("Sig") { irAlMatch(1) })
+        barraBusqueda.addView(boton("x") { cerrarBuscarEnPagina() })
+        barraBusqueda.visibility = LinearLayout.GONE
+        raiz.addView(barraBusqueda)
 
         val barra = LinearLayout(this)
         barra.orientation = LinearLayout.HORIZONTAL
@@ -801,6 +841,7 @@ class BrowserActivity : Activity() {
             "Ajustes (busca y cambia)",
             "Diagnostico (traza del shell)",
             "Demos del motor",
+            "Buscar en la pagina",
             "Zoom + (acercar)",
             "Zoom - (alejar)",
             "Zoom 100%"
@@ -823,9 +864,10 @@ class BrowserActivity : Activity() {
                     11 -> mostrarAjustes()
                     12 -> mostrarDiagnostico()
                     13 -> startActivity(Intent(this, MainActivity::class.java))
-                    14 -> zoomMas()
-                    15 -> zoomMenos()
-                    16 -> {
+                    14 -> abrirBuscarEnPagina()
+                    15 -> zoomMas()
+                    16 -> zoomMenos()
+                    17 -> {
                         pagina.fijarZoom(1.0)
                         estado.text = "zoom 100%"
                     }
@@ -838,6 +880,63 @@ class BrowserActivity : Activity() {
     /** T077 v1 (R0195, RES-0093): rutas equivalentes POR MENU de los
      * gestos de zoom (la pinza y el doble tap viven en el PaintView);
      * el zoom es REAL del motor (re-maqueteo, no bitmap). */
+    /** T081 v1 (R0204, RES-0096): abre la barra temporal de buscar
+     *  en la pagina y centra la primera coincidencia. */
+    private fun abrirBuscarEnPagina() {
+        barraBusqueda.visibility = LinearLayout.VISIBLE
+        campoBusqueda.requestFocus()
+        ejecutarBusqueda()
+        estado.text = "buscar en la pagina"
+    }
+
+    /** T081 v1: cierra la barra y limpia los resaltados del motor. */
+    private fun cerrarBuscarEnPagina() {
+        barraBusqueda.visibility = LinearLayout.GONE
+        pagina.limpiarBusqueda()
+        contadorBusqueda.text = ""
+        estado.text = "busqueda cerrada"
+    }
+
+    /** T081 v1: consulta local sobre los fragmentos del documento;
+     *  sin consulta solo limpia. Sincrona y acotada: no hay nada
+     *  que cancelar ni repasar sin fin. */
+    private fun ejecutarBusqueda() {
+        val consulta = campoBusqueda.text.toString()
+        if (consulta.trim().isEmpty()) {
+            pagina.limpiarBusqueda()
+            contadorBusqueda.text = ""
+            return
+        }
+        pagina.buscarEnPagina(consulta)
+        refrescarContadorBusqueda()
+        irAMatchActual()
+    }
+
+    /** T081 v1: N de M en la barra; 0/0 cuando no hay coincidencias. */
+    private fun refrescarContadorBusqueda() {
+        val total = pagina.totalMatches()
+        if (total == 0) {
+            contadorBusqueda.text = "0/0"
+        } else {
+            contadorBusqueda.text = pagina.matchActual().toString() + "/" + total
+        }
+    }
+
+    /** T081 v1: siguiente (+1) o anterior (-1) con vuelta circular;
+     *  refresca el N de M y desplaza el scroll al match activo. */
+    private fun irAlMatch(delta: Int) {
+        if (pagina.totalMatches() == 0) return
+        if (delta >= 0) pagina.siguienteMatch() else pagina.anteriorMatch()
+        refrescarContadorBusqueda()
+        irAMatchActual()
+    }
+
+    /** T081 v1: scroll suave hasta dejar el match activo visible. */
+    private fun irAMatchActual() {
+        val y = pagina.yMatchActualPx() ?: return
+        scroll.smoothScrollTo(0, (y - 200f).coerceAtLeast(0f).toInt())
+    }
+
     private fun zoomMas() {
         pagina.fijarZoom(pagina.zoomActual() * 1.25)
         estado.text = "zoom " + (pagina.zoomActual() * 100).toInt() + "%"
