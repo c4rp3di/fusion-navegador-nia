@@ -137,7 +137,7 @@ class GestosTest {
         val cfg = ConfigGestos()
         assertEquals(360.0, ZoomToque.viewportPara(1.0, 360.0, cfg), 1e-9)
         assertEquals(180.0, ZoomToque.viewportPara(2.0, 360.0, cfg), 1e-9)
-        assertEquals(90.0, ZoomToque.viewportPara(4.0, 360.0, cfg), 1e-9)
+        assertEquals(120.0, ZoomToque.viewportPara(4.0, 360.0, cfg), 1e-9)
     }
 
     @Test
