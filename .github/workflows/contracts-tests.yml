@@ -199,6 +199,8 @@ jobs:
             engine-core/src/test/java/nia/engine/history/HistoryManagerTest.kt \
             engine-core/src/main/java/nia/engine/settings/SettingsManager.kt \
             engine-core/src/test/java/nia/engine/settings/SettingsManagerTest.kt \
+            engine-core/src/main/java/nia/engine/lectura/Lector.kt \
+            engine-core/src/test/java/nia/engine/lectura/LectorTest.kt \
             app/src/main/java/app/nia/navegador/MainActivity.kt \
             app/src/main/java/app/nia/navegador/BrowserActivity.kt \
             app/src/main/java/app/nia/navegador/PaintView.kt \

@@ -2,8 +2,10 @@ package app.nia.navegador
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -16,12 +18,19 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
+import java.util.concurrent.Executors
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.bookmarks.BookmarkManager
+import nia.engine.download.DownloadEngine
+import nia.engine.download.DownloadItem
+import nia.engine.download.DownloadSink
+import nia.engine.download.DownloadState
+import nia.engine.download.ReopenableSink
 import nia.engine.errors.ErrorPages
 import nia.engine.history.HistoryManager
+import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.net.HttpTransport
@@ -42,7 +51,7 @@ import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 
 /**
- * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1 + T076 v1, RES-0090, R0189): shell estetico
+ * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1 + T076 v1 + T086 v1 + T082 v1, RES-0091 + RES-0092, R0191): shell estetico
  * "DDG ligero" sobre el NavController verificado (T071) con las
  * pestanas del TabsManager verificado (T073 v1). El navegador pasa a
  * ser la pantalla inicial (MAIN/LAUNCHER en el manifest) y las paginas
@@ -140,6 +149,25 @@ import app.nia.navegador.ui.NiaUi
  * skeleton animado; los enlaces de la pagina NUNCA navegan solos
  * (exclusion honesta hasta el smoke T067-B).
  *
+ * T086 v1 (R0191, RES-0091): pantalla de descargas sobre la cola
+ * REAL del DownloadEngine verificado (T046) con el transporte de la
+ * app: dialogo con estados y bytes reales, cancelar con
+ * confirmacion ADR-019, reanudar solo fallidas con sink reabrible
+ * (Range real del motor), abrir la completada con ACTION_VIEW y
+ * grant, nueva descarga por URL con la resolucion REAL del
+ * OmniboxInput y destino SAF (esquema no soportado o URL invalida
+ * JAMAS encolan); la pausa NO existe en el motor y se declara no
+ * disponible (JAMAS un fallo disfrazado); historial en memoria de
+ * sesion y notificaciones pendientes del smoke (T067-B EN ESPERA).
+ *
+ * T082 v1 (R0191, RES-0092): modo lectura con la heuristica DOM
+ * propia del Lector del motor (nia.engine.lectura) sobre el HTML
+ * REAL de la pagina activa (NavPage.html crudo, sin re-fetch):
+ * pinta titulo y parrafos con los tokens del tema, avisa honesto
+ * sin pagina o sin contenido principal y NUNCA ejecuta scripts
+ * extraidos (solo se junta texto); volver con Recargar (exclusion
+ * honesta: refetch, scroll no preservado).
+ *
  * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
  * de la sesion de pestanas (el incognito JAMAS se restaura tras un
  * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
@@ -180,6 +208,15 @@ class BrowserActivity : Activity() {
      * jamas se registra y la URL se guarda sin query (redaccion).
      * Persiste en filesDir; un archivo corrupto se ignora. */
     private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
+
+    /** Cola de descargas del navegador (T086 v1): DownloadEngine real
+     * del motor (T046) sobre el transporte de la app con reintentos y
+     * reanudacion; el historial de la cola vive en la sesion y las
+     * notificaciones quedan para el smoke en dispositivo. */
+    private val poolDescargas = Executors.newFixedThreadPool(2)
+    private val descargas = DownloadEngine(PlatformDownloadTransport(), poolDescargas, maxConcurrent = 2, maxRetries = 1)
+    private var descargaPendienteUrl: String? = null
+    private val urisDescargas = HashMap<Long, Uri>()
 
     /** Ajustes del navegador (T093 v1 + v2 + v3 + v4): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
@@ -330,7 +367,7 @@ class BrowserActivity : Activity() {
         filaOmnibox.addView(indicador, lpIndicador)
 
         omnibox = EditText(this)
-        omnibox.hint = "Busca o escribe una URL (R0189)"
+        omnibox.hint = "Busca o escribe una URL (R0191)"
         val fondoOmnibox = GradientDrawable()
         fondoOmnibox.setColor(NiaUi.color(colores.surface))
         fondoOmnibox.cornerRadius = NiaUi.dp(this, NiaTokens.RADIOS[4]).toFloat()
@@ -361,7 +398,13 @@ class BrowserActivity : Activity() {
         )
 
         estado = TextView(this)
-        estado.text = "listo (R0189)"
+        estado.text = "listo (R0191)"
+        descargas.addListener { item ->
+            runOnUiThread {
+                estado.text = "descarga #" + item.id + ": " + item.state.name.lowercase() +
+                    " " + item.bytesDownloaded + " bytes"
+            }
+        }
         estado.textSize = NiaTokens.TIPOGRAFIA[2].sp.toFloat()
         estado.setTextColor(NiaUi.color(colores.fg))
         estado.setPadding(espacio, 0, espacio, 0)
@@ -455,7 +498,7 @@ class BrowserActivity : Activity() {
         raiz.addView(barra)
 
         setContentView(raiz)
-        traza("shell", "arranque R0189 con " + tabs.contar() + " pestana(s)")
+        traza("shell", "arranque R0191 con " + tabs.contar() + " pestana(s)")
         aplicarRetencion()
         pintarStrip()
         manejarIntentExterno(intent)
@@ -663,6 +706,8 @@ class BrowserActivity : Activity() {
             "Sugerencias",
             "Identidad de la pagina",
             "Compartir pagina",
+            "Descargas (cola del motor)",
+            "Modo lectura",
             "Accesos de la pagina nueva",
             "Historial (solo pestanas normales)",
             "Ajustes (busca y cambia)",
@@ -680,11 +725,13 @@ class BrowserActivity : Activity() {
                     4 -> mostrarSugerencias()
                     5 -> mostrarIdentidad()
                     6 -> compartirPagina()
-                    7 -> mostrarAccesos()
-                    8 -> mostrarHistorial()
-                    9 -> mostrarAjustes()
-                    10 -> mostrarDiagnostico()
-                    11 -> startActivity(Intent(this, MainActivity::class.java))
+                    7 -> mostrarDescargas()
+                    8 -> modoLectura()
+                    9 -> mostrarAccesos()
+                    10 -> mostrarHistorial()
+                    11 -> mostrarAjustes()
+                    12 -> mostrarDiagnostico()
+                    13 -> startActivity(Intent(this, MainActivity::class.java))
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1146,6 +1193,213 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** T086 v1 (R0191, RES-0091): pantalla de descargas sobre la cola
+     * REAL del DownloadEngine verificado (T046): estados y bytes
+     * reales, cancelar con confirmacion ADR-019, reanudar solo
+     * fallidas con sink reabrible, abrir la completada con
+     * ACTION_VIEW y grant; la pausa NO existe en el motor (JAMAS un
+     * fallo disfrazado) y el historial vive en la sesion. */
+    private fun mostrarDescargas() {
+        val items = descargas.list()
+        val lineas: Array<String> = if (items.isEmpty()) {
+            arrayOf("(sin descargas todavia)")
+        } else {
+            items.map { item ->
+                "#" + item.id + " " + item.state.name.lowercase() + " " +
+                    item.bytesDownloaded + "/" +
+                    (if (item.totalBytes >= 0) item.totalBytes.toString() else "?")
+            }.toTypedArray()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Descargas")
+            .setItems(lineas) { _, cual ->
+                if (items.isEmpty()) {
+                    return@setItems
+                }
+                val item = items[cual]
+                when (item.state) {
+                    DownloadState.QUEUED, DownloadState.RUNNING -> confirmarCancelarDescarga(item.id)
+                    DownloadState.FAILED -> reanudarDescarga(item.id)
+                    DownloadState.COMPLETED -> abrirDescarga(item.id)
+                    DownloadState.CANCELLED -> estado.text = "descarga #" + item.id + " cancelada (terminal)"
+                }
+            }
+            .setNeutralButton("Nueva descarga") { _, _ -> pedirDescarga() }
+            .setPositiveButton("Actualizar") { _, _ -> mostrarDescargas() }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Cancelar corta de verdad: la pausa NO existe en el motor y no
+     * se disfraza (cancelar es terminal y pide confirmacion). */
+    private fun confirmarCancelarDescarga(id: Long) {
+        AlertDialog.Builder(this)
+            .setTitle("Cancelar descarga")
+            .setMessage("Cancelar corta la descarga #" + id + " (no hay pausa en el motor).")
+            .setPositiveButton("Si") { _, _ ->
+                val ok = descargas.cancel(id)
+                estado.text = if (ok) {
+                    "descarga #" + id + " cancelada"
+                } else {
+                    "descarga #" + id + " ya termino"
+                }
+                traza("descargas", "cancelar #" + id + " " + ok)
+            }
+            .setNegativeButton("No", null)
+            .show()
+    }
+
+    /** Reanudar sigue el contrato REAL del motor: solo FAILED con
+     * bytes y sink reabrible (Range); el resto avisa honesto. */
+    private fun reanudarDescarga(id: Long) {
+        val ok = descargas.resume(id)
+        estado.text = if (ok) {
+            "descarga #" + id + " reanudada desde donde fallo"
+        } else {
+            "descarga #" + id + " no reanudable (sin bytes o destino no reabrible)"
+        }
+        traza("descargas", "reanudar #" + id + " " + ok)
+    }
+
+    /** Abre la descarga completada con el Uri SAF registrado al
+     * encolar; sin app que la abra, aviso honesto. */
+    private fun abrirDescarga(id: Long) {
+        val uri = urisDescargas[id]
+        if (uri == null) {
+            estado.text = "descarga #" + id + " sin destino que abrir"
+            return
+        }
+        try {
+            val i = Intent(Intent.ACTION_VIEW)
+            i.setDataAndType(uri, "application/octet-stream")
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(i)
+            estado.text = "descarga #" + id + " abierta"
+        } catch (e: ActivityNotFoundException) {
+            estado.text = "sin app que abra la descarga #" + id
+        }
+    }
+
+    /** Nueva descarga: la URL se valida con la resolucion REAL del
+     * OmniboxInput y el destino se elige con SAF; lo que no resuelve
+     * a http/https JAMAS llega a la cola. */
+    private fun pedirDescarga() {
+        val campo = EditText(this)
+        campo.hint = "URL de la descarga (http o https)"
+        AlertDialog.Builder(this)
+            .setTitle("Nueva descarga")
+            .setView(campo)
+            .setPositiveButton("Elegir destino") { _, _ ->
+                val texto = campo.text.toString().trim()
+                when (val r = OmniboxInput.resolver(texto)) {
+                    is OmniboxInput.Resolucion.Navegar -> pedirDestinoSaf(r.url)
+                    is OmniboxInput.Resolucion.Buscar -> pedirDestinoSaf(r.url)
+                    is OmniboxInput.Resolucion.EsquemaNoSoportado ->
+                        estado.text = "descarga con esquema no soportado: " + r.esquema
+                    is OmniboxInput.Resolucion.ErrorDeParseo ->
+                        estado.text = "descarga invalida: " + r.motivo
+                    is OmniboxInput.Resolucion.Vacio -> estado.text = "descarga vacia"
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Pide el documento SAF para la descarga pendiente. */
+    private fun pedirDestinoSaf(url: String) {
+        descargaPendienteUrl = url
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.setType("application/octet-stream")
+        i.putExtra(Intent.EXTRA_TITLE, "nia-descarga.bin")
+        startActivityForResult(i, REQUEST_DESCARGA)
+        traza("descargas", "destino SAF para " + hostDe(url))
+    }
+
+    /** El documento SAF elegido alimenta el sink reabrible del motor. */
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_DESCARGA && resultCode == RESULT_OK) {
+            val uri = data?.data
+            val url = descargaPendienteUrl
+            if (uri == null || url == null) {
+                estado.text = "descarga sin destino o sin url (cancelada)"
+                return
+            }
+            descargaPendienteUrl = null
+            val id = descargas.enqueue(url, DescargaReabrible(uri, 0L))
+            urisDescargas[id] = uri
+            estado.text = "descarga #" + id + " en cola: " + hostDe(url)
+            traza("descargas", "encolada #" + id + " " + hostDe(url))
+        }
+    }
+
+    /** Sink reabrible sobre el documento SAF (patron T046 v2): wt
+     * trunca desde cero, wa posiciona al final para reanudar y
+     * reopen devuelve un sink NUEVO sobre el mismo Uri; si el destino
+     * no abre, el primer write falla y la descarga queda FAILED. */
+    private inner class DescargaReabrible(
+        private val uri: Uri,
+        private val startByte: Long
+    ) : ReopenableSink {
+        private var stream: java.io.OutputStream? = abrir()
+        private fun abrir(): java.io.OutputStream? = try {
+            contentResolver.openOutputStream(uri, if (startByte > 0L) "wa" else "wt")
+        } catch (e: java.io.IOException) {
+            null
+        }
+        override fun write(bytes: ByteArray, length: Int) {
+            val s = stream ?: throw java.io.IOException("destino cerrado")
+            s.write(bytes, 0, length)
+        }
+        override fun close() {
+            val s = stream
+            stream = null
+            try {
+                s?.close()
+            } catch (e: java.io.IOException) {
+            }
+        }
+        override fun reopen(startByteReanudar: Long): DownloadSink =
+            DescargaReabrible(uri, startByteReanudar)
+    }
+
+    /** T082 v1 (R0191, RES-0092): modo lectura con la heuristica DOM
+     * propia del Lector del motor sobre el HTML REAL de la pagina
+     * activa (sin re-fetch); los scripts extraidos NUNCA se ejecutan
+     * y el documento vivo no se toca: volver con Recargar (exclusion
+     * honesta: refetch, scroll no preservado). */
+    private fun modoLectura() {
+        val page = navActual()?.currentPage()
+        val html = page?.html
+        if (page == null || html == null || page.url.startsWith("about:")) {
+            estado.text = "sin pagina que leer"
+            traza("lectura", "sin pagina")
+            return
+        }
+        val lectura = Lector.leer(html)
+        if (lectura.parrafos.isEmpty()) {
+            estado.text = "sin contenido principal que leer"
+            traza("lectura", "sin parrafos " + hostDe(page.url))
+            return
+        }
+        val titulo = if (lectura.titulo.isEmpty()) hostDe(page.url) else lectura.titulo
+        val sb = StringBuilder()
+        sb.append("<html><body><h1>")
+        sb.append(textoHtml(titulo))
+        sb.append("</h1>")
+        for (p in lectura.parrafos) {
+            sb.append("<p>")
+            sb.append(textoHtml(p))
+            sb.append("</p>")
+        }
+        sb.append("<p>(modo lectura: Recargar vuelve a la pagina)</p>")
+        sb.append("</body></html>")
+        pintar(sb.toString())
+        estado.text = "modo lectura: " + lectura.parrafos.size + " parrafos"
+        traza("lectura", "pintada " + lectura.parrafos.size + " parrafos " + hostDe(page.url))
+    }
+
     /** La tarjeta de la pestana refleja la URL cargada; la carga en vuelo
      * solo pinta si su pestana sigue activa (R0176). */
     private fun refrescaTarjeta(id: Long?, o: NavOutcome) {
@@ -1502,7 +1756,7 @@ class BrowserActivity : Activity() {
 
     private fun paginaNueva(): String {
         val sb = StringBuilder()
-        sb.append("<html><body><h1>Navegador NIA (R0189)</h1>")
+        sb.append("<html><body><h1>Navegador NIA (R0191)</h1>")
         sb.append("<p>Motor propio, sin WebView. Busca o escribe una URL arriba. Toca una pestana para cambiar, x para cerrar, + para abrir.</p>")
         sb.append("<h2>Accesos</h2>")
         val pins = marcadores.accesosRapidos()
@@ -1539,4 +1793,8 @@ class BrowserActivity : Activity() {
             "p{margin-top:8px}" +
             "input{display:block;padding:10px;border-width:1px;border-color:" + colores.surface +
             ";background-color:#23233f;color:#f0eef8;font-size:14px;margin-top:8px}"
+
+    companion object {
+        private const val REQUEST_DESCARGA = 46
+    }
 }
