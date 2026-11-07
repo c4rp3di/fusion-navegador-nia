@@ -1702,7 +1702,7 @@ class BrowserActivity : Activity() {
         try {
             val doc = documentoImpreso(Orientacion.VERTICAL)
             val pm = getSystemService(PrintManager::class.java)
-            pm.print("navegador-nia", AdaptadorImpresion(doc), "Pagina del Navegador NIA")
+            pm.print("navegador-nia", AdaptadorImpresion(doc), null)
             estado.text = "Enviando a imprimir (" + doc.numeroPaginas + " paginas)"
             traza("imprimir", "print framework con " + doc.numeroPaginas + " paginas")
         } catch (e: Exception) {
@@ -1784,25 +1784,26 @@ class BrowserActivity : Activity() {
             cancellationSignal: CancellationSignal,
             callback: WriteResultCallback
         ) {
+            val pdf = PdfDocument()
             try {
-                PdfDocument().use { pdf ->
-                    for (hoja in doc.paginas) {
-                        if (cancellationSignal.isCanceled) {
-                            callback.onWriteCancelled()
-                            return
-                        }
-                        val info = PdfDocument.PageInfo.Builder(
-                            doc.anchoPt.toInt(), doc.altoPt.toInt(), hoja.numero + 1
-                        ).create()
-                        val paginaPdf = pdf.startPage(info)
-                        pintarOps(paginaPdf.canvas, hoja)
-                        pdf.finishPage(paginaPdf)
+                for (hoja in doc.paginas) {
+                    if (cancellationSignal.isCanceled) {
+                        callback.onWriteCancelled()
+                        return
                     }
-                    FileOutputStream(destination.fileDescriptor).use { pdf.writeTo(it) }
-                    callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                    val info = PdfDocument.PageInfo.Builder(
+                        doc.anchoPt.toInt(), doc.altoPt.toInt(), hoja.numero + 1
+                    ).create()
+                    val paginaPdf = pdf.startPage(info)
+                    pintarOps(paginaPdf.canvas, hoja)
+                    pdf.finishPage(paginaPdf)
                 }
+                FileOutputStream(destination.fileDescriptor).use { pdf.writeTo(it) }
+                callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
             } catch (e: Exception) {
                 callback.onWriteFailed(null)
+            } finally {
+                pdf.close()
             }
         }
     }
@@ -2621,7 +2622,8 @@ class BrowserActivity : Activity() {
             }
             try {
                 val doc = documentoImpreso(Orientacion.VERTICAL)
-                PdfDocument().use { pdf ->
+                val pdf = PdfDocument()
+                try {
                     for (hoja in doc.paginas) {
                         val info = PdfDocument.PageInfo.Builder(
                             doc.anchoPt.toInt(), doc.altoPt.toInt(), hoja.numero + 1
@@ -2640,6 +2642,8 @@ class BrowserActivity : Activity() {
                         estado.text = "PDF guardado (" + doc.numeroPaginas + " " + plural + ")"
                         traza("imprimir", "pdf guardado con " + doc.numeroPaginas + " " + plural)
                     }
+                } finally {
+                    pdf.close()
                 }
             } catch (e: Exception) {
                 estado.text = "no se pudo escribir el PDF"
