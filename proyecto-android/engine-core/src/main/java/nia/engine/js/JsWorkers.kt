@@ -80,6 +80,10 @@ class JsWorkers(private val limits: JsLimits = JsLimits()) {
     /** Workers activos (RUNNING) del manager. */
     fun activeCount(): Int = workers.values.count { it.state == WorkerState.RUNNING }
 
+    /** Handles de los workers del manager (vivos o terminados), en
+     * orden de creacion (T102): observable para el visor del host. */
+    fun handles(): List<Worker> = workers.values.toList()
+
     /** Cierto si al worker le queda trabajo: mensajes sin entregar o timers vivos. */
     fun hasPendingWork(w: Worker): Boolean =
         w.state == WorkerState.RUNNING && (w.inbox.isNotEmpty() || w.timers.isNotEmpty())

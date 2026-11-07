@@ -98,6 +98,20 @@ class JsServiceWorkers(private val limits: JsLimits = JsLimits()) {
         return if (c != null) c.entries.size else 0
     }
 
+    /** SWs registrados con su scope, en orden de registro (T102). */
+    fun entradas(): List<Pair<String, ServiceWorker>> =
+        workers.entries.map { Pair(it.key, it.value) }
+
+    /** Copia de las entradas de un cache para el visor (T102): url,
+     * estado y caracteres del cuerpo (todo MEDIDO); vacia si no existe. */
+    fun cacheSnapshot(nombre: String): List<Triple<String, Int, Int>> {
+        val c = caches[nombre] ?: return emptyList()
+        return c.entries.map { Triple(it.key, it.value.first, it.value.second.length) }
+    }
+
+    /** Borra un cache entero desde el host (T102): false si no existe. */
+    fun borrarCache(nombre: String): Boolean = caches.remove(nombre) != null
+
     /** SWs vivos (no TERMINATED) del registro. */
     fun activeCount(): Int = workers.values.count { it.state != SwState.TERMINATED }
 

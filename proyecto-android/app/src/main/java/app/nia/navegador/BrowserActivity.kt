@@ -104,6 +104,7 @@ import nia.engine.sitios.DatosSitio
 import nia.engine.url.Origin
 import nia.engine.url.UrlParseException
 import nia.engine.url.UrlParser
+import nia.engine.workers.VisorWorkers
 
 /**
  * BrowserActivity (T072 v2 + T073 v2 + T090 v1 + T074 v1 + T093 v4 + T075 v1 + T087 v1 + T088 v1 + T076 v1 + T086 v1 + T082 v1, RES-0091 + RES-0092, R0191): shell estetico
@@ -272,6 +273,12 @@ class BrowserActivity : Activity() {
      *  (permisos.tsv, solo decisiones permanentes): sin backend
      *  registrado NINGUNA API se anuncia habilitada. */
     private val permisos by lazy { GestorPermisos(File(filesDir, "permisos.tsv")) }
+
+    /** T102 v1 (R0236, RES-0110): visor de workers/SW del motor. Los
+     * gestores reales existen (T034) pero la navegacion todavia no
+     * registra workers ni SW de pagina (T071 v1): el dialogo declara
+     * el estado REAL, nada fabricado. */
+    private val visorWorkers by lazy { VisorWorkers(null, null) }
 
     /** T094 v1 (R0226, RES-0106, ADR-005): registro y runtime de
      *  modulos del motor (T009/T029/T030) con el gestor del shell;
@@ -971,6 +978,7 @@ class BrowserActivity : Activity() {
             "Modulos",
             "Imprimir / PDF",
             "Permisos por sitio"
+            "Workers / SW"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -1013,6 +1021,7 @@ class BrowserActivity : Activity() {
                     30 -> mostrarModulos()
                     31 -> imprimirPagina()
                     32 -> mostrarPermisos()
+                    33 -> mostrarWorkersSw()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1101,6 +1110,22 @@ class BrowserActivity : Activity() {
         TipoPermiso.GEOLOCALIZACION -> "geolocalizacion"
         TipoPermiso.NOTIFICACIONES -> "notificaciones"
         TipoPermiso.PORTAPAPELES -> "portapapeles"
+    }
+
+    /** T102 v1: dialogo del visor de workers y service workers. Hoy
+     * declara el estado REAL: los gestores del motor (T034) existen y
+     * estan cubiertos por tests, pero los scripts de pagina de la
+     * navegacion todavia no registran workers ni SW (T071 v1); cuando
+     * se cableen, este mismo dialogo listara workers vivos, scopes con
+     * su lifecycle y caches con tamanos MEDIDOS. */
+    private fun mostrarWorkersSw() {
+        val lineas = visorWorkers.texto()
+        traza("workers", "visor abierto con " + lineas.size + " lineas")
+        AlertDialog.Builder(this)
+            .setTitle("Workers / SW")
+            .setMessage(lineas.joinToString("\n"))
+            .setNegativeButton("Cerrar", null)
+            .show()
     }
 
     /** T077 v1 (R0195, RES-0093): rutas equivalentes POR MENU de los
