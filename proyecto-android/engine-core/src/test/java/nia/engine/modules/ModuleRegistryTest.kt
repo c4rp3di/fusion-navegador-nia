@@ -228,10 +228,18 @@ class ModuleRegistryTest {
         assertEquals(1, mod.manifest.apiVersion)
     }
 
-    @Test fun apiVersionFuturaRechazado() {
+    @Test fun apiVersionTresRechazadaUnsupported() {
         val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
-            "api-version = 2" + "\n"
+            "api-version = 3" + "\n"
         assertEquals(ErrorCode.UNSUPPORTED, fallo(ModuleRegistry().install(texto)).code)
+    }
+
+    @Test fun apiVersionDosAceptadaYLlegaAlManifest() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch" + "\n" +
+            "api-version = 2" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals(2, mod.manifest.apiVersion)
     }
 
     @Test fun bloquearSinRedRechazado() {

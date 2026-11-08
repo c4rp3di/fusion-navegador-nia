@@ -296,7 +296,10 @@ class BrowserActivity : Activity() {
     private val registroModulos by lazy { ModuleRegistry() }
     private val runtimeModulos by lazy { PluginRuntime(registroModulos) }
     private val gestorModulos by lazy {
-        GestorModulos(registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"))
+        GestorModulos(
+            registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"), null,
+            tabs.perfil(ProfileKind.NORMAL)?.configModulos
+        )
     }
 
     /** C7 v1 (R0255, RES-0114): registro de listas del host por modulo
@@ -3512,5 +3515,3 @@ class BrowserActivity : Activity() {
         private const val REQUEST_GUARDAR_PDF = 50
     }
 }
-
-

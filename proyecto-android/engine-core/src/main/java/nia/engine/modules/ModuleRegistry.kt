@@ -31,6 +31,13 @@ import nia.engine.broker.Renderer
  * permiso network.fetch (paquete incoherente, ADR-005). Los
  * manifiestos v1 siguen validos TAL CUAL.
  *
+ * T030 v2 (R0263, RES-0117, E4 C2): api-version = 2 es el contrato
+ * del hook CONTEXTO: onRequest recibe el objeto con url, type,
+ * initiator y thirdParty y el entry gana nia.ajustes, nia.datos y
+ * nia.diag (montados por el gestor). Migracion compatible: los
+ * modulos api-version 1 siguen recibiendo SOLO la url y su objeto
+ * nia no cambia; una api-version futura se rechaza con UNSUPPORTED.
+ *
  * T095 v1 (R0227, ADR-005): claves OPCIONALES author-key y next-key
  * (SPKI base64; next-key exige author-key y debe diferir); el ancla
  * de confianza sha256(SPKI) y la firma ECDSA viven en Niamod y en el
@@ -156,14 +163,16 @@ object ModuleParser {
         if (name.length > ModuleSchema.MAX_NAME_CHARS) return invalid("name demasiado largo")
         val description = values["description"] ?: ""
         if (description.length > ModuleSchema.MAX_DESCRIPTION_CHARS) return invalid("description demasiado larga")
+        var apiVersion = 1
         val apiRaw = values["api-version"]
         if (apiRaw != null) {
             val api = apiRaw.toIntOrNull() ?: return invalid("api-version no valida")
-            if (api != 1) {
+            if (api != 1 && api != 2) {
                 return Outcome.failure(
                     ErrorInfo(ErrorCode.UNSUPPORTED, "api-version no soportada")
                 )
             }
+            apiVersion = api
         }
         val categories = LinkedHashSet<String>()
         val catRaw = values["category"]
@@ -210,7 +219,7 @@ object ModuleParser {
         }
         return Outcome.success(
             ModuleManifest(
-                id, version, entry, permissions, name, description, 1,
+                id, version, entry, permissions, name, description, apiVersion,
                 categories, capabilities, authorKey, nextKey
             )
         )

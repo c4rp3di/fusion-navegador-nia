@@ -29,8 +29,10 @@ import nia.engine.inspector.InspectorSession
  * garantiza que viaja.
  *
  * v1 es del lado HOST: el entry del modulo NO tiene API de
- * diagnostico en api-version 1 (E4); cuando el hook reabra (T030) el
- * modulo podra escribir con su propio EventContext.
+ * diagnostico en api-version 1 (E4). T030 v2 (R0263, RES-0117,
+ * E4 C2): con api-version 2 el entry gana nia.diag.evento(nivel,
+ * texto) sobre ESTE canal, con la cuota por modulo y el
+ * EventContext ACTIVO de la fire (sin contexto no hay evento).
  */
 class DiagModulos(
     private val inspector: InspectorSession,

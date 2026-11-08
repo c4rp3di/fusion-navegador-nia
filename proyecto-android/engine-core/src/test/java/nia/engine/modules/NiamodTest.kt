@@ -425,4 +425,41 @@ class NiamodTest {
         val bytes = paquete(manifiesto(spki(kp)), codigo(), kp, extras)
         assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
     }
+
+    @Test
+    fun paqueteConDatosLosRetieneParaElEntry() {
+        val kp = par()
+        val dato = "dominios demo".toByteArray(Charsets.UTF_8)
+        val bytes = paquete(
+            manifiesto(spki(kp)), codigo(), kp,
+            listOf("datos/lista.txt" to dato)
+        )
+        val r = Niamod.inspeccionar(bytes)
+        assertTrue(r is Outcome.Success)
+        val p = (r as Outcome.Success).value as PaqueteNiamod
+        assertEquals("dominios demo", p.datos["lista.txt"])
+        assertEquals(1, p.archivosDatos)
+    }
+
+    @Test
+    fun paqueteConDatoDemasiadoGrandeRechazado() {
+        val kp = par()
+        val dato = ByteArray(300 * 1024)
+        val bytes = paquete(
+            manifiesto(spki(kp)), codigo(), kp,
+            listOf("datos/grande.txt" to dato)
+        )
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
+
+    @Test
+    fun paqueteConDatoConNombreInvalidoRechazado() {
+        val kp = par()
+        val dato = "x".toByteArray(Charsets.UTF_8)
+        val bytes = paquete(
+            manifiesto(spki(kp)), codigo(), kp,
+            listOf("datos/sub/dir.txt" to dato)
+        )
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
 }

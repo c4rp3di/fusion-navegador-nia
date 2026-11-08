@@ -17,8 +17,9 @@ import nia.engine.url.UrlParser
  * defecto.
  *
  * FilterDecision es la decision cerrada del filtro: Allow o
- * Block(moduleId). El hook del plugin sigue recibiendo SOLO la url
- * (T030): el contexto llega hasta la frontera del filtro, no al hook.
+ * Block(moduleId). El hook recibe la url en api-version 1 y el
+ * objeto de contexto completo en api-version 2 (T030 v2, C2): el
+ * contexto YA llega al hook, no solo a la frontera del filtro.
  */
 data class RequestContext(
     val url: String,

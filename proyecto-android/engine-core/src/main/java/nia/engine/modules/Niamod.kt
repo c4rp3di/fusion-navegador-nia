@@ -33,16 +33,18 @@ import nia.engine.js.JsParser
  * base64; huella de la clave = sha256 del SPKI); (5) recien entonces
  * el parseo del manifiesto (T009), las versiones y la coherencia;
  * (5b) parseo de los .json de ui-model con el parser del host (C11 v2,
- * uimodel/1, R0260);
+ * uimodel/1, R0260); (5c) extraccion de datos/ para el entry (T030 v2,
+ * R0263, RES-0117: api-version 2 la lee con nia.datos.leer; topes 256
+ * KiB por archivo y 1 MiB total, nombre relativo plano);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
  * mal, hash mal, limite mal o incoherencia = NO se instala).
  *
- * Exclusiones v1: datos/ se verifica (hash y CRC) pero NO se extrae
- * (en api-version 1 el modulo no puede leerlo; quien lo consume es
- * el host y su pipeline llega con el matcher de ADR-018), sin zip64,
+ * Exclusiones: sin zip64,
  * sin lista de bloqueo importable (ADR-005: futuro de api-version, no
- * prometida) y la central directory es la del formato clasico.
+ * prometida) y la central directory es la del formato clasico. Los
+ * datos/ son para el ENTRY (T030 v2), no para el host: el pipeline del
+ * matcher del host sigue llegando con ADR-018.
  */
 
 /** Entrada de la central directory (solo metadatos, sin contenidos). */
@@ -66,7 +68,8 @@ data class PaqueteNiamod(
     val nextHuella: String?,
     val uiModel: UiModelDeclarado,
     val archivosDatos: Int,
-    val bytesDatos: Long
+    val bytesDatos: Long,
+    val datos: Map<String, String>
 )
 
 object Niamod {
@@ -80,6 +83,12 @@ object Niamod {
 
     /** C11 v2 (R0260, RES-0116): tope de archivos .json de ui-model. */
     const val MAX_UI_ARCHIVOS = 8
+
+    /** T030 v2 (R0263, RES-0117): tope de un archivo de datos/. */
+    const val MAX_DATOS_ARCHIVO = 262_144
+
+    /** T030 v2 (R0263, RES-0117): tope total acumulado de datos/. */
+    const val MAX_DATOS_TOTAL = 1_048_576
 
     /**
      * Validacion completa del paquete en el ORDEN del ADR-005; el
@@ -121,8 +130,20 @@ object Niamod {
                 }
             }
             if (e.nombre.startsWith("datos/")) {
+                val relativo = e.nombre.removePrefix("datos/")
+                if (relativo.isEmpty() || relativo.contains("/") ||
+                    !UiModelModulos.idValido(relativo)
+                ) {
+                    return invalid("nombre de dato invalido: " + e.nombre)
+                }
+                if (e.descomprimido > MAX_DATOS_ARCHIVO) {
+                    return invalid("dato demasiado grande: " + e.nombre)
+                }
                 datosArchivos += 1
                 datosBytes += e.descomprimido
+                if (datosBytes > MAX_DATOS_TOTAL) {
+                    return invalid("datos/ demasiado grande en total")
+                }
             }
             totalDeclarado += e.descomprimido
             if (totalDeclarado > MAX_TOTAL) {
@@ -154,7 +175,8 @@ object Niamod {
             val captura = if (
                 nombre == "manifest.txt" ||
                 nombre == "firma.bin" ||
-                nombre.startsWith("ui-model/")
+                nombre.startsWith("ui-model/") ||
+                nombre.startsWith("datos/")
             ) {
                 ByteArrayOutputStream()
             } else {
@@ -179,6 +201,9 @@ object Niamod {
                 }
                 if (nombre.startsWith("ui-model/") && leidos > UiModelModulos.MAX_JSON_CHARS) {
                     return invalid("ui-model demasiado grande")
+                }
+                if (nombre.startsWith("datos/") && leidos > MAX_DATOS_ARCHIVO) {
+                    return invalid("dato demasiado grande")
                 }
                 sha.update(buf, 0, n)
                 crc.update(buf, 0, n)
@@ -279,6 +304,17 @@ object Niamod {
             is Outcome.Success -> f.value as UiModelDeclarado
         }
 
+        // (5c) T030 v2 (R0263, RES-0117): los datos/ del paquete quedan
+        // retenidos para que el entry api-version 2 los lea con
+        // nia.datos.leer (ya validados por topes y nombre en la fase 1).
+        val datosPaquete = LinkedHashMap<String, String>()
+        for (nombre in hashes.keys) {
+            if (!nombre.startsWith("datos/")) continue
+            val capturado = capturados[nombre]
+            if (capturado == null) return invalid("dato sin captura: " + nombre)
+            datosPaquete[nombre.removePrefix("datos/")] = String(capturado, Charsets.UTF_8)
+        }
+
         // (6) pre-parse del entry (JsParser de T029)
         val entryTexto = extraerEntry(bytes, manifest.entry)
             ?: return invalid("paquete sin entry declarada")
@@ -289,7 +325,7 @@ object Niamod {
         return Outcome.success(
             PaqueteNiamod(
                 manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella,
-                uiModel, datosArchivos, datosBytes
+                uiModel, datosArchivos, datosBytes, datosPaquete
             )
         )
     }

@@ -7,6 +7,12 @@ import org.junit.Test
 
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
+import nia.contracts.WallClock
+
+import nia.engine.inspector.EventContext
+import nia.engine.inspector.InspectorSession
+import nia.engine.net.RequestContext
+import nia.engine.profile.ConfigStore
 
 /**
  * Espejo Kotlin del gemelo TS validado offline (2 corridas
@@ -14,6 +20,10 @@ import nia.contracts.Outcome
  * prueba aqui contra las clases reales, con el interprete real y
  * sus cuotas. T029/T030 v1 (R0131, RES-0068, ADR-016): runtime de
  * plugins restringido, SIN red.
+ *
+ * T030 v2 (R0263, RES-0117, E4 C2): 9 pruebas nuevas de api-version 2
+ * (contexto en onRequest, ajustes del perfil, datos del paquete y
+ * diagnostico con EventContext y cuota), con gemelo propio del run.
  */
 class PluginRuntimeTest {
 
@@ -307,5 +317,178 @@ class PluginRuntimeTest {
         val re2 = ModuleParser.parse(texto2)
         assertTrue(re2 is Outcome.Success)
         assertEquals(0, (re2 as Outcome.Success).value.permissions.size)
+    }
+
+    private fun registryApi2(): ModuleRegistry {
+        val r = ModuleRegistry(null)
+        val instalado = r.install(
+            "id = demo.api2\nversion = 1\nentry = plugin.js\npermissions = network.fetch\napi-version = 2"
+        )
+        assertTrue(instalado is Outcome.Success)
+        return r
+    }
+
+    private class FakeReloj : WallClock {
+        var t = 1000L
+        override fun nowMillis(): Long {
+            val r = t
+            t += 1
+            return r
+        }
+    }
+
+    private fun ctxDiag(): EventContext = EventContext("s1", "t1", "f1", "d-1", 1L)
+
+    @Test
+    fun api1OnRequestSigueRecibiendoSoloLaUrl() {
+        val rt = PluginRuntime(registry())
+        val carga = rt.load("demo.adblock", "nia.onRequest(function (u) { return typeof u; });")
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals("string", valorDe(s.fire(PluginEvent.REQUEST, "https://x/a.png")))
+    }
+
+    @Test
+    fun api2OnRequestRecibeElContexto() {
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { return c.url + '|' + c.type + '|' + c.initiator; });"
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals(
+            "https://cdn.example.org/x.js|script|https://example.com/",
+            valorDe(
+                s.fire(
+                    PluginEvent.REQUEST,
+                    RequestContext("https://cdn.example.org/x.js", "script", "https://example.com/", true)
+                )
+            )
+        )
+    }
+
+    @Test
+    fun api2OnRequestTerceroViaja() {
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { return c.thirdParty === null ? 'null' : (c.thirdParty ? 'si' : 'no'); });"
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals(
+            "null",
+            valorDe(s.fire(PluginEvent.REQUEST, RequestContext("https://cdn.example.org/x.js", "script", "", null)))
+        )
+        assertEquals(
+            "si",
+            valorDe(s.fire(PluginEvent.REQUEST, RequestContext("https://cdn.otro.org/x", "script", "https://example.com/", true)))
+        )
+        assertEquals(
+            "no",
+            valorDe(s.fire(PluginEvent.REQUEST, RequestContext("https://example.com/x", "script", "https://example.com/", false)))
+        )
+    }
+
+    @Test
+    fun api2SinEntornoNoTieneAjustesDatosNiDiag() {
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onNavigate(function (u) { return typeof nia.ajustes + typeof nia.datos + typeof nia.diag; });"
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals("undefinedundefinedundefined", valorDe(s.fire(PluginEvent.NAVIGATE, "https://x/")))
+    }
+
+    @Test
+    fun api2AjustesLeerValorDelPerfil() {
+        val config = ConfigStore(null)
+        assertTrue(config.escribir("demo.api2", "uim.x", "false") is Outcome.Success)
+        val ui = UiModelDeclarado(listOf(AjusteDeclarado("x", "Ajuste x", true)), emptyList(), emptyList())
+        val entry = "nia.onRequest(function (u) { return nia.ajustes.leer('x') ? 'block' : 'allow'; });"
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load("demo.api2", entry, EntornoModulo(config, ui, emptyMap(), null))
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals("allow", valorDe(s.fire(PluginEvent.REQUEST, "https://x/a.png")))
+        val rt2 = PluginRuntime(registryApi2())
+        val carga2 = rt2.load("demo.api2", entry, EntornoModulo(null, ui, emptyMap(), null))
+        assertTrue(carga2 is Outcome.Success)
+        val s2 = (carga2 as Outcome.Success).value
+        assertEquals("block", valorDe(s2.fire(PluginEvent.REQUEST, "https://x/a.png")))
+    }
+
+    @Test
+    fun api2AjustesNoDeclaradoEsUndefined() {
+        val rt = PluginRuntime(registryApi2())
+        val ui = UiModelDeclarado(listOf(AjusteDeclarado("x", "Ajuste x", true)), emptyList(), emptyList())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onNavigate(function (u) { return typeof nia.ajustes.leer('otro'); });",
+            EntornoModulo(null, ui, emptyMap(), null)
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals("undefined", valorDe(s.fire(PluginEvent.NAVIGATE, "https://x/")))
+    }
+
+    @Test
+    fun api2DatosLeerDelPaquete() {
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onNavigate(function (u) { return nia.datos.leer('lista.txt') + '|' + typeof nia.datos.leer('nada.txt'); });",
+            EntornoModulo(
+                null,
+                UiModelDeclarado(emptyList(), emptyList(), emptyList()),
+                mapOf("lista.txt" to "dominios demo"),
+                null
+            )
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals("dominios demo|undefined", valorDe(s.fire(PluginEvent.NAVIGATE, "https://x/")))
+    }
+
+    @Test
+    fun api2DiagEventoEscribeConContextoActivo() {
+        val inspector = InspectorSession(FakeReloj())
+        val diag = DiagModulos(inspector)
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { return 'n1=' + nia.diag.evento('fatal', 'x') + ' n2=' + nia.diag.evento('info', 'hola'); });",
+            EntornoModulo(null, UiModelDeclarado(emptyList(), emptyList(), emptyList()), emptyMap(), diag)
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals("n1=false n2=false", valorDe(s.fire(PluginEvent.REQUEST, "https://x/a.png")))
+        assertEquals(0, inspector.all().size)
+        assertEquals(
+            "n1=false n2=true",
+            valorDe(s.fire(PluginEvent.REQUEST, RequestContext("https://x/a.png", "document", "", null), ctxDiag()))
+        )
+        assertEquals(1, inspector.all().size)
+        assertEquals("hola", inspector.all()[0].payload["texto"])
+    }
+
+    @Test
+    fun api2DiagRespetaLaCuota() {
+        val diag = DiagModulos(InspectorSession(FakeReloj()), 1)
+        val rt = PluginRuntime(registryApi2())
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { return 'uno=' + nia.diag.evento('info', 'uno') + ' dos=' + nia.diag.evento('info', 'dos'); });",
+            EntornoModulo(null, UiModelDeclarado(emptyList(), emptyList(), emptyList()), emptyMap(), diag)
+        )
+        assertTrue(carga is Outcome.Success)
+        val s = (carga as Outcome.Success).value
+        assertEquals(
+            "uno=true dos=false",
+            valorDe(s.fire(PluginEvent.REQUEST, RequestContext("https://x/a.png", "document", "", null), ctxDiag()))
+        )
     }
 }

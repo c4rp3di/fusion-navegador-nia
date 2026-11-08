@@ -21,6 +21,9 @@ import org.junit.Test
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 
+import nia.engine.net.RequestContext
+import nia.engine.profile.ConfigStore
+
 /**
  * Espejo Kotlin del gemelo TS validado offline para el gestor (T094
  * v1, R0226, RES-0106, ADR-005): estados del gestor, alcance
@@ -93,7 +96,12 @@ class GestorModulosTest {
         return baos.toByteArray()
     }
 
-    private fun manifiestoNiamod(author: String, permisos: String, next: String = ""): String {
+    private fun manifiestoNiamod(
+        author: String,
+        permisos: String,
+        next: String = "",
+        apiVersion: Int = 1
+    ): String {
         val sb = StringBuilder()
         sb.append("id = demo.niamod\n")
         sb.append("version = 2\n")
@@ -104,7 +112,7 @@ class GestorModulosTest {
         sb.append("name = Demo niamod\n")
         sb.append("category = background\n")
         sb.append("capabilities = observar\n")
-        sb.append("api-version = 1\n")
+        sb.append("api-version = ").append(apiVersion).append('\n')
         sb.append("author-key = ").append(author).append('\n')
         if (next.isNotEmpty()) sb.append("next-key = ").append(next).append('\n')
         return sb.toString()
@@ -113,11 +121,12 @@ class GestorModulosTest {
     private fun paqueteNiamod(
         manifest: String,
         kp: KeyPair,
-        extras: List<Pair<String, ByteArray>> = emptyList()
+        extras: List<Pair<String, ByteArray>> = emptyList(),
+        entry: String = "nia.onStartup(function (url) { return \"hola\"; });\n" +
+            "nia.onNavigate(function (url) { return \"hola\"; });\n"
     ): ByteArray {
         val m = manifest.toByteArray(Charsets.UTF_8)
-        val e = ("nia.onStartup(function (url) { return \"hola\"; });\n" +
-            "nia.onNavigate(function (url) { return \"hola\"; });\n").toByteArray(Charsets.UTF_8)
+        val e = entry.toByteArray(Charsets.UTF_8)
         val can = canonico(m, listOf("entry.js" to e) + extras)
         val firma = firmar(kp.private, can)
         return zip(listOf("manifest.txt" to m, "entry.js" to e) + extras + listOf("firma.bin" to firma))
@@ -430,5 +439,38 @@ class GestorModulosTest {
         assertEquals(1, previa.panelesDeclarados)
         assertEquals(0, previa.archivosDatos)
         assertEquals(0L, previa.bytesDatos)
+    }
+
+    @Test
+    fun entryConApi2LeeLosAjustesDelPerfil() {
+        val r1 = ModuleRegistry()
+        val rt = PluginRuntime(r1)
+        val config = ConfigStore(null)
+        assertTrue(config.escribir("demo.niamod", "uim.ver.basico", "false") is Outcome.Success)
+        val g = GestorModulos(r1, rt, null, null, config)
+        val kp = par()
+        val ui = ("{\"ajustes\":[{\"id\":\"ver.basico\"," +
+            "\"titulo\":\"Version basica\",\"tipo\":\"bool\",\"defecto\":true}]}")
+            .toByteArray(Charsets.UTF_8)
+        val entry = "nia.onRequest(function (u) { return nia.ajustes.leer('ver.basico') ? 'block' : 'allow'; });\n"
+        val bytes = paqueteNiamod(
+            manifiestoNiamod(spki(kp), "storage.read, network.fetch", apiVersion = 2),
+            kp,
+            listOf("ui-model/ajustes.json" to ui),
+            entry
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        val s = rt.sessionOf("demo.niamod")!!
+        val r = s.fire(PluginEvent.REQUEST, RequestContext("https://x/a.png", "image", "", null))
+        assertTrue(r is Outcome.Success)
+        assertEquals("allow", (r as Outcome.Success).value)
+        val r2reg = ModuleRegistry()
+        val rt2 = PluginRuntime(r2reg)
+        val g2 = GestorModulos(r2reg, rt2)
+        ok(g2.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        val s2 = rt2.sessionOf("demo.niamod")!!
+        val r2 = s2.fire(PluginEvent.REQUEST, RequestContext("https://x/a.png", "image", "", null))
+        assertTrue(r2 is Outcome.Success)
+        assertEquals("sin config manda el defecto", "block", (r2 as Outcome.Success).value)
     }
 }

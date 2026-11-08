@@ -259,4 +259,26 @@ class PluginNetFilterTest {
         )
         assertTrue("sin config el modulo bloquea igual que en v1", d is FilterDecision.Block)
     }
+
+    @Test
+    fun api2ElFiltroPasaElContextoAlHook() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        val instalado = reg.install(
+            "id = demo.api2\nversion = 1\nentry = entry.js\npermissions = network.fetch\ncapabilities = bloquear\napi-version = 2"
+        )
+        assertTrue(instalado is Outcome.Success)
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { return c.type === 'image' ? 'block' : 'allow'; });"
+        )
+        assertTrue(carga is Outcome.Success)
+        val f = PluginNetFilter(rt, reg)
+        assertTrue(
+            f.decide(RequestContext.of("https://cdn.example.org/x.png", "image", "")) is FilterDecision.Block
+        )
+        assertTrue(
+            f.decide(RequestContext.of("https://example.com/", "document", "")) is FilterDecision.Allow
+        )
+    }
 }

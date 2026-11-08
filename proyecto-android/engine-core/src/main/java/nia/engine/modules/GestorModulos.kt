@@ -5,6 +5,7 @@ import java.io.File
 import nia.contracts.ErrorCode
 import nia.contracts.ErrorInfo
 import nia.contracts.Outcome
+import nia.engine.profile.ConfigStore
 
 /**
  * T094 v1 (R0226, RES-0106, ADR-005 APROBADO en R0225): gestor de
@@ -29,9 +30,15 @@ import nia.contracts.Outcome
  * C11 v2 (R0260, RES-0116): el gestor registra el ui-model
  * declarado del paquete (uimodel/1) y lo expone al shell; los
  * VALORES de los ajustes declarados persisten por perfil via C9
- * (clave "uim.<id>") y el entry NO puede leerlos en api-version 1
- * (E4; el consumo llega cuando reabra T030). Las acciones y
- * paneles declarados son catalogo: sin ejecucion en v2.
+ * (clave "uim.<id>").
+ *
+ * T030 v2 (R0263, RES-0117, E4 C2): el gestor monta el ENTORNO del
+ * entry (ajustes del ui-model + config del perfil, datos/ del
+ * paquete, canal de diagnostico) y lo pasa al runtime en load,
+ * update y activar; con api-version 2 el entry lee ajustes con
+ * nia.ajustes.leer, datos con nia.datos.leer y escribe diagnostico
+ * con nia.diag.evento. Sin config o sin diag el entorno llega con
+ * esas piezas en null: el entry de api-version 1 no cambia.
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -99,7 +106,9 @@ class GestorModulos(
     private val registry: ModuleRegistry,
     private val runtime: PluginRuntime,
     private val almacen: File? = null,
-    private val claves: File? = null
+    private val claves: File? = null,
+    private val config: ConfigStore? = null,
+    private val diag: DiagModulos? = null
 ) {
     private val codigos = HashMap<String, String>()
     private val disparos = HashMap<String, Int>()
@@ -109,6 +118,7 @@ class GestorModulos(
     private val ancladas = HashMap<String, String>()
     private val pendientes = HashMap<String, String>()
     private val uiModelos = HashMap<String, UiModelDeclarado>()
+    private val datosPaquetes = HashMap<String, Map<String, String>>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
     data class Alcance(val global: Boolean, val origenes: Set<String>) {
@@ -277,7 +287,10 @@ class GestorModulos(
                 )
             }
             if (runtime.sessionOf(id) != null) {
-                val upd = runtime.update(id, p.manifiestoTexto, p.entryTexto)
+                val upd = runtime.update(
+                    id, p.manifiestoTexto, p.entryTexto,
+                    EntornoModulo(config, p.uiModel, p.datos, diag)
+                )
                 if (upd is Outcome.Failure) return Outcome.failure(upd.error)
             } else {
                 val viejo = registry.manifestOf(id)
@@ -297,7 +310,9 @@ class GestorModulos(
         } else {
             val instalado = registry.install(p.manifiestoTexto)
             if (instalado is Outcome.Failure) return Outcome.failure(instalado.error)
-            val carga = runtime.load(id, p.entryTexto)
+            val carga = runtime.load(
+                id, p.entryTexto, EntornoModulo(config, p.uiModel, p.datos, diag)
+            )
             if (carga is Outcome.Failure) {
                 registry.uninstall(id)
                 return Outcome.failure(carga.error)
@@ -305,6 +320,7 @@ class GestorModulos(
         }
         codigos[id] = p.entryTexto
         uiModelos[id] = p.uiModel
+        datosPaquetes[id] = p.datos
         ancladas[id] = p.huellaClave
         if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
             pendientes[id] = p.nextHuella
@@ -324,7 +340,15 @@ class GestorModulos(
                 ErrorInfo(ErrorCode.INVALID_INPUT, "sin entry conocida para el modulo: " + id)
             )
         }
-        val carga = runtime.load(id, codigo)
+        val carga = runtime.load(
+            id, codigo,
+            EntornoModulo(
+                config,
+                uiModelos[id] ?: UiModelDeclarado(emptyList(), emptyList(), emptyList()),
+                datosPaquetes[id] ?: emptyMap(),
+                diag
+            )
+        )
         if (carga is Outcome.Failure) return Outcome.failure(carga.error)
         return Outcome.success(Unit)
     }
@@ -351,6 +375,7 @@ class GestorModulos(
         veredictos.remove(id)
         alcances.remove(id)
         uiModelos.remove(id)
+        datosPaquetes.remove(id)
         guardar()
         return Outcome.success(Unit)
     }

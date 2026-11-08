@@ -17,13 +17,17 @@ import nia.engine.profile.ConfigStore
  * Fail-open ante hook que lanza, cuotas agotadas, modulo sin sesion
  * cargada o sin hooks de red: abstencion y sigue la cadena; si nadie
  * bloquea, Allow (la navegacion NUNCA se rompe por un modulo roto).
- * El hook recibe SOLO la url (T030).
  *
  * T052 v2/C9 (R0253, RES-0113): config opcional del perfil. Un modulo
  * con general.enabled="false" en la config se abstiene SIN disparar su
  * hook (no gasta cuotas); la desactivacion del gestor SIEMPRE gana
  * (la config solo se consulta con sesion cargada). Sin config el
  * filtro es identico a la v1 (ausencia de ajuste = habilitado).
+ *
+ * T030 v2 (R0263, RES-0117, E4 C2): el filtro pasa el RequestContext
+ * ENTERO a la sesion; el hook decide la forma del argumento su
+ * api-version (1: solo la url; 2: el objeto con url, type, initiator
+ * y thirdParty).
  */
 class PluginNetFilter(
     private val runtime: PluginRuntime,
@@ -36,7 +40,7 @@ class PluginNetFilter(
             val session = runtime.sessionOf(id) ?: continue
             if (config != null && !config.enabled(id)) continue
             if (session.hookCount(PluginEvent.REQUEST) == 0) continue
-            val fired = session.fire(PluginEvent.REQUEST, context.url)
+            val fired = session.fire(PluginEvent.REQUEST, context)
             if (fired is Outcome.Success && fired.value.trim() == "block") {
                 return FilterDecision.Block(id)
             }
