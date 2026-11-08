@@ -8,6 +8,9 @@ import nia.contracts.CancellationToken
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 import nia.contracts.WallClock
+import nia.engine.inspector.EventContext
+import nia.engine.inspector.EventLevel
+import nia.engine.inspector.InspectorSession
 import nia.engine.net.FetchManager
 import nia.engine.net.FetchRequest
 import nia.engine.net.FetchResponse
@@ -23,6 +26,9 @@ import nia.engine.profile.ConfigStore
  * con modulos demo, SIN red (el transporte es falso y JAMAS se llama
  * cuando algo bloquea). T052 v1 (R0242, RES-0111, ADR-005) y v2/C9
  * (R0253, RES-0113): config del perfil, enabled=false abstiene.
+ * C10 v2 (R0267, RES-0118): contextoDe aporta el EventContext real
+ * de cada peticion y nia.diag escribe en el inspector del host
+ * (gemelo 2 corridas, huella 14.14.25e8790c).
  */
 class PluginNetFilterTest {
 
@@ -280,5 +286,67 @@ class PluginNetFilterTest {
         assertTrue(
             f.decide(RequestContext.of("https://example.com/", "document", "")) is FilterDecision.Allow
         )
+    }
+
+    @Test
+    fun api2ElContextoDelProveedorLlegaAlDiagnostico() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        val instalado = reg.install(
+            "id = demo.api2\nversion = 1\nentry = entry.js\npermissions = network.fetch\ncapabilities = bloquear\napi-version = 2"
+        )
+        assertTrue(instalado is Outcome.Success)
+        val inspector = InspectorSession(FakeClock(9L))
+        val diag = DiagModulos(inspector)
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { nia.diag.evento('info', 'peticion ' + c.url); return 'allow'; });",
+            EntornoModulo(null, UiModelDeclarado(emptyList(), emptyList(), emptyList()), emptyMap(), diag)
+        )
+        assertTrue(carga is Outcome.Success)
+        val ctx = EventContext("s-demo", "t-3", "main", "d-3-1", 1L)
+        val vistas = ArrayList<RequestContext>()
+        val f = PluginNetFilter(rt, reg, null, { c -> vistas.add(c); ctx })
+        assertTrue(
+            "el hook solo escribe diagnostico: no bloquea",
+            f.decide(RequestContext.of("https://cdn.example.org/x.png", "image", "")) is FilterDecision.Allow
+        )
+        assertEquals("el proveedor ve la peticion", 1, vistas.size)
+        assertEquals("image", vistas[0].resourceType)
+        val eventos = inspector.all()
+        assertEquals("el diagnostico del modulo llega al inspector del host", 1, eventos.size)
+        assertEquals("modulo", eventos[0].kind)
+        assertEquals(EventLevel.INFO, eventos[0].level)
+        assertEquals("demo.api2", eventos[0].payload["modulo"])
+        assertEquals("peticion https://cdn.example.org/x.png", eventos[0].payload["texto"])
+        assertEquals("el contexto del proveedor viaja al evento", ctx, eventos[0].context)
+    }
+
+    @Test
+    fun api2SinProveedorElDiagnosticoSeAbstiene() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        val instalado = reg.install(
+            "id = demo.api2\nversion = 1\nentry = entry.js\npermissions = network.fetch\ncapabilities = bloquear\napi-version = 2"
+        )
+        assertTrue(instalado is Outcome.Success)
+        val inspector = InspectorSession(FakeClock(9L))
+        val diag = DiagModulos(inspector)
+        val carga = rt.load(
+            "demo.api2",
+            "nia.onRequest(function (c) { return 'n=' + nia.diag.evento('info', 'x'); });",
+            EntornoModulo(null, UiModelDeclarado(emptyList(), emptyList(), emptyList()), emptyMap(), diag)
+        )
+        assertTrue(carga is Outcome.Success)
+        val f = PluginNetFilter(rt, reg)
+        assertTrue(
+            f.decide(RequestContext.of("https://cdn.example.org/x.png", "image", "")) is FilterDecision.Allow
+        )
+        assertEquals("sin proveedor nia.diag devuelve false y no hay evento", 0, inspector.all().size)
+        val fNulo = PluginNetFilter(rt, reg, null, { _ -> null })
+        assertTrue(
+            fNulo.decide(RequestContext.of("https://cdn.example.org/y.png", "image", "")) is FilterDecision.Allow
+        )
+        assertEquals("proveedor null: sin contexto no hay evento", 0, inspector.all().size)
     }
 }

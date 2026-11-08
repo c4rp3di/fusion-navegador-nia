@@ -168,6 +168,8 @@ jobs:
             engine-core/src/test/java/nia/engine/modules/DiagModulosTest.kt \
             engine-core/src/main/java/nia/engine/modules/UiModelModulos.kt \
             engine-core/src/test/java/nia/engine/modules/UiModelModulosTest.kt \
+            engine-core/src/main/java/nia/engine/modules/ContextoModulos.kt \
+            engine-core/src/test/java/nia/engine/modules/ContextoModulosTest.kt \
             engine-core/src/main/java/nia/engine/qa/SiteMatrix.kt \
             engine-core/src/test/java/nia/engine/qa/SiteMatrixTest.kt \
             engine-core/src/main/java/nia/engine/qa/YoutubeMatrix.kt \
@@ -363,4 +365,3 @@ jobs:
               --notes "APK con firma DEBUG del commit ${GITHUB_SHA}. Distribucion APK manual (ADR-008). NO es la release oficial del navegador: tag smoke prerelease para el reality smoke con dispositivo." \
               --prerelease
           fi
-

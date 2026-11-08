@@ -2,6 +2,7 @@ package nia.engine.modules
 
 import nia.contracts.Outcome
 
+import nia.engine.inspector.EventContext
 import nia.engine.net.FilterDecision
 import nia.engine.net.RequestContext
 import nia.engine.net.RequestFilter
@@ -28,11 +29,17 @@ import nia.engine.profile.ConfigStore
  * ENTERO a la sesion; el hook decide la forma del argumento su
  * api-version (1: solo la url; 2: el objeto con url, type, initiator
  * y thirdParty).
+ *
+ * C10 v2 (R0267, RES-0118): contextoDe opcional aporta el EventContext
+ * REAL de cada peticion (la pestana que navega) para que el
+ * diagnostico del modulo escriba en el inspector del host; sin
+ * contexto o con proveedor null nia.diag se abstiene (devuelve false).
  */
 class PluginNetFilter(
     private val runtime: PluginRuntime,
     private val registry: ModuleRegistry,
-    private val config: ConfigStore? = null
+    private val config: ConfigStore? = null,
+    private val contextoDe: ((RequestContext) -> EventContext?)? = null
 ) : RequestFilter {
 
     override fun decide(context: RequestContext): FilterDecision {
@@ -40,7 +47,7 @@ class PluginNetFilter(
             val session = runtime.sessionOf(id) ?: continue
             if (config != null && !config.enabled(id)) continue
             if (session.hookCount(PluginEvent.REQUEST) == 0) continue
-            val fired = session.fire(PluginEvent.REQUEST, context)
+            val fired = session.fire(PluginEvent.REQUEST, context, contextoDe?.invoke(context))
             if (fired is Outcome.Success && fired.value.trim() == "block") {
                 return FilterDecision.Block(id)
             }

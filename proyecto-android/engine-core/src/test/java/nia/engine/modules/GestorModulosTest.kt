@@ -21,6 +21,9 @@ import org.junit.Test
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 
+import nia.engine.inspector.EventContext
+import nia.engine.inspector.EventLevel
+import nia.engine.inspector.InspectorSession
 import nia.engine.net.RequestContext
 import nia.engine.profile.ConfigStore
 
@@ -30,6 +33,9 @@ import nia.engine.profile.ConfigStore
  * global/sitio del host, contadores de actividad, fail-open ante un
  * hook roto y persistencia del alcance cuyo archivo corrupto se
  * ignora. Con el registro y el runtime reales (T009/T029/T030).
+ * C10 v2 (R0267, RES-0118): dispararNavegar con EventContext lleva
+ * el diagnostico del modulo al inspector del host (gemelo 2
+ * corridas, huella 14.14.25e8790c).
  */
 class GestorModulosTest {
 
@@ -472,5 +478,37 @@ class GestorModulosTest {
         val r2 = s2.fire(PluginEvent.REQUEST, RequestContext("https://x/a.png", "image", "", null))
         assertTrue(r2 is Outcome.Success)
         assertEquals("sin config manda el defecto", "block", (r2 as Outcome.Success).value)
+    }
+
+    @Test
+    fun dispararNavegarConContextoLlevaElDiagnosticoAlInspector() {
+        val r1 = ModuleRegistry()
+        val rt = PluginRuntime(r1)
+        val inspector = InspectorSession()
+        val diag = DiagModulos(inspector)
+        val g = GestorModulos(r1, rt, null, null, null, diag)
+        val kp = par()
+        val bytes = paqueteNiamod(
+            manifiestoNiamod(spki(kp), "storage.read", apiVersion = 2),
+            kp,
+            emptyList(),
+            "nia.onNavigate(function (u) { return nia.diag.evento('info', 'nav ' + u) ? 'diag' : 'nada'; });\n"
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val res = g.dispararNavegar("https://a.dev/", "https://a.dev/pagina", ctx)
+        assertEquals(1, res.disparados)
+        assertEquals(0, res.errores)
+        val eventos = inspector.all()
+        assertEquals("el fire con contexto escribe en el inspector del host", 1, eventos.size)
+        assertEquals("modulo", eventos[0].kind)
+        assertEquals(EventLevel.INFO, eventos[0].level)
+        assertEquals("demo.niamod", eventos[0].payload["modulo"])
+        assertEquals("nav https://a.dev/pagina", eventos[0].payload["texto"])
+        assertEquals("el contexto de la navegacion viaja al evento", ctx, eventos[0].context)
+        val resSin = g.dispararNavegar("https://a.dev/", "https://a.dev/otra")
+        assertEquals(1, resSin.disparados)
+        assertEquals("sin contexto nia.diag se abstiene: no hay evento nuevo", 1, inspector.all().size)
+        assertEquals("la cuota del modulo solo cuenta lo escrito", 1, diag.escritos("demo.niamod"))
     }
 }

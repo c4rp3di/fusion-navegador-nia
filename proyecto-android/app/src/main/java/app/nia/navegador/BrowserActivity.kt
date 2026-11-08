@@ -56,12 +56,16 @@ import nia.engine.gestures.ConfigGestos
 import nia.engine.gestures.OcultadorBarra
 import nia.engine.gestures.TironRefresh
 import nia.engine.history.HistoryManager
+import nia.engine.inspector.EventContext
+import nia.engine.inspector.InspectorSession
 import nia.engine.js.CuotasJs
 import nia.engine.js.JsLimits
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.modules.AprobacionPaquete
+import nia.engine.modules.ContextoModulos
+import nia.engine.modules.DiagModulos
 import nia.engine.modules.EstadoClave
 import nia.engine.modules.EstadoModulo
 import nia.engine.modules.FichaModulo
@@ -248,8 +252,11 @@ class BrowserActivity : Activity() {
     private val tabs by lazy {
         TabsManager(
             clock, HttpTransport(), File(cacheDir, "perfil-navegador"),
-            filtroDePerfil = { perfil ->
-                PluginNetFilter(runtimeModulos, registroModulos, perfil.configModulos)
+            filtroDePerfil = { perfil, tabId ->
+                PluginNetFilter(
+                    runtimeModulos, registroModulos, perfil.configModulos,
+                    { _ -> contextoModulos.actual(tabId) }
+                )
             }
         )
     }
@@ -295,10 +302,21 @@ class BrowserActivity : Activity() {
      *  corruptas ignoradas, ADR-005). */
     private val registroModulos by lazy { ModuleRegistry() }
     private val runtimeModulos by lazy { PluginRuntime(registroModulos) }
+    /** T008/C10 v2 (R0267, RES-0118): sesion del inspector del shell
+     *  que recibe el diagnostico de los modulos (la redaccion en la
+     *  ingesta es la del SecretRedactor del host, E4 C10). */
+    private val inspectorModulos by lazy { InspectorSession(clock) }
+
+    /** C10 v2 (R0267, RES-0118): identidad de los fires reales: la
+     *  sesion del navegador, la pestana que navega y el documento
+     *  acunado por navegacion (el frame es SIEMPRE main: el motor v1
+     *  no tiene frame tree). */
+    private val contextoModulos by lazy { ContextoModulos("shell-" + clock.nowMillis()) }
+
     private val gestorModulos by lazy {
         GestorModulos(
             registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"), null,
-            tabs.perfil(ProfileKind.NORMAL)?.configModulos
+            tabs.perfil(ProfileKind.NORMAL)?.configModulos, DiagModulos(inspectorModulos)
         )
     }
 
@@ -871,12 +889,13 @@ class BrowserActivity : Activity() {
         resumenModulos = ""
         progreso.setFraccion(0.2f)
         traza("nav", "navegar " + hostDe(url))
+        val ctxModulo = if (id == null) null else contextoModulos.nuevaNavegacion(id)
         Thread {
             val inicio = clock.nowMillis()
             val o = nc.navigate(url)
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
             if (scriptsInterrumpidos == 0) reintentosCuotas = 0
-            dispararModulos(o)
+            dispararModulos(o, ctxModulo)
             val latencia = clock.nowMillis() - inicio
             runOnUiThread {
                 progreso.setFraccion(0f)
@@ -909,11 +928,12 @@ class BrowserActivity : Activity() {
         resumenModulos = ""
         progreso.setFraccion(0.2f)
         traza("nav", "back/forward")
+        val ctxModulo = if (id == null) null else contextoModulos.nuevaNavegacion(id)
         Thread {
             val inicio = clock.nowMillis()
             val o = accion(nc)
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
-            dispararModulos(o)
+            dispararModulos(o, ctxModulo)
             if (scriptsInterrumpidos == 0) reintentosCuotas = 0
             val latencia = clock.nowMillis() - inicio
             runOnUiThread {
@@ -1896,12 +1916,14 @@ class BrowserActivity : Activity() {
      *  en el origen de la carga (fail-open, ADR-005); corre en el hilo
      *  de navegacion y solo deja el resumen en un campo volatile para
      *  el estado de la UI: JAMAS lanza y JAMAS toca la traza desde el
-     *  hilo de fondo. */
-    private fun dispararModulos(o: NavOutcome?) {
+     *  hilo de fondo. C10 v2 (R0267, RES-0118): ctx lleva el
+     *  EventContext real de la navegacion para el diagnostico del
+     *  modulo; sin contexto nia.diag se abstiene. */
+    private fun dispararModulos(o: NavOutcome?, ctx: EventContext? = null) {
         if (o !is NavOutcome.Loaded) return
         val t = o.page.origin as? Origin.Tuple ?: return
         val clave = t.scheme + "://" + t.host + ":" + t.port
-        val res = gestorModulos.dispararNavegar(clave, o.page.url)
+        val res = gestorModulos.dispararNavegar(clave, o.page.url, ctx)
         if (res.disparados > 0) {
             resumenModulos = "modulos " + res.disparados + " notificado(s), errores: " + res.errores
         }

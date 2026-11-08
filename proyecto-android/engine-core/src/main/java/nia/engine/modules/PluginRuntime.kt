@@ -99,9 +99,11 @@ class PluginSession internal constructor(
 
     fun hookCount(evento: PluginEvent): Int = hooks[evento]?.size ?: 0
 
-    /** Dispara el evento: cada hook recibe la url y el ultimo decide. */
-    fun fire(evento: PluginEvent, url: String): Outcome<String> =
-        fire(evento, RequestContext(url, "", "", null), null)
+    /** Dispara el evento: cada hook recibe la url y el ultimo decide.
+     *  C10 v2 (R0267, RES-0118): ctxDiag opcional es el EventContext
+     *  real de la fire del shell; sin contexto no hay evento. */
+    fun fire(evento: PluginEvent, url: String, ctxDiag: EventContext? = null): Outcome<String> =
+        fire(evento, RequestContext(url, "", "", null), ctxDiag)
 
     /** T030 v2 (C2, R0263, RES-0117): fire con el contexto del host.
      *  Migracion compatible: api-version 1 sigue recibiendo SOLO la

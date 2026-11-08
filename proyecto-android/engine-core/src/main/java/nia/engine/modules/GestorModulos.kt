@@ -5,6 +5,7 @@ import java.io.File
 import nia.contracts.ErrorCode
 import nia.contracts.ErrorInfo
 import nia.contracts.Outcome
+import nia.engine.inspector.EventContext
 import nia.engine.profile.ConfigStore
 
 /**
@@ -412,10 +413,12 @@ class GestorModulos(
     /**
      * Notifica onNavigate a los modulos ACTIVOS con alcance en el
      * origen (fail-open, ADR-005): cuenta disparos y errores y guarda
-     * el ultimo veredicto truncado; JAMAS lanza.
+     * el ultimo veredicto truncado; JAMAS lanza. C10 v2 (R0267,
+     * RES-0118): ctxDiag opcional es el EventContext real de la
+     * navegacion; sin contexto el diagnostico del modulo se abstiene.
      */
     @Synchronized
-    fun dispararNavegar(origen: String, url: String): ResumenDisparos {
+    fun dispararNavegar(origen: String, url: String, ctxDiag: EventContext? = null): ResumenDisparos {
         var disparados = 0
         var conErrores = 0
         for (id in registry.installedIds()) {
@@ -424,7 +427,7 @@ class GestorModulos(
             if (!alcance.aplica(origen)) continue
             disparos[id] = (disparos[id] ?: 0) + 1
             disparados += 1
-            when (val r = sesion.fire(PluginEvent.NAVIGATE, url)) {
+            when (val r = sesion.fire(PluginEvent.NAVIGATE, url, ctxDiag)) {
                 is Outcome.Success -> veredictos[id] = truncar(r.value)
                 is Outcome.Failure -> {
                     errores[id] = (errores[id] ?: 0) + 1
