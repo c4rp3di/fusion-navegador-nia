@@ -66,6 +66,7 @@ import nia.engine.modules.EstadoClave
 import nia.engine.modules.EstadoModulo
 import nia.engine.modules.FichaModulo
 import nia.engine.modules.GestorModulos
+import nia.engine.modules.ListasModulos
 import nia.engine.modules.ModuleRegistry
 import nia.engine.modules.PluginNetFilter
 import nia.engine.modules.PluginRuntime
@@ -296,6 +297,13 @@ class BrowserActivity : Activity() {
     private val runtimeModulos by lazy { PluginRuntime(registroModulos) }
     private val gestorModulos by lazy {
         GestorModulos(registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"))
+    }
+
+    /** C7 v1 (R0255, RES-0114): registro de listas del host por modulo
+     *  (TSV en filesDir/listas-modulos con write-through best-effort);
+     *  el modulo JAMAS descarga (E4): el host trae las listas con cuotas. */
+    private val listasModulos by lazy {
+        ListasModulos(File(filesDir, "listas-modulos"))
     }
 
     /** T052+T094/C9 (R0249/R0253, RES-0112/RES-0113): filtro de red del
@@ -1626,6 +1634,14 @@ class BrowserActivity : Activity() {
                 else if (configModulos.enabled(f.id)) "si" else "no"
             )
             .append('\n')
+        val fuentesLista = listasModulos.fuentes(f.id)
+        val listasVencidas = listasModulos.haceFaltaActualizar(f.id, clock.nowMillis(), configModulos)
+        sb.append("listas: ")
+            .append(fuentesLista.size)
+            .append(" fuente(s) (actualizables: ")
+            .append(if (listasVencidas.isEmpty()) "no" else "si")
+            .append(")")
+            .append('\n')
         sb.append("hooks: startup=").append(f.hooksStartup)
             .append(" navigate=").append(f.hooksNavigate)
             .append(" request=").append(f.hooksRequest).append('\n')
@@ -1653,6 +1669,8 @@ class BrowserActivity : Activity() {
         val acciones = arrayOf(
             "Activar o desactivar",
             "Habilitar o deshabilitar (ajustes)",
+            "Anadir o quitar lista (ajustes)",
+            "Actualizar listas ahora",
             "Solo en este sitio",
             "Hacer global",
             "Desinstalar"
@@ -1663,9 +1681,11 @@ class BrowserActivity : Activity() {
                 when (cual) {
                     0 -> alternarModulo(id)
                     1 -> alternarHabilitadoModulo(id)
-                    2 -> limitarModuloASitio(id)
-                    3 -> globalizarModulo(id)
-                    4 -> confirmarDesinstalarModulo(id)
+                    2 -> anadirListaModulo(id)
+                    3 -> actualizarListasModulo(id)
+                    4 -> limitarModuloASitio(id)
+                    5 -> globalizarModulo(id)
+                    6 -> confirmarDesinstalarModulo(id)
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1715,6 +1735,62 @@ class BrowserActivity : Activity() {
         }
         estado.text = "modulo " + (if (nuevo == "false") "deshabilitado" else "habilitado") + " (ajustes): " + id
         traza("modulos", "general.enabled=" + nuevo + " para " + id)
+    }
+
+    /** C7 v1 (R0255, RES-0114): anade o QUITA una fuente de listas del
+     *  modulo: la URL debe ser https sin credenciales y el intervalo
+     *  queda en la propuesta A MEDIR del E4 (24 h); el host trae las
+     *  listas, el modulo JAMAS descarga por su cuenta. */
+    private fun anadirListaModulo(id: String) {
+        val campo = EditText(this)
+        campo.hint = "https://servidor.example/lista.txt"
+        AlertDialog.Builder(this)
+            .setTitle("Anadir o quitar lista")
+            .setMessage("Pega la URL https de la lista; si ya esta registrada se QUITA.")
+            .setView(campo)
+            .setPositiveButton("Aceptar") { _, _ ->
+                val url = campo.text.toString().trim()
+                if (url.isEmpty()) return@setPositiveButton
+                if (listasModulos.fuentes(id).any { it.url == url }) {
+                    estado.text = "lista quitada: " + hostDe(url)
+                    traza("modulos", "lista quitada de " + id)
+                    return@setPositiveButton
+                }
+                when (val r = listasModulos.registrar(id, url)) {
+                    is Outcome.Failure -> {
+                        estado.text = "lista rechazada: " + r.error.safeMessage
+                        traza("modulos", "lista rechazada para " + id)
+                    }
+                    is Outcome.Success -> {
+                        estado.text = "lista anadida (cada " + ListasModulos.INTERVALO_DEFECTO_HORAS + " h): " + hostDe(url)
+                        traza("modulos", "lista anadida a " + id)
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** C7+C8 v1: descarga las listas del modulo con las cuotas del host
+     *  (la denegacion por cuota se DISTINGUE del error de red en el
+     *  informe) y persiste el estado de actualizacion en la config del
+     *  perfil normal (C9); en segundo plano (nunca en el hilo de UI).
+     *  El contenido alimentara al matcher del host (T051): el entry NO
+     *  puede leerlo hoy (api-version 1, E4). */
+    private fun actualizarListasModulo(id: String) {
+        val config = tabs.perfil(ProfileKind.NORMAL)?.configModulos
+        poolDescargas.execute {
+            val informe = listasModulos.actualizarAhora(id, HttpTransport(), config, clock.nowMillis())
+            runOnUiThread {
+                if (informe.resultados.isEmpty()) {
+                    estado.text = "sin listas registradas para este modulo"
+                    traza("modulos", "actualizacion de listas sin fuentes: " + id)
+                } else {
+                    estado.text = "listas: " + informe.resumen()
+                    traza("modulos", "listas de " + id + ": " + informe.resumen())
+                }
+            }
+        }
     }
 
     private fun limitarModuloASitio(id: String) {
