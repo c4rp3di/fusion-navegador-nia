@@ -7,7 +7,7 @@ import nia.contracts.Outcome
 /**
  * C11 v2 (R0260, RES-0116, E4 1/2.5): registro DECLARATIVO de
  * ajustes, acciones y paneles del modulo, consumido por el HOST
- * desde ui-model/*.json del paquete .niamod (T095) contra el gestor
+ * desde los archivos .json de ui-model del paquete .niamod (T095) contra el gestor
  * existente (T094). El shell tiene catalogo; este incremento define
  * el registro que ese catalogo consume.
  *
@@ -63,7 +63,7 @@ data class UiModelDeclarado(
 
 object UiModelModulos {
 
-    /** Tope de archivos ui-model/*.json por paquete (Niamod lo aplica). */
+    /** Tope de archivos .json de ui-model por paquete (Niamod lo aplica). */
     const val MAX_ARCHIVOS_UI = 8
 
     /** Tope de UN archivo ui-model en caracteres (Niamod lo aplica). */
@@ -82,7 +82,7 @@ object UiModelModulos {
     const val MAX_TITULO = 64
 
     /**
-     * Parsea y valida un archivo ui-model/*.json (todo-o-nada);
+     * Parsea y valida un archivo .json de ui-model (todo-o-nada);
      * falla con INVALID_INPUT sin estado a medias.
      */
     fun parse(texto: String): Outcome<UiModelDeclarado> {

@@ -32,7 +32,7 @@ import nia.engine.js.JsParser
  * SHA256withECDSA (la clave llega en author-key del manifiesto, SPKI
  * base64; huella de la clave = sha256 del SPKI); (5) recien entonces
  * el parseo del manifiesto (T009), las versiones y la coherencia;
- * (5b) parseo del ui-model/*.json con el parser del host (C11 v2,
+ * (5b) parseo de los .json de ui-model con el parser del host (C11 v2,
  * uimodel/1, R0260);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
@@ -78,7 +78,7 @@ object Niamod {
     const val MAX_RATIO = 100L
     const val MAX_FIRMA = 1024
 
-    /** C11 v2 (R0260, RES-0116): tope de archivos ui-model/*.json. */
+    /** C11 v2 (R0260, RES-0116): tope de archivos .json de ui-model. */
     const val MAX_UI_ARCHIVOS = 8
 
     /**

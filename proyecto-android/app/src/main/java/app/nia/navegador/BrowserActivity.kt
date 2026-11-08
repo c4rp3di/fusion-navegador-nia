@@ -1746,7 +1746,7 @@ class BrowserActivity : Activity() {
     }
 
     /** C11 v2 (R0260, RES-0116): ajustes DECLARADOS por el modulo en
-     *  ui-model/*.json (uimodel/1, solo bool): se muestran con su
+     *  los .json de ui-model (uimodel/1, solo bool): se muestran con su
      *  valor y al tocarlos se alterna en la config del PERFIL NORMAL
      *  (via C9, clave "uim.<id>"); DISTINTO de habilitar/deshabilitar
      *  (general.enabled). El entry NO puede leer estos ajustes hoy
