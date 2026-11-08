@@ -62,10 +62,13 @@ class EstilosModulosTest {
     fun topeDeSelectoresRechazado() {
         // R0275: el tope cuenta la SUMA de selectores de todas las
         // reglas; se prueban 200/201 reglas de UN selector (el
-        // agrupado por comas se prueba en ocultosMatchea).
-        val dentro = (0..199).joinToString("\n") { ".c$" + it + " { display: none }" }
+        // agrupado por comas se prueba en ocultosMatchea). OJO: el
+        // nombre se construye con ".c" + it; ".c$" + it NO es una
+        // plantilla de Kotlin — deja un $ LITERAL en el nombre de
+        // clase y el parser lo rechaza (invalid-selector, fail-closed).
+        val dentro = (0..199).joinToString("\n") { ".c" + it + " { display: none }" }
         assertTrue("200 selectores validan", EstilosModulos.validar(dentro) != null)
-        val fuera = (0..200).joinToString("\n") { ".c$" + it + " { display: none }" }
+        val fuera = (0..200).joinToString("\n") { ".c" + it + " { display: none }" }
         assertTrue("201 selectores NO validan", EstilosModulos.validar(fuera) == null)
     }
 
