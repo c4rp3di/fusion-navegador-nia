@@ -320,7 +320,7 @@ class BrowserActivity : Activity() {
      *  sustituibles los resuelve el gestor del paquete instalado. */
     private val diagModulos by lazy { DiagModulos(inspectorModulos) }
 
-    private val gestorModulos by lazy {
+    private val gestorModulos: GestorModulos by lazy {
         GestorModulos(
             registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"), null,
             tabs.perfil(ProfileKind.NORMAL)?.configModulos, diagModulos
