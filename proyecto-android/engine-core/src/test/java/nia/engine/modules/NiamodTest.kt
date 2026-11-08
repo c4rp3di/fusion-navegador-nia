@@ -370,9 +370,9 @@ class NiamodTest {
     }
 
     @Test
-    fun apiVersionFuturaRechazada() {
+    fun apiVersionTresRechazadaUnsupported() {
         val kp = par()
-        val bytes = paquete(manifiesto(spki(kp), apiVersion = 2), codigo(), kp)
+        val bytes = paquete(manifiesto(spki(kp), apiVersion = 3), codigo(), kp)
         assertEquals(ErrorCode.UNSUPPORTED, fallo(Niamod.inspeccionar(bytes)).code)
     }
 
