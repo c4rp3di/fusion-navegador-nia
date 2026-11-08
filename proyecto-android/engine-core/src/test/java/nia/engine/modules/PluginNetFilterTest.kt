@@ -96,9 +96,9 @@ class PluginNetFilterTest {
                 RequestContext.of("https://example.com/x", "image", "")
             )
             if (debeBloquear) {
-                assertTrue(d is FilterDecision.Block, "debia bloquear con: " + veredicto)
+                assertTrue("debia bloquear con: " + veredicto, d is FilterDecision.Block)
             } else {
-                assertTrue(d is FilterDecision.Allow, "debia permitir con: " + veredicto)
+                assertTrue("debia permitir con: " + veredicto, d is FilterDecision.Allow)
             }
         }
     }
