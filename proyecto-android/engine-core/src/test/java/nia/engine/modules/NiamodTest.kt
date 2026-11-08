@@ -389,4 +389,40 @@ class NiamodTest {
         val bytes = paquete(manifiesto(spki(kp)), "esto no compila ((", kp)
         assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
     }
+
+    @Test
+    fun paqueteConUiModelValidoDeclaraAjustes() {
+        val kp = par()
+        val ui = ("{\"ajustes\":[{\"id\":\"filtrar.subrecursos\"," +
+            "\"titulo\":\"Filtrar subrecursos\",\"tipo\":\"bool\",\"defecto\":true}]," +
+            "\"acciones\":[{\"id\":\"actualizar\",\"titulo\":\"Actualizar ahora\"}]," +
+            "\"paneles\":[]}")
+            .toByteArray(Charsets.UTF_8)
+        val bytes = paquete(manifiesto(spki(kp)), codigo(), kp, listOf("ui-model/ajustes.json" to ui))
+        val r = Niamod.inspeccionar(bytes)
+        assertTrue(r is Outcome.Success)
+        val p = (r as Outcome.Success).value as PaqueteNiamod
+        assertEquals(1, p.uiModel.ajustes.size)
+        assertEquals("Filtrar subrecursos", p.uiModel.ajustes[0].titulo)
+        assertEquals(true, p.uiModel.ajustes[0].defecto)
+        assertEquals(1, p.uiModel.acciones.size)
+        assertTrue(p.uiModel.paneles.isEmpty())
+    }
+
+    @Test
+    fun paqueteConUiModelRotoRechazado() {
+        val kp = par()
+        val ui = "{\"ajustes\":[{\"id\":\"x\",".toByteArray(Charsets.UTF_8)
+        val bytes = paquete(manifiesto(spki(kp)), codigo(), kp, listOf("ui-model/ajustes.json" to ui))
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
+
+    @Test
+    fun paqueteConDemasiadosUiModelRechazado() {
+        val kp = par()
+        val ui = "{}".toByteArray(Charsets.UTF_8)
+        val extras = (1..9).map { n -> "ui-model/f$n.json" to ui }
+        val bytes = paquete(manifiesto(spki(kp)), codigo(), kp, extras)
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
 }

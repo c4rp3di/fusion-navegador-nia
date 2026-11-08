@@ -1642,6 +1642,12 @@ class BrowserActivity : Activity() {
             .append(if (listasVencidas.isEmpty()) "no" else "si")
             .append(")")
             .append('\n')
+        val uiDeclarado = gestorModulos.uiModelDe(id)
+        if (uiDeclarado != null && !uiDeclarado.vacio) {
+            sb.append("ajustes declarados: ").append(uiDeclarado.ajustes.size)
+                .append(" (bool); acciones: ").append(uiDeclarado.acciones.size)
+                .append("; paneles: ").append(uiDeclarado.paneles.size).append('\n')
+        }
         sb.append("hooks: startup=").append(f.hooksStartup)
             .append(" navigate=").append(f.hooksNavigate)
             .append(" request=").append(f.hooksRequest).append('\n')
@@ -1673,7 +1679,8 @@ class BrowserActivity : Activity() {
             "Actualizar listas ahora",
             "Solo en este sitio",
             "Hacer global",
-            "Desinstalar"
+            "Desinstalar",
+            "Ajustes declarados (uimodel)"
         )
         AlertDialog.Builder(this)
             .setTitle("Acciones del modulo: " + id)
@@ -1686,6 +1693,7 @@ class BrowserActivity : Activity() {
                     4 -> limitarModuloASitio(id)
                     5 -> globalizarModulo(id)
                     6 -> confirmarDesinstalarModulo(id)
+                    7 -> ajustesDeclaradosModulo(id)
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1735,6 +1743,50 @@ class BrowserActivity : Activity() {
         }
         estado.text = "modulo " + (if (nuevo == "false") "deshabilitado" else "habilitado") + " (ajustes): " + id
         traza("modulos", "general.enabled=" + nuevo + " para " + id)
+    }
+
+    /** C11 v2 (R0260, RES-0116): ajustes DECLARADOS por el modulo en
+     *  ui-model/*.json (uimodel/1, solo bool): se muestran con su
+     *  valor y al tocarlos se alterna en la config del PERFIL NORMAL
+     *  (via C9, clave "uim.<id>"); DISTINTO de habilitar/deshabilitar
+     *  (general.enabled). El entry NO puede leer estos ajustes hoy
+     *  (api-version 1, E4): el consumo llega cuando reabra T030. */
+    private fun ajustesDeclaradosModulo(id: String) {
+        val ui = gestorModulos.uiModelDe(id)
+        if (ui == null || ui.vacio) {
+            estado.text = "sin ajustes declarados: " + id
+            return
+        }
+        val config = tabs.perfil(ProfileKind.NORMAL)?.configModulos
+        if (config == null) {
+            estado.text = "sin perfil normal vivo: abre una pestana normal primero"
+            return
+        }
+        val lineas = ui.ajustes.map { a ->
+            val valor = config.leer(id, "uim." + a.id)
+                ?: (if (a.defecto) "true" else "false")
+            a.titulo + ": " + (if (valor == "true") "si" else "no")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ajustes declarados: " + id)
+            .setItems(lineas.toTypedArray()) { _, cual ->
+                val a = ui.ajustes[cual]
+                val clave = "uim." + a.id
+                val actual = config.leer(id, clave)
+                    ?: (if (a.defecto) "true" else "false")
+                val nuevo = if (actual == "true") "false" else "true"
+                val r = config.escribir(id, clave, nuevo)
+                if (r is Outcome.Failure) {
+                    estado.text = "no se pudo escribir el ajuste: " + r.error.safeMessage
+                    traza("modulos", "ajuste " + clave + " fallo: " + id)
+                    return@setItems
+                }
+                estado.text = a.titulo + " = " +
+                    (if (nuevo == "true") "si" else "no") + " (uimodel): " + id
+                traza("modulos", clave + "=" + nuevo + " para " + id)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
     }
 
     /** C7 v1 (R0255, RES-0114): anade o QUITA una fuente de listas del
@@ -1884,6 +1936,17 @@ class BrowserActivity : Activity() {
         }
         sb.append("\nhuella paquete: ").append(previa.huellaPaquete)
         sb.append("\nhuella clave: ").append(previa.huellaClave)
+        if (previa.ajustesDeclarados > 0 || previa.accionesDeclaradas > 0 ||
+            previa.panelesDeclarados > 0
+        ) {
+            sb.append("\nui-model: ajustes ").append(previa.ajustesDeclarados)
+                .append(", acciones ").append(previa.accionesDeclaradas)
+                .append(", paneles ").append(previa.panelesDeclarados)
+        }
+        if (previa.archivosDatos > 0) {
+            sb.append("\ndatos: ").append(previa.archivosDatos)
+                .append(" archivo(s), ").append(previa.bytesDatos).append(" bytes")
+        }
         sb.append("\n").append(textoConfianza(previa.estadoClave))
         AlertDialog.Builder(this)
             .setTitle("Instalar modulo")

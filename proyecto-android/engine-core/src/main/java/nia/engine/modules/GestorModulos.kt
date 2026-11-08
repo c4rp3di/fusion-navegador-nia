@@ -25,6 +25,13 @@ import nia.contracts.Outcome
  * contenido (la capability modificar NO tiene soporte en v1) y la
  * persistencia del alcance es un TSV propio (modulos.tsv) cuyas
  * lineas corruptas se ignoran sin romper el estado vivo.
+ *
+ * C11 v2 (R0260, RES-0116): el gestor registra el ui-model
+ * declarado del paquete (uimodel/1) y lo expone al shell; los
+ * VALORES de los ajustes declarados persisten por perfil via C9
+ * (clave "uim.<id>") y el entry NO puede leerlos en api-version 1
+ * (E4; el consumo llega cuando reabra T030). Las acciones y
+ * paneles declarados son catalogo: sin ejecucion en v2.
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -72,7 +79,12 @@ data class PreviaPaquete(
     val nextHuella: String?,
     val esUpdate: Boolean,
     val permisosNuevos: List<String>,
-    val estadoClave: EstadoClave
+    val estadoClave: EstadoClave,
+    val ajustesDeclarados: Int,
+    val accionesDeclaradas: Int,
+    val panelesDeclarados: Int,
+    val archivosDatos: Int,
+    val bytesDatos: Long
 )
 
 /** Aprobacion explicita del usuario: cita la huella de clave que EL
@@ -96,6 +108,7 @@ class GestorModulos(
     private val alcances = HashMap<String, Alcance>()
     private val ancladas = HashMap<String, String>()
     private val pendientes = HashMap<String, String>()
+    private val uiModelos = HashMap<String, UiModelDeclarado>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
     data class Alcance(val global: Boolean, val origenes: Set<String>) {
@@ -211,7 +224,9 @@ class GestorModulos(
             id, p.manifest.name, p.manifest.version, p.manifest.entry,
             p.manifest.permissions, p.manifest.categories, p.manifest.capabilities,
             p.huellaPaquete, p.huellaClave, p.nextHuella,
-            registry.isInstalled(id), nuevos, estado
+            registry.isInstalled(id), nuevos, estado,
+            p.uiModel.ajustes.size, p.uiModel.acciones.size, p.uiModel.paneles.size,
+            p.archivosDatos, p.bytesDatos
         )
     }
 
@@ -289,6 +304,7 @@ class GestorModulos(
             }
         }
         codigos[id] = p.entryTexto
+        uiModelos[id] = p.uiModel
         ancladas[id] = p.huellaClave
         if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
             pendientes[id] = p.nextHuella
@@ -317,6 +333,12 @@ class GestorModulos(
     @Synchronized
     fun desactivar(id: String): Outcome<Unit> = runtime.unload(id)
 
+    /** C11 v2 (R0260, RES-0116): registro declarado ui-model del
+     *  modulo o null si no declara (parseado y validado en la
+     *  instalacion del paquete; el demo embebido no declara). */
+    @Synchronized
+    fun uiModelDe(id: String): UiModelDeclarado? = uiModelos[id]
+
     /** Retira el modulo entero: sesion, registro, alcance y contadores. */
     @Synchronized
     fun desinstalar(id: String): Outcome<Unit> {
@@ -328,6 +350,7 @@ class GestorModulos(
         errores.remove(id)
         veredictos.remove(id)
         alcances.remove(id)
+        uiModelos.remove(id)
         guardar()
         return Outcome.success(Unit)
     }

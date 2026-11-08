@@ -110,13 +110,17 @@ class GestorModulosTest {
         return sb.toString()
     }
 
-    private fun paqueteNiamod(manifest: String, kp: KeyPair): ByteArray {
+    private fun paqueteNiamod(
+        manifest: String,
+        kp: KeyPair,
+        extras: List<Pair<String, ByteArray>> = emptyList()
+    ): ByteArray {
         val m = manifest.toByteArray(Charsets.UTF_8)
         val e = ("nia.onStartup(function (url) { return \"hola\"; });\n" +
             "nia.onNavigate(function (url) { return \"hola\"; });\n").toByteArray(Charsets.UTF_8)
-        val can = canonico(m, listOf("entry.js" to e))
+        val can = canonico(m, listOf("entry.js" to e) + extras)
         val firma = firmar(kp.private, can)
-        return zip(listOf("manifest.txt" to m, "entry.js" to e, "firma.bin" to firma))
+        return zip(listOf("manifest.txt" to m, "entry.js" to e) + extras + listOf("firma.bin" to firma))
     }
 
     @Test
@@ -391,5 +395,40 @@ class GestorModulosTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun uiModelRegistradoYRetiradoConElPaquete() {
+        val g = nuevo()
+        val kp = par()
+        val ui = ("{\"ajustes\":[{\"id\":\"ver.basico\",\"titulo\":\"Ver basico\"," +
+            "\"tipo\":\"bool\",\"defecto\":false}]}").toByteArray(Charsets.UTF_8)
+        val extras = listOf(
+            "ui-model/ajustes.json" to ui,
+            "datos/lista.txt" to "dominios demo".toByteArray(Charsets.UTF_8)
+        )
+        val bytes = paqueteNiamod(manifiestoNiamod(spki(kp), "storage.read"), kp, extras)
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        val uiDe = g.uiModelDe("demo.niamod")
+        assertTrue(uiDe != null)
+        assertEquals(1, uiDe!!.ajustes.size)
+        assertEquals(false, uiDe.ajustes[0].defecto)
+        ok(g.desinstalar("demo.niamod"))
+        assertTrue(g.uiModelDe("demo.niamod") == null)
+    }
+
+    @Test
+    fun previaMuestraUiModelYDatosDelPaquete() {
+        val g = nuevo()
+        val kp = par()
+        val ui = "{\"paneles\":[{\"id\":\"p\",\"titulo\":\"P\"}]}".toByteArray(Charsets.UTF_8)
+        val extras = listOf("ui-model/p.json" to ui)
+        val bytes = paqueteNiamod(manifiestoNiamod(spki(kp), "storage.read"), kp, extras)
+        val previa = ok(g.previsualizarPaquete(bytes))
+        assertEquals(0, previa.ajustesDeclarados)
+        assertEquals(0, previa.accionesDeclaradas)
+        assertEquals(1, previa.panelesDeclarados)
+        assertEquals(0, previa.archivosDatos)
+        assertEquals(0L, previa.bytesDatos)
     }
 }

@@ -32,6 +32,8 @@ import nia.engine.js.JsParser
  * SHA256withECDSA (la clave llega en author-key del manifiesto, SPKI
  * base64; huella de la clave = sha256 del SPKI); (5) recien entonces
  * el parseo del manifiesto (T009), las versiones y la coherencia;
+ * (5b) parseo del ui-model/*.json con el parser del host (C11 v2,
+ * uimodel/1, R0260);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
  * mal, hash mal, limite mal o incoherencia = NO se instala).
@@ -61,7 +63,10 @@ data class PaqueteNiamod(
     val entryTexto: String,
     val huellaPaquete: String,
     val huellaClave: String,
-    val nextHuella: String?
+    val nextHuella: String?,
+    val uiModel: UiModelDeclarado,
+    val archivosDatos: Int,
+    val bytesDatos: Long
 )
 
 object Niamod {
@@ -73,6 +78,9 @@ object Niamod {
     const val MAX_RATIO = 100L
     const val MAX_FIRMA = 1024
 
+    /** C11 v2 (R0260, RES-0116): tope de archivos ui-model/*.json. */
+    const val MAX_UI_ARCHIVOS = 8
+
     /**
      * Validacion completa del paquete en el ORDEN del ADR-005; el
      * resultado solo se usa cuando es Success (fail-closed).
@@ -83,6 +91,9 @@ object Niamod {
         val entradas = centralDirectory(bytes) ?: return invalid("zip sin central directory valida")
         val cdNombres = HashSet<String>()
         var totalDeclarado = 0L
+        var uiVistos = 0
+        var datosArchivos = 0
+        var datosBytes = 0L
         for (e in entradas) {
             val razon = razonNombre(e.nombre)
             if (razon != null) return invalid("entrada " + razon)
@@ -102,6 +113,16 @@ object Niamod {
             }
             if (e.comprimido > 0 && e.descomprimido > e.comprimido * MAX_RATIO) {
                 return invalid("ratio de zipbomb")
+            }
+            if (e.nombre.startsWith("ui-model/")) {
+                uiVistos += 1
+                if (uiVistos > MAX_UI_ARCHIVOS) {
+                    return invalid("demasiados archivos ui-model")
+                }
+            }
+            if (e.nombre.startsWith("datos/")) {
+                datosArchivos += 1
+                datosBytes += e.descomprimido
             }
             totalDeclarado += e.descomprimido
             if (totalDeclarado > MAX_TOTAL) {
@@ -130,7 +151,11 @@ object Niamod {
             if (!vistos.add(nombre)) return invalid("entrada repetida en el stream")
             val sha = MessageDigest.getInstance("SHA-256")
             val crc = CRC32()
-            val captura = if (nombre == "manifest.txt" || nombre == "firma.bin") {
+            val captura = if (
+                nombre == "manifest.txt" ||
+                nombre == "firma.bin" ||
+                nombre.startsWith("ui-model/")
+            ) {
                 ByteArrayOutputStream()
             } else {
                 null
@@ -151,6 +176,9 @@ object Niamod {
                 }
                 if (nombre == "firma.bin" && leidos > MAX_FIRMA) {
                     return invalid("firma demasiado grande")
+                }
+                if (nombre.startsWith("ui-model/") && leidos > UiModelModulos.MAX_JSON_CHARS) {
+                    return invalid("ui-model demasiado grande")
                 }
                 sha.update(buf, 0, n)
                 crc.update(buf, 0, n)
@@ -225,7 +253,30 @@ object Niamod {
             if (nombre == "manifest.txt" || nombre == "firma.bin") continue
             if (nombre == manifest.entry) continue
             if (nombre.startsWith("datos/")) continue
+            if (nombre.startsWith("ui-model/") && nombre.endsWith(".json")) continue
             return invalid("entrada no declarada: " + nombre)
+        }
+
+        // (5b) C11 v2: parseo del ui-model del paquete con el parser
+        // JSON del host y fusion fail-closed: un archivo ilegible o
+        // ids duplicados entre archivos rechazan el paquete ENTERO.
+        val uiOrden = ArrayList<String>()
+        for (nombre in hashes.keys) {
+            if (nombre.startsWith("ui-model/")) uiOrden.add(nombre)
+        }
+        uiOrden.sort()
+        val uiModelosPaquete = ArrayList<UiModelDeclarado>()
+        for (nombre in uiOrden) {
+            val capturado = capturados[nombre]
+            if (capturado == null) return invalid("ui-model sin captura: " + nombre)
+            when (val ui = UiModelModulos.parse(String(capturado, Charsets.UTF_8))) {
+                is Outcome.Failure -> return Outcome.failure(ui.error)
+                is Outcome.Success -> uiModelosPaquete.add(ui.value as UiModelDeclarado)
+            }
+        }
+        val uiModel = when (val f = UiModelModulos.fusionar(uiModelosPaquete)) {
+            is Outcome.Failure -> return Outcome.failure(f.error)
+            is Outcome.Success -> f.value as UiModelDeclarado
         }
 
         // (6) pre-parse del entry (JsParser de T029)
@@ -236,7 +287,10 @@ object Niamod {
             return invalid("entry del paquete no compila")
         }
         return Outcome.success(
-            PaqueteNiamod(manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella)
+            PaqueteNiamod(
+                manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella,
+                uiModel, datosArchivos, datosBytes
+            )
         )
     }
 
