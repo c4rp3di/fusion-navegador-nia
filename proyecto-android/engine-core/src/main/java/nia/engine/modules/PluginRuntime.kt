@@ -111,7 +111,7 @@ class PluginSession internal constructor(
     fun fire(
         evento: PluginEvent,
         context: RequestContext,
-        ctxDiag: EventContext?
+        ctxDiag: EventContext? = null
     ): Outcome<String> {
         if (descargado) return Outcome.failure(ErrorInfo(ErrorCode.DENIED, "plugin descargado"))
         val lista = hooks[evento] ?: emptyList()
