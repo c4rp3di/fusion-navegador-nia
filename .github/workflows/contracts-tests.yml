@@ -164,6 +164,8 @@ jobs:
             engine-core/src/test/java/nia/engine/profile/ConfigStoreTest.kt \
             engine-core/src/main/java/nia/engine/modules/ListasModulos.kt \
             engine-core/src/test/java/nia/engine/modules/ListasModulosTest.kt \
+            engine-core/src/main/java/nia/engine/modules/DiagModulos.kt \
+            engine-core/src/test/java/nia/engine/modules/DiagModulosTest.kt \
             engine-core/src/main/java/nia/engine/qa/SiteMatrix.kt \
             engine-core/src/test/java/nia/engine/qa/SiteMatrixTest.kt \
             engine-core/src/main/java/nia/engine/qa/YoutubeMatrix.kt \
