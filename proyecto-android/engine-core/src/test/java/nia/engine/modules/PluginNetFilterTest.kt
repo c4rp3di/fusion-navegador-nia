@@ -15,12 +15,14 @@ import nia.engine.net.FetchTransport
 import nia.engine.net.FilterDecision
 import nia.engine.net.RequestContext
 import nia.engine.net.TransportResult
+import nia.engine.profile.ConfigStore
 
 /**
  * Espejo Kotlin del gemelo TS validado offline (R0242, vectores
  * decide/trim): PluginNetFilter sobre el runtime real de T029/T030
  * con modulos demo, SIN red (el transporte es falso y JAMAS se llama
- * cuando algo bloquea). T052 v1 (R0242, RES-0111, ADR-005).
+ * cuando algo bloquea). T052 v1 (R0242, RES-0111, ADR-005) y v2/C9
+ * (R0253, RES-0113): config del perfil, enabled=false abstiene.
  */
 class PluginNetFilterTest {
 
@@ -215,5 +217,46 @@ class PluginNetFilterTest {
             RequestContext.of("https://example.com/ads/x.png", "image", "")
         )
         assertTrue(despues is FilterDecision.Allow)
+    }
+
+    @Test
+    fun enabledFalseSeAbstieneYDejaPasar() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        instalar(reg, rt, "demo.bloqueador", entryCondicional)
+        val config = ConfigStore(null)
+        assertTrue(
+            config.escribir("demo.bloqueador", "general.enabled", "false") is Outcome.Success
+        )
+        val d = PluginNetFilter(rt, reg, config).decide(
+            RequestContext.of("https://example.com/ads/x.png", "image", "")
+        )
+        assertTrue("general.enabled=false deshabilita el bloqueo del modulo", d is FilterDecision.Allow)
+    }
+
+    @Test
+    fun enabledFalseNoCortaALosDemasModulos() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        val config = ConfigStore(null)
+        assertTrue(config.escribir("demo.apagado", "general.enabled", "false") is Outcome.Success)
+        instalar(reg, rt, "demo.apagado", entryCondicional)
+        instalar(reg, rt, "demo.encendido", entryCondicional)
+        val d = PluginNetFilter(rt, reg, config).decide(
+            RequestContext.of("https://example.com/ads/x.png", "image", "")
+        )
+        assertTrue(d is FilterDecision.Block)
+        assertEquals("demo.encendido", (d as FilterDecision.Block).moduleId)
+    }
+
+    @Test
+    fun sinConfigElFiltroSigueSiendoElDeV1() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        instalar(reg, rt, "demo.bloqueador", entryCondicional)
+        val d = PluginNetFilter(rt, reg).decide(
+            RequestContext.of("https://example.com/ads/x.png", "image", "")
+        )
+        assertTrue("sin config el modulo bloquea igual que en v1", d is FilterDecision.Block)
     }
 }

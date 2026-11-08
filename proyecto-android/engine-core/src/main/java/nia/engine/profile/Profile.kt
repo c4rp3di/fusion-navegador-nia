@@ -19,6 +19,11 @@ import java.io.File
  * vive solo en memoria: save() responde null sin escribir NADA en disco y
  * todo su estado muere con wipe().
  *
+ * T052 v2/C9 (R0253, RES-0113): el perfil monta su ConfigStore de
+ * ajustes de modulos: el normal persiste en modulos-config.tsv junto
+ * al perfil y el incognito vive SOLO en memoria (regla dura E4);
+ * wipe() tambien borra la config viva.
+ *
  * Exclusiones v1: sin historial (el motor aun no tiene), sin gestor
  * multi-perfil y las cookies no persisten (T026).
  */
@@ -41,7 +46,8 @@ data class WipeReport(
 class BrowserProfile private constructor(
     val kind: ProfileKind,
     clock: WallClock,
-    private val persistence: StoragePersistence?
+    private val persistence: StoragePersistence?,
+    val configModulos: ConfigStore
 ) {
 
     /** Cookies del perfil (de sesion en v1; la persistencia llega en T026). */
@@ -69,14 +75,20 @@ class BrowserProfile private constructor(
     /**
      * Borra TODO el estado vivo del perfil (cookies, cache, storage e
      * IndexedDb) con conteo de lo borrado. NO toca el disco: un save
-     * posterior persiste el estado ya vacio.
+     * posterior persiste el estado ya vacio. La config de modulos SI es
+     * write-through: wipe la trunca para que un ajuste apagado no
+     * reviva con el archivo viejo del perfil normal.
      */
-    fun wipe(): WipeReport = WipeReport(
-        cookies.clear(),
-        cache.clear(),
-        storage.clearAll(),
-        idb.clearAll()
-    )
+    fun wipe(): WipeReport {
+        val report = WipeReport(
+            cookies.clear(),
+            cache.clear(),
+            storage.clearAll(),
+            idb.clearAll()
+        )
+        configModulos.limpiar()
+        return report
+    }
 
     /**
      * T045 v1 (R0106, RES-0057): borra el archivo persistido del disco
@@ -93,13 +105,14 @@ class BrowserProfile private constructor(
          */
         fun normal(clock: WallClock, dir: File): BrowserProfile {
             val persistence = StoragePersistence(dir)
-            val profile = BrowserProfile(ProfileKind.NORMAL, clock, persistence)
+            val profile = BrowserProfile(ProfileKind.NORMAL, clock, persistence, ConfigStore(File(dir, "modulos-config.tsv")))
             persistence.load(profile.storage, profile.idb)
             return profile
         }
 
-        /** Perfil incognito: todo vive en memoria y nada llega al disco. */
+        /** Perfil incognito: todo vive en memoria y nada llega al disco
+         *  (regla dura C9: su ConfigStore es de memoria y muere con wipe). */
         fun incognito(clock: WallClock): BrowserProfile =
-            BrowserProfile(ProfileKind.INCOGNITO, clock, null)
+            BrowserProfile(ProfileKind.INCOGNITO, clock, null, ConfigStore(null))
     }
 }

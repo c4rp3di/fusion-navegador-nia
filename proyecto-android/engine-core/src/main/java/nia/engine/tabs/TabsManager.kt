@@ -75,6 +75,13 @@ data class TabCerrada(
  * El hook onRequest de los modulos activos decide ANTES de red/cache/SW
  * y un veredicto "block" corta la peticion con DENIED.
  *
+ * T094 v3/C9 (R0253, RES-0113): el filtro se construye POR PERFIL: la
+ * factory recibe el BrowserProfile del tipo de la pestana y devuelve
+ * el filtro de ESE perfil (el shell monta PluginNetFilter con la
+ * config de modulos del perfil: general.enabled="false" apaga el
+ * bloqueo SOLO en el perfil donde se escribio, y el incognito vive su
+ * propia config en memoria). Sin factory nada cambia.
+ *
  * Exclusiones v1: sin grupos de pestanas, sin UI de strip (llega con el
  * shell), sin previews pintadas y sin persistencia de la sesion de
  * pestanas. El gemelo TS validado offline (2 corridas identicas, huella
@@ -86,7 +93,7 @@ class TabsManager(
     private val normalDir: File,
     private val maxTabsPorTipo: Int = MAX_TABS_POR_TIPO,
     private val maxReabiertos: Int = MAX_REABIERTOS,
-    private val filter: RequestFilter? = null
+    private val filtroDePerfil: ((BrowserProfile) -> RequestFilter?)? = null
 ) {
     companion object {
         /** Tope de pestanas vivas por tipo (normal o incognito). */
@@ -134,7 +141,9 @@ class TabsManager(
     /** Crea una pestana del tipo con su NavController sobre el perfil del tipo. */
     fun crear(kind: ProfileKind, url: String, title: String, preview: String? = null): TabCrear {
         if (contar(kind) >= maxTabsPorTipo) return TabCrear.PresupuestoExcedido
-        val tab = Tab(nextId, kind, NavController(transport, clock, perfilDe(kind), null, filter), title, url, preview)
+        val perfil = perfilDe(kind)
+        val filtro = filtroDePerfil?.invoke(perfil)
+        val tab = Tab(nextId, kind, NavController(transport, clock, perfil, null, filtro), title, url, preview)
         nextId += 1
         tabs.add(tab)
         if (activaId == -1L) activaId = tab.id

@@ -245,7 +245,12 @@ class BrowserActivity : Activity() {
     }
 
     private val tabs by lazy {
-        TabsManager(clock, HttpTransport(), File(cacheDir, "perfil-navegador"), filter = filtroRed)
+        TabsManager(
+            clock, HttpTransport(), File(cacheDir, "perfil-navegador"),
+            filtroDePerfil = { perfil ->
+                PluginNetFilter(runtimeModulos, registroModulos, perfil.configModulos)
+            }
+        )
     }
     /** Marcadores del motor (T060, verificado) con el ciclo de vida que
      * T076 cablea por fin: el estado vive en el BookmarkManager y
@@ -293,12 +298,15 @@ class BrowserActivity : Activity() {
         GestorModulos(registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"))
     }
 
-    /** T052+T094 (R0249, RES-0112): filtro de red del shell montado sobre
-     *  el MISMO runtime y registro del gestor: el hook onRequest de los
+    /** T052+T094/C9 (R0249/R0253, RES-0112/RES-0113): filtro de red del
+     *  shell montado sobre el MISMO runtime y registro del gestor y
+     *  construido POR PERFIL en tabs (factory): el hook onRequest de los
      *  modulos activos decide ANTES de red/cache/SW en cada pestana
      *  (documento y subrecursos) y un veredicto "block" corta la peticion
-     *  con DENIED; la pagina de error honesta lo explica al usuario. */
-    private val filtroRed by lazy { PluginNetFilter(runtimeModulos, registroModulos) }
+     *  con DENIED; con C9 el filtro consulta la config de modulos DEL
+     *  PERFIL: un modulo con general.enabled="false" se abstiene SOLO en
+     *  el perfil donde el usuario lo apago (el incognito vive su propia
+     *  config en memoria). */
 
     /** T106 v1 (RES-0100): estado de red contextual por pestana. */
     private val red = RegistroRed()
@@ -1611,6 +1619,13 @@ class BrowserActivity : Activity() {
             .append(if (f.capabilities.isEmpty()) "sin declarar" else f.capabilities.joinToString(", "))
             .append('\n')
         sb.append("estado: ").append(textoEstadoModulo(f)).append('\n')
+        val configModulos = tabs.perfil(ProfileKind.NORMAL)?.configModulos
+        sb.append("habilitado (ajustes): ")
+            .append(
+                if (configModulos == null) "sin perfil normal vivo"
+                else if (configModulos.enabled(f.id)) "si" else "no"
+            )
+            .append('\n')
         sb.append("hooks: startup=").append(f.hooksStartup)
             .append(" navigate=").append(f.hooksNavigate)
             .append(" request=").append(f.hooksRequest).append('\n')
@@ -1637,6 +1652,7 @@ class BrowserActivity : Activity() {
     private fun accionesModulo(id: String) {
         val acciones = arrayOf(
             "Activar o desactivar",
+            "Habilitar o deshabilitar (ajustes)",
             "Solo en este sitio",
             "Hacer global",
             "Desinstalar"
@@ -1646,9 +1662,10 @@ class BrowserActivity : Activity() {
             .setItems(acciones) { _, cual ->
                 when (cual) {
                     0 -> alternarModulo(id)
-                    1 -> limitarModuloASitio(id)
-                    2 -> globalizarModulo(id)
-                    3 -> confirmarDesinstalarModulo(id)
+                    1 -> alternarHabilitadoModulo(id)
+                    2 -> limitarModuloASitio(id)
+                    3 -> globalizarModulo(id)
+                    4 -> confirmarDesinstalarModulo(id)
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1676,6 +1693,28 @@ class BrowserActivity : Activity() {
             estado.text = "modulo desactivado: " + id
             traza("modulos", "desactivado: " + id)
         }
+    }
+
+    /** C11 v1 (R0253, RES-0113): ajuste "habilitado" del modulo
+     *  (general.enabled, C9): se escribe en la config del PERFIL NORMAL
+     *  (persistida con el perfil) y el filtro de red la consulta ANTES
+     *  de disparar el hook; DISTINTO de activar/desactivar (sesion del
+     *  gestor, que SIEMPRE gana). */
+    private fun alternarHabilitadoModulo(id: String) {
+        val config = tabs.perfil(ProfileKind.NORMAL)?.configModulos
+        if (config == null) {
+            estado.text = "sin perfil normal vivo: abre una pestana normal primero"
+            return
+        }
+        val nuevo = if (config.enabled(id)) "false" else "true"
+        val r = config.escribir(id, "general.enabled", nuevo)
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo escribir el ajuste: " + r.error.safeMessage
+            traza("modulos", "ajuste general.enabled fallo: " + id)
+            return
+        }
+        estado.text = "modulo " + (if (nuevo == "false") "deshabilitado" else "habilitado") + " (ajustes): " + id
+        traza("modulos", "general.enabled=" + nuevo + " para " + id)
     }
 
     private fun limitarModuloASitio(id: String) {

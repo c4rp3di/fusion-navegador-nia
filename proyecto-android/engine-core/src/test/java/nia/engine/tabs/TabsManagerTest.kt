@@ -10,6 +10,7 @@ import org.junit.Test
 
 import nia.contracts.CancellationToken
 import nia.contracts.ErrorCode
+import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.nav.NavOutcome
 import nia.engine.nav.NavState
@@ -21,12 +22,16 @@ import nia.engine.net.RequestContext
 import nia.engine.net.RequestFilter
 import nia.engine.net.TransportFailure
 import nia.engine.net.TransportResult
+import nia.engine.modules.ModuleRegistry
+import nia.engine.modules.PluginNetFilter
+import nia.engine.modules.PluginRuntime
+import nia.engine.profile.BrowserProfile
 import nia.engine.profile.FireLevel
 import nia.engine.profile.ProfileKind
 
 /**
  * Espejo Kotlin del gemelo TS validado offline (2 corridas
- * identicas, huella 32333.48541.155): los 20 tests cubren la creacion con
+ * identicas, huella 32333.48541.155): los 22 tests cubren la creacion con
  * tarjetas ordenadas por tipo, el presupuesto por tipo, el
  * desalojo del mas viejo en las reabiertas, la pestana activa,
  * la actualizacion del shell, el duplicado, el cierre de la
@@ -39,9 +44,12 @@ import nia.engine.profile.ProfileKind
  * del filtro de red (T052/T094, R0249, RES-0112; gemelo 2 corridas,
  * huella 16.16.1556b2ab): el filtro decide ANTES de red/cache en el documento
  * y los subrecursos de cada pestana (normal e incognito); un
- * veredicto "block" corta la peticion con DENIED.
+ * veredicto "block" corta la peticion con DENIED. T094 v3/C9 (R0253,
+ * RES-0113, gemelo 23.23.6fa98e30): el filtro se construye POR PERFIL con
+ * una factory y la config general.enabled del perfil apaga el bloqueo
+ * SOLO donde se escribio.
  * T073 v1 (RES-0079) + T093 v4 (R0183) + T075 v1 (R0184, RES-0087)
- * + T094 v2 (R0249, RES-0112).
+ * + T094 v2 (R0249, RES-0112) + T094 v3/C9 (R0253, RES-0113).
  */
 class TabsManagerTest {
 
@@ -74,9 +82,9 @@ class TabsManagerTest {
         t: FetchTransport,
         maxTabs: Int = 20,
         maxReab: Int = 10,
-        filter: RequestFilter? = null
+        filtro: ((BrowserProfile) -> RequestFilter?)? = null
     ): TabsManager =
-        TabsManager(FakeClock(), t, dir(), maxTabs, maxReab, filter)
+        TabsManager(FakeClock(), t, dir(), maxTabs, maxReab, filtro)
 
     private fun resp(status: Int, headers: Map<String, String>, body: String): FetchResponse =
         FetchResponse(status, headers, body.toByteArray())
@@ -362,7 +370,7 @@ class TabsManagerTest {
         val t = FakeTransport()
         t.routes["http://anuncio.dev/pagina"] = resp(200, emptyMap(), "<html><body>ok</body></html>")
         val filtro = FiltroBloqueador("anuncio.dev")
-        val m = manager(t, filter = filtro)
+        val m = manager(t, filtro = { _ -> filtro })
         val id = (m.crear(ProfileKind.NORMAL, "http://anuncio.dev/pagina", "a", null) as TabCrear.Ok).id
         val out = m.nav(id)!!.navigate("http://anuncio.dev/pagina")
         assertTrue("el bloqueo del modulo falla la navegacion", out is NavOutcome.Failed)
@@ -388,7 +396,7 @@ class TabsManagerTest {
         t.routes["http://a.dev/logo.png"] = resp(200, emptyMap(), "img")
         t.routes["http://a.dev/app.js"] = resp(200, emptyMap(), "var x = 1;")
         val filtro = FiltroBloqueador("nadie.bloquea")
-        val m = manager(t, filter = filtro)
+        val m = manager(t, filtro = { _ -> filtro })
         val id = (m.crear(ProfileKind.NORMAL, "http://a.dev/", "a", null) as TabCrear.Ok).id
         val out = m.nav(id)!!.navigate("http://a.dev/")
         assertTrue("con un filtro que siempre permite se navega igual", out is NavOutcome.Loaded)
@@ -405,12 +413,49 @@ class TabsManagerTest {
         val t = FakeTransport()
         t.routes["http://a.dev/"] = resp(200, emptyMap(), "<html><body>a</body></html>")
         val filtro = FiltroBloqueador("a.dev")
-        val m = manager(t, filter = filtro)
+        val m = manager(t, filtro = { _ -> filtro })
         val id = (m.crear(ProfileKind.INCOGNITO, "http://a.dev/", "a", null) as TabCrear.Ok).id
         val out = m.nav(id)!!.navigate("http://a.dev/")
         assertTrue("el filtro tambien corta el documento incognito", out is NavOutcome.Failed)
         assertEquals(ErrorCode.DENIED, (out as NavOutcome.Failed).code)
         assertEquals("el transporte incognito tampoco se toca", 0, t.requests.size)
+    }
+
+    @Test
+    fun elFiltroSeConstruyeConElPerfilDeSuTipo() {
+        val recibidos = ArrayList<BrowserProfile>()
+        val m = manager(FakeTransport(), filtro = { perfil -> recibidos.add(perfil); null })
+        m.crear(ProfileKind.NORMAL, "u1", "t1", null)
+        m.crear(ProfileKind.INCOGNITO, "u2", "t2", null)
+        assertEquals("la factory se invoca una vez por pestana", 2, recibidos.size)
+        assertFalse("la normal recibe el perfil normal", recibidos[0].isIncognito())
+        assertTrue("la incognito recibe el perfil incognito", recibidos[1].isIncognito())
+    }
+
+    @Test
+    fun laConfigHabilitadoViajaPorPerfil() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        val manifest = "id = demo.bloqueador\nversion = 2\nentry = entry.js\npermissions = network.fetch\ncapabilities = bloquear"
+        assertTrue(reg.install(manifest) is Outcome.Success)
+        assertTrue(rt.load("demo.bloqueador", "nia.onRequest(function (u) { return 'block'; });") is Outcome.Success)
+        val t = FakeTransport()
+        t.routes["http://anuncio.dev/"] = resp(200, emptyMap(), "<html><body>a</body></html>")
+        val m = manager(t, filtro = { perfil -> PluginNetFilter(rt, reg, perfil.configModulos) })
+        val n1 = (m.crear(ProfileKind.NORMAL, "http://anuncio.dev/", "a", null) as TabCrear.Ok).id
+        assertTrue("sin ajustes el modulo bloquea", m.nav(n1)!!.navigate("http://anuncio.dev/") is NavOutcome.Failed)
+        val configNormal = m.perfil(ProfileKind.NORMAL)!!.configModulos
+        assertTrue(configNormal.escribir("demo.bloqueador", "general.enabled", "false") is Outcome.Success)
+        val n2 = (m.crear(ProfileKind.NORMAL, "http://anuncio.dev/", "b", null) as TabCrear.Ok).id
+        assertTrue(
+            "general.enabled=false apaga el bloqueo en el perfil normal",
+            m.nav(n2)!!.navigate("http://anuncio.dev/") is NavOutcome.Loaded
+        )
+        val i1 = (m.crear(ProfileKind.INCOGNITO, "http://anuncio.dev/", "c", null) as TabCrear.Ok).id
+        assertTrue(
+            "la config del normal NO contamina el incognito (config vacia: habilitado)",
+            m.nav(i1)!!.navigate("http://anuncio.dev/") is NavOutcome.Failed
+        )
     }
 }
 

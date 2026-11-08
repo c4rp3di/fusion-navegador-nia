@@ -1,5 +1,6 @@
 package nia.engine.profile
 
+import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.net.FetchResponse
 import nia.engine.net.HttpCache
@@ -55,7 +56,8 @@ private fun storeDemo(p: BrowserProfile) {
 /**
  * Espejo Kotlin del gemelo TS validado offline (26 escenarios): cada
  * escenario del gemelo tiene su prueba aqui contra las clases reales.
- * T044 v1 (R0104, RES-0056): perfiles y modo incognito.
+ * T044 v1 (R0104, RES-0056): perfiles y modo incognito. C9 v1 (R0253,
+ * RES-0113): config de modulos por perfil (3 pruebas nuevas).
  */
 class ProfileTest {
 
@@ -319,5 +321,37 @@ class ProfileTest {
         assertEquals(1, p.storage.partitionCount())
         p.wipe()
         assertEquals(0, p.storage.partitionCount())
+    }
+
+    @Test
+    fun configDeModulosNormalPersisteEntreInstancias() {
+        val dir = tempDir()
+        val p1 = BrowserProfile.normal(clock, dir)
+        assertTrue(p1.configModulos.escribir("demo.uno", "general.enabled", "false") is Outcome.Success)
+        assertTrue(File(dir, "modulos-config.tsv").exists())
+        val p2 = BrowserProfile.normal(clock, dir)
+        assertEquals("false", p2.configModulos.leer("demo.uno", "general.enabled"))
+        assertFalse("la config recargada deshabilita al modulo", p2.configModulos.enabled("demo.uno"))
+    }
+
+    @Test
+    fun configDeModulosIncognitoViveSoloEnMemoria() {
+        val p = BrowserProfile.incognito(clock)
+        assertTrue(p.configModulos.escribir("demo.uno", "general.enabled", "false") is Outcome.Success)
+        assertFalse(p.configModulos.enabled("demo.uno"))
+        p.wipe()
+        assertNull("la config del incognito muere con wipe", p.configModulos.leer("demo.uno", "general.enabled"))
+        assertTrue("sin ajuste el modulo vuelve a estar habilitado", p.configModulos.enabled("demo.uno"))
+    }
+
+    @Test
+    fun wipeBorraLaConfigVivaDelPerfilNormal() {
+        val dir = tempDir()
+        val p = BrowserProfile.normal(clock, dir)
+        p.configModulos.escribir("demo.uno", "general.enabled", "false")
+        p.wipe()
+        assertNull(p.configModulos.leer("demo.uno", "general.enabled"))
+        val p2 = BrowserProfile.normal(clock, dir)
+        assertTrue("el archivo truncado no revive el ajuste", p2.configModulos.enabled("demo.uno"))
     }
 }
