@@ -54,6 +54,7 @@ class ListasModulosTest {
     private fun dir(): File {
         secuencia += 1
         val d = File(File(System.getProperty("java.io.tmpdir"), "nia-listas-test"), "caso-" + secuencia)
+        d.deleteRecursively()
         d.mkdirs()
         return d
     }
