@@ -46,6 +46,10 @@ import nia.engine.broker.Renderer
  * C3 v1 (R0271, RES-0119, E4): clave OPCIONAL sustitutos (lista por
  * comas, <= 8 nombres idValido) para la respuesta sustituta; exige
  * la capability modificar y el permiso network.response.
+ *
+ * C6 v1 (R0276, RES-0120, E4): clave OPCIONAL estilos (UN nombre
+ * idValido) para la hoja de estilos del modulo; exige la capability
+ * modificar y el permiso document.styles.
  */
 
 data class ModuleManifest(
@@ -60,7 +64,8 @@ data class ModuleManifest(
     val capabilities: Set<String> = emptySet(),
     val authorKey: String = "",
     val nextKey: String = "",
-    val sustitutos: List<String> = emptyList()
+    val sustitutos: List<String> = emptyList(),
+    val estilos: String? = null
 )
 
 object ModuleSchema {
@@ -77,10 +82,13 @@ object ModuleSchema {
     /** C3 v1 (R0271, RES-0119): permiso de la respuesta sustituta. */
     const val NETWORK_RESPONSE = "network.response"
 
+    /** C6 v1 (R0276, RES-0120): permiso de la hoja de estilos. */
+    const val DOCUMENT_STYLES = "document.styles"
+
     val KEYS = setOf(
         "id", "version", "entry", "permissions",
         "name", "description", "api-version", "category", "capabilities",
-        "author-key", "next-key", "sustitutos"
+        "author-key", "next-key", "sustitutos", "estilos"
     )
 
     /** Categorias combinables del gestor (ADR-005, Delta P9). */
@@ -94,7 +102,7 @@ object ModuleSchema {
      * operaciones de pestana (tab.*) nunca se conceden a un modulo.
      */
     val ALLOWED_PERMISSIONS = setOf(
-        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE
+        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE, DOCUMENT_STYLES
     )
 
     fun validId(id: String): Boolean {
@@ -236,6 +244,16 @@ object ModuleParser {
                 return invalid("sustitutos exige el permiso network.response")
             }
         }
+        val estilos = values["estilos"]
+        if (estilos != null) {
+            if (!UiModelModulos.idValido(estilos)) return invalid("estilos no valido: " + estilos)
+            if (!capabilities.contains("modificar")) {
+                return invalid("estilos exige la capability modificar")
+            }
+            if (!permissions.contains(ModuleSchema.DOCUMENT_STYLES)) {
+                return invalid("estilos exige el permiso document.styles")
+            }
+        }
         val authorKey = values["author-key"] ?: ""
         if (authorKey.isNotEmpty() && !spkiValida(authorKey)) {
             return invalid("author-key no es un SPKI base64 valido")
@@ -253,7 +271,7 @@ object ModuleParser {
         return Outcome.success(
             ModuleManifest(
                 id, version, entry, permissions, name, description, apiVersion,
-                categories, capabilities, authorKey, nextKey, sustitutos
+                categories, capabilities, authorKey, nextKey, sustitutos, estilos
             )
         )
     }

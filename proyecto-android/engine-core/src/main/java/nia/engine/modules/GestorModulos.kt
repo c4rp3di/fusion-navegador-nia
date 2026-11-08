@@ -6,6 +6,7 @@ import nia.contracts.ErrorCode
 import nia.contracts.ErrorInfo
 import nia.contracts.Outcome
 import nia.engine.inspector.EventContext
+import nia.engine.inspector.EventLevel
 import nia.engine.profile.ConfigStore
 
 /**
@@ -44,6 +45,15 @@ import nia.engine.profile.ConfigStore
  * C3 v1 (R0271, RES-0119): el gestor retiene los recursos de
  * sustitucion del paquete instalado y los expone al filtro de red
  * del shell (recursoSustituible); viven y mueren con el modulo.
+ *
+ * C6 v1 (R0276, RES-0120): el gestor retiene la hoja de estilos del
+ * paquete instalado (hojaEstilos) y resuelve la hoja del documento
+ * tras cada disparo de navegacion (hojaParaNavegacion): gana el
+ * primer modulo en orden de instalacion cuyo veredicto fue "estilos"
+ * en el ultimo disparo (api-version 2 con hoja declarada); los
+ * modulos api-version 1 se ignoran y los que pierden reciben
+ * diagnostico "no disponible" (C10, solo con EventContext). UNA
+ * hoja por documento: vive y muere con la navegacion.
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -125,6 +135,8 @@ class GestorModulos(
     private val uiModelos = HashMap<String, UiModelDeclarado>()
     private val datosPaquetes = HashMap<String, Map<String, String>>()
     private val sustitutosPaquetes = HashMap<String, Map<String, RecursoSustituto>>()
+    private val estilosPaquetes = HashMap<String, RecursoEstilo>()
+    private val veredictosDisparo = LinkedHashMap<String, String>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
     data class Alcance(val global: Boolean, val origenes: Set<String>) {
@@ -328,6 +340,11 @@ class GestorModulos(
         uiModelos[id] = p.uiModel
         datosPaquetes[id] = p.datos
         sustitutosPaquetes[id] = p.sustitutos
+        if (p.estilo != null) {
+            estilosPaquetes[id] = p.estilo
+        } else {
+            estilosPaquetes.remove(id)
+        }
         ancladas[id] = p.huellaClave
         if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
             pendientes[id] = p.nextHuella
@@ -377,6 +394,43 @@ class GestorModulos(
     fun recursoSustituible(id: String, nombre: String): RecursoSustituto? =
         sustitutosPaquetes[id]?.get(nombre)
 
+    /** C6 v1 (R0276, RES-0120): hoja de estilos del paquete instalado
+     *  o null (sin modulo, sin hoja declarada o desinstalado). */
+    @Synchronized
+    fun hojaEstilos(id: String): RecursoEstilo? = estilosPaquetes[id]
+
+    /**
+     * C6 v1 (R0276, RES-0120): hoja del documento tras el disparo de
+     * navegacion: gana el primer modulo en ORDEN DE INSTALACION cuyo
+     * veredicto fue "estilos" en el ULTIMO disparo con alcance en el
+     * origen (api-version 2 con hoja declarada); api-version 1 o sin
+     * hoja se ignoran (abstencion) y los que pierden reciben
+     * diagnostico "no disponible" (solo con EventContext, C10).
+     * UNA hoja por documento.
+     */
+    @Synchronized
+    fun hojaParaNavegacion(origen: String, ctxDiag: EventContext? = null): RecursoEstilo? {
+        var ganadora: RecursoEstilo? = null
+        for (id in registry.installedIds()) {
+            val alcance = alcances[id] ?: Alcance(true, emptySet())
+            if (!alcance.aplica(origen)) continue
+            if (veredictosDisparo[id] != "estilos") continue
+            val manifest = registry.manifestOf(id) ?: continue
+            if (manifest.apiVersion < 2) continue
+            val hoja = estilosPaquetes[id] ?: continue
+            if (ganadora == null) {
+                ganadora = hoja
+            } else if (ctxDiag != null && diag != null) {
+                diag.evento(
+                    id, EventLevel.WARNING,
+                    "estilos no disponible: ya hay otra hoja para este documento",
+                    ctxDiag
+                )
+            }
+        }
+        return ganadora
+    }
+
     /** Retira el modulo entero: sesion, registro, alcance y contadores. */
     @Synchronized
     fun desinstalar(id: String): Outcome<Unit> {
@@ -391,6 +445,8 @@ class GestorModulos(
         uiModelos.remove(id)
         datosPaquetes.remove(id)
         sustitutosPaquetes.remove(id)
+        estilosPaquetes.remove(id)
+        veredictosDisparo.remove(id)
         guardar()
         return Outcome.success(Unit)
     }
@@ -435,6 +491,7 @@ class GestorModulos(
     fun dispararNavegar(origen: String, url: String, ctxDiag: EventContext? = null): ResumenDisparos {
         var disparados = 0
         var conErrores = 0
+        veredictosDisparo.clear()
         for (id in registry.installedIds()) {
             val sesion = runtime.sessionOf(id) ?: continue
             val alcance = alcances[id] ?: Alcance(true, emptySet())
@@ -442,7 +499,10 @@ class GestorModulos(
             disparos[id] = (disparos[id] ?: 0) + 1
             disparados += 1
             when (val r = sesion.fire(PluginEvent.NAVIGATE, url, ctxDiag)) {
-                is Outcome.Success -> veredictos[id] = truncar(r.value)
+                is Outcome.Success -> {
+                    veredictos[id] = truncar(r.value)
+                    veredictosDisparo[id] = r.value.trim()
+                }
                 is Outcome.Failure -> {
                     errores[id] = (errores[id] ?: 0) + 1
                     conErrores += 1

@@ -22,6 +22,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import nia.contracts.ContractsVersion
 import nia.engine.css.CssCascade
+import nia.engine.css.CssComputedStyle
 import nia.engine.css.CssStylesheet
 import nia.engine.devtools.DevToolsModel
 import nia.engine.dom.DomDocument
@@ -34,6 +35,7 @@ import nia.engine.gestures.ZoomToque
 import nia.engine.html.DomNode
 import nia.engine.layout.LayoutEngine
 import nia.engine.layout.LayoutResult
+import nia.engine.modules.EstilosModulos
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
 import nia.engine.paint.PaintSceneBuilder
@@ -115,6 +117,11 @@ class PaintView(context: Context) : View(context) {
     private var baseCss: String = DemoPage.CSS
     private var modoDemo: Boolean = true
     private var scrollDocumento: Boolean = false
+
+    /** C6 v1 (R0276, RES-0120): hoja de estilos del modulo ganador del
+     *  documento (null = sin hoja); el overlay display:none se aplica
+     *  en el MISMO pase de layout (sin flash, sin re-layout). */
+    private var hojaModulo: String? = null
 
     private var builtRevision = -1
 
@@ -268,6 +275,13 @@ class PaintView(context: Context) : View(context) {
         invalidate()
     }
 
+    /** C6 v1 (R0276, RES-0120): fija la hoja de estilos del modulo
+     *  para el PROXIMO documento (null = sin hoja); la fija el shell
+     *  tras el disparo de navegacion y vive con el documento. */
+    fun cargarHojaModulo(css: String?) {
+        hojaModulo = css
+    }
+
     /** HTML fuente cargado (SAF: Guardar escribe esto, no el DOM mutado). */
     fun currentHtml(): String = loadedHtml
 
@@ -282,7 +296,7 @@ class PaintView(context: Context) : View(context) {
         var css = baseCss + styleTextOf()
         if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
-        val laid = LayoutEngine.layout(rootDoc, computed, anchoUtil)
+        val laid = LayoutEngine.layout(rootDoc, styleOfDe(computed), anchoUtil)
         return PaintSceneBuilder.build(rootDoc, computed, laid)
     }
 
@@ -343,12 +357,24 @@ class PaintView(context: Context) : View(context) {
         return sb.toString()
     }
 
+    /** C6 v1 (R0276, RES-0120): styleOf con el overlay de la hoja del
+     *  modulo (fail-closed: hoja invalida o sin matches = computed tal
+     *  cual); el display:none casado viaja al layout en el MISMO pase. */
+    private fun styleOfDe(computed: CssComputedStyle): (DomNode, String) -> String? {
+        val hoja = hojaModulo ?: return { node, name -> computed.propertyOf(node, name) }
+        val ocultos = EstilosModulos.ocultos(rootDoc, hoja)
+        if (ocultos.isEmpty()) return { node, name -> computed.propertyOf(node, name) }
+        return { node, name ->
+            if (name == "display" && node in ocultos) "none" else computed.propertyOf(node, name)
+        }
+    }
+
     /** Recalcula cascada+layout+escena con las reglas del usuario (v4). */
     private fun rebuild() {
         var css = baseCss + styleTextOf()
         if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
-        val laid = LayoutEngine.layout(rootDoc, computed, viewport)
+        val laid = LayoutEngine.layout(rootDoc, styleOfDe(computed), viewport)
         layout = laid
         scene = PaintSceneBuilder.build(rootDoc, computed, laid)
         builtRevision = DevToolsState.revision
@@ -983,4 +1009,3 @@ class PaintView(context: Context) : View(context) {
             Color.rgb(176, 176, 192)
         }
 }
-

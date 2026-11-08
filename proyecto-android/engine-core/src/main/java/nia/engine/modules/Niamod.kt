@@ -38,6 +38,9 @@ import nia.engine.js.JsParser
  * KiB por archivo y 1 MiB total, nombre relativo plano);
  * (5d) C3 (R0271, RES-0119): recursos de sustitucion de datos/ en
  * bytes crudos con su sha256 (tope 64 KiB, declarados en sustitutos);
+ * (5e) C6 (R0276, RES-0120): hoja de estilos de datos/ como String
+ * UTF-8 validado con la lista cerrada del host (tope 16 KiB,
+ * declarada en estilos; ver EstilosModulos);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
  * mal, hash mal, limite mal o incoherencia = NO se instala).
@@ -67,6 +70,12 @@ data class RecursoSustituto(
     val sha256: String
 )
 
+/** Hoja de estilos validada (C6 v1, R0276, RES-0120). */
+data class RecursoEstilo(
+    val nombre: String,
+    val css: String
+)
+
 /** Paquete .niamod validado por completo (T095, ADR-005). */
 data class PaqueteNiamod(
     val manifiestoTexto: String,
@@ -79,7 +88,8 @@ data class PaqueteNiamod(
     val archivosDatos: Int,
     val bytesDatos: Long,
     val datos: Map<String, String>,
-    val sustitutos: Map<String, RecursoSustituto> = emptyMap()
+    val sustitutos: Map<String, RecursoSustituto> = emptyMap(),
+    val estilo: RecursoEstilo? = null
 )
 
 object Niamod {
@@ -102,6 +112,9 @@ object Niamod {
 
     /** C3 v1 (R0271, RES-0119): tope de UN recurso de sustitucion. */
     const val MAX_SUSTITUTO = 65_536
+
+    /** C6 v1 (R0276, RES-0120): tope de la hoja de estilos del paquete. */
+    const val MAX_ESTILO = 16_384
 
     /**
      * Validacion completa del paquete en el ORDEN del ADR-005; el
@@ -344,6 +357,24 @@ object Niamod {
             )
         }
 
+        // (5e) C6 v1 (R0276, RES-0120): hoja de estilos declarada en el
+        // manifiesto, retenida de datos/ como String UTF-8 y VALIDADA
+        // con la lista cerrada del host (solo display:none, ver
+        // EstilosModulos); ausente, demasiado grande o invalida NO
+        // instala (fail-closed).
+        val estiloPaquete: RecursoEstilo? = manifest.estilos?.let { nombre ->
+            val crudo = capturados["datos/" + nombre]
+                ?: return invalid("estilo ausente en datos/: " + nombre)
+            if (crudo.size > MAX_ESTILO) {
+                return invalid("estilo demasiado grande: " + nombre)
+            }
+            val css = String(crudo, Charsets.UTF_8)
+            if (EstilosModulos.validar(css) == null) {
+                return invalid("estilo invalido: " + nombre)
+            }
+            RecursoEstilo(nombre, css)
+        }
+
         // (6) pre-parse del entry (JsParser de T029)
         val entryTexto = extraerEntry(bytes, manifest.entry)
             ?: return invalid("paquete sin entry declarada")
@@ -354,7 +385,8 @@ object Niamod {
         return Outcome.success(
             PaqueteNiamod(
                 manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella,
-                uiModel, datosArchivos, datosBytes, datosPaquete, sustitutosPaquete
+                uiModel, datosArchivos, datosBytes, datosPaquete, sustitutosPaquete,
+                estiloPaquete
             )
         )
     }

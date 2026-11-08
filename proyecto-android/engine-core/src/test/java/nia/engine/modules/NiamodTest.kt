@@ -512,4 +512,52 @@ class NiamodTest {
         val bytes = paquete(m, codigo(), kp, listOf("datos/juguete.mp4" to mp4))
         assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
     }
+
+    @Test
+    fun paqueteConEstiloLoRetiene() {
+        val kp = par()
+        val css = ".anuncio { display: none }"
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.styles",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "estilos = hoja.css\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/hoja.css" to css.toByteArray(Charsets.UTF_8)))
+        val r = Niamod.inspeccionar(bytes)
+        assertTrue(r is Outcome.Success)
+        val p = (r as Outcome.Success).value as PaqueteNiamod
+        assertTrue(p.estilo != null)
+        assertEquals("hoja.css", p.estilo!!.nombre)
+        assertEquals(css, p.estilo!!.css)
+    }
+
+    @Test
+    fun paqueteConEstiloAusenteRechazado() {
+        val kp = par()
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.styles",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "estilos = hoja.css\n"
+        )
+        val bytes = paquete(m, codigo(), kp)
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
+
+    @Test
+    fun paqueteConEstiloInvalidoRechazado() {
+        val kp = par()
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.styles",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "estilos = hoja.css\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/hoja.css" to ".a { color: red }".toByteArray(Charsets.UTF_8)))
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
 }

@@ -244,6 +244,8 @@ jobs:
             engine-core/src/test/java/nia/engine/modules/GestorModulosTest.kt \
             engine-core/src/main/java/nia/engine/modules/Niamod.kt \
             engine-core/src/test/java/nia/engine/modules/NiamodTest.kt \
+            engine-core/src/main/java/nia/engine/modules/EstilosModulos.kt \
+            engine-core/src/test/java/nia/engine/modules/EstilosModulosTest.kt \
             engine-core/src/main/java/nia/engine/print/Impresion.kt \
             engine-core/src/test/java/nia/engine/print/ImpresorTest.kt \
             engine-core/src/main/java/nia/engine/permisos/Permisos.kt \

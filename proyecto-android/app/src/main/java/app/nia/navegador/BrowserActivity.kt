@@ -1522,6 +1522,11 @@ class BrowserActivity : Activity() {
     @Volatile
     private var resumenModulos = ""
 
+    /** C6 v1 (R0276, RES-0120): hoja de estilos ganadora del disparo de
+     *  navegacion; la consume el PINTADO del documento (vive y muere
+     *  con la navegacion, una hoja por documento). */
+    private var hojaParaPintar: String? = null
+
     /** Dialogo de cuotas visibles (T100): mapa honesto de la
      * interrupcion (pasos/allocs/tiempo y lo que NO miden), cuotas
      * activas tras los reintentos, conteo de scripts interrumpidos y
@@ -1931,6 +1936,9 @@ class BrowserActivity : Activity() {
         val t = o.page.origin as? Origin.Tuple ?: return
         val clave = t.scheme + "://" + t.host + ":" + t.port
         val res = gestorModulos.dispararNavegar(clave, o.page.url, ctx)
+        // C6 v1 (R0276, RES-0120): la hoja del documento la resuelve el
+        // gestor tras el disparo (una por documento; gana el primero).
+        hojaParaPintar = gestorModulos.hojaParaNavegacion(clave, ctx)?.css
         if (res.disparados > 0) {
             resumenModulos = "modulos " + res.disparados + " notificado(s), errores: " + res.errores
         }
@@ -2219,7 +2227,10 @@ class BrowserActivity : Activity() {
      * pipeline, el shell NO se cierra: se conserva la pagina previa y el
      * estado cuenta que fallo (honesto, sin WebView). */
     private fun pintar(html: String) {
+        val hoja = hojaParaPintar
+        hojaParaPintar = null
         try {
+            pagina.cargarHojaModulo(hoja)
             pagina.loadPagina(html, cssNavegador(), true)
             scroll.scrollTo(0, 0)
         } catch (e: Exception) {
@@ -2253,6 +2264,9 @@ class BrowserActivity : Activity() {
         val html = page.html
         if (html != null) {
             pintar(html)
+        } else {
+            // C6 v1: sin html la hoja ganada se descarta (vive con el documento)
+            hojaParaPintar = null
         }
     }
 

@@ -304,4 +304,32 @@ class ModuleRegistryTest {
             "sustitutos = juguete.mp4" + "\n"
         assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinPermiso)).code)
     }
+
+    @Test fun estilosValidosLleganAlManifest() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = document.styles" + "\n" +
+            "capabilities = modificar" + "\n" +
+            "estilos = hoja.css" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals("hoja.css", mod.manifest.estilos)
+    }
+
+    @Test fun estilosSinCoherenciaRechazado() {
+        val sinModificar = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = document.styles" + "\n" +
+            "estilos = hoja.css" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinModificar)).code)
+        val sinPermiso = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "capabilities = modificar" + "\n" +
+            "estilos = hoja.css" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinPermiso)).code)
+    }
+
+    @Test fun estilosNombreInvalidoRechazado() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = document.styles" + "\n" +
+            "capabilities = modificar" + "\n" +
+            "estilos = ../malo.css" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
+    }
 }
