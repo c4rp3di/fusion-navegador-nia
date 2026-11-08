@@ -60,9 +60,12 @@ class EstilosModulosTest {
 
     @Test
     fun topeDeSelectoresRechazado() {
-        val dentro = ".c0" + (1..199).joinToString("") { ", .c$" + it } + " { display: none }"
+        // R0275: el tope cuenta la SUMA de selectores de todas las
+        // reglas; se prueban 200/201 reglas de UN selector (el
+        // agrupado por comas se prueba en ocultosMatchea).
+        val dentro = (0..199).joinToString("\n") { ".c$" + it + " { display: none }" }
         assertTrue("200 selectores validan", EstilosModulos.validar(dentro) != null)
-        val fuera = ".c0" + (1..200).joinToString("") { ", .c$" + it } + " { display: none }"
+        val fuera = (0..200).joinToString("\n") { ".c$" + it + " { display: none }" }
         assertTrue("201 selectores NO validan", EstilosModulos.validar(fuera) == null)
     }
 
