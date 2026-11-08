@@ -42,6 +42,10 @@ import nia.engine.broker.Renderer
  * (SPKI base64; next-key exige author-key y debe diferir); el ancla
  * de confianza sha256(SPKI) y la firma ECDSA viven en Niamod y en el
  * gestor (instalar = anclar, ADR-028).
+ *
+ * C3 v1 (R0271, RES-0119, E4): clave OPCIONAL sustitutos (lista por
+ * comas, <= 8 nombres idValido) para la respuesta sustituta; exige
+ * la capability modificar y el permiso network.response.
  */
 
 data class ModuleManifest(
@@ -55,7 +59,8 @@ data class ModuleManifest(
     val categories: Set<String> = emptySet(),
     val capabilities: Set<String> = emptySet(),
     val authorKey: String = "",
-    val nextKey: String = ""
+    val nextKey: String = "",
+    val sustitutos: List<String> = emptyList()
 )
 
 object ModuleSchema {
@@ -66,10 +71,16 @@ object ModuleSchema {
     const val MAX_NAME_CHARS = 64
     const val MAX_DESCRIPTION_CHARS = 256
 
+    /** C3 v1 (R0271, RES-0119): tope de sustitutos declarados. */
+    const val MAX_SUSTITUTOS = 8
+
+    /** C3 v1 (R0271, RES-0119): permiso de la respuesta sustituta. */
+    const val NETWORK_RESPONSE = "network.response"
+
     val KEYS = setOf(
         "id", "version", "entry", "permissions",
         "name", "description", "api-version", "category", "capabilities",
-        "author-key", "next-key"
+        "author-key", "next-key", "sustitutos"
     )
 
     /** Categorias combinables del gestor (ADR-005, Delta P9). */
@@ -82,7 +93,9 @@ object ModuleSchema {
      * Permisos declarables v1: solo operaciones de datos del broker; las
      * operaciones de pestana (tab.*) nunca se conceden a un modulo.
      */
-    val ALLOWED_PERMISSIONS = setOf(BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH)
+    val ALLOWED_PERMISSIONS = setOf(
+        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE
+    )
 
     fun validId(id: String): Boolean {
         if (id.isEmpty() || id.length > MAX_ID_CHARS) return false
@@ -203,6 +216,26 @@ object ModuleParser {
         if (capabilities.contains("bloquear") && !permissions.contains(BrokerOps.NETWORK_FETCH)) {
             return invalid("bloquear exige el permiso network.fetch")
         }
+        val sustitutos = ArrayList<String>()
+        val susRaw = values["sustitutos"]
+        if (susRaw != null) {
+            for (token in susRaw.split(',')) {
+                val s = token.trim()
+                if (s.isEmpty()) return invalid("sustituto vacio")
+                if (sustitutos.contains(s)) return invalid("sustituto repetido: " + s)
+                if (!UiModelModulos.idValido(s)) return invalid("sustituto no valido: " + s)
+                sustitutos.add(s)
+            }
+            if (sustitutos.size > ModuleSchema.MAX_SUSTITUTOS) {
+                return invalid("demasiados sustitutos")
+            }
+            if (!capabilities.contains("modificar")) {
+                return invalid("sustitutos exige la capability modificar")
+            }
+            if (!permissions.contains(ModuleSchema.NETWORK_RESPONSE)) {
+                return invalid("sustitutos exige el permiso network.response")
+            }
+        }
         val authorKey = values["author-key"] ?: ""
         if (authorKey.isNotEmpty() && !spkiValida(authorKey)) {
             return invalid("author-key no es un SPKI base64 valido")
@@ -220,7 +253,7 @@ object ModuleParser {
         return Outcome.success(
             ModuleManifest(
                 id, version, entry, permissions, name, description, apiVersion,
-                categories, capabilities, authorKey, nextKey
+                categories, capabilities, authorKey, nextKey, sustitutos
             )
         )
     }

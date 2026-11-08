@@ -47,6 +47,12 @@ import nia.contracts.WallClock
  * defecto, tipo "otro" sin iniciador); Block -> DENIED sin tocar ni
  * cache ni transporte. Sin filtro el comportamiento es exactamente
  * el de v2. El consult previo al service worker vive en JsFetchApi.
+ *
+ * v4 (R0271, C3): respuesta sustituta. Un FilterDecision.Substitute
+ * se sirve SIN tocar cache ni transporte: no-store, sin cookies, el
+ * CORS lo calcula el host (refleja el origen del iniciador solo en
+ * cross-origin explicito) y el Range se honra con 206 parcial o
+ * DENIED (rango invalido); la sustitucion NO cuenta en delivered.
  */
 
 data class FetchRequest(
@@ -134,6 +140,9 @@ class FetchManager(
             if (decision is FilterDecision.Block) {
                 return Outcome.failure(ErrorInfo(ErrorCode.DENIED, "peticion bloqueada por un modulo"))
             }
+            if (decision is FilterDecision.Substitute) {
+                return respuestaSustituta(request, ctx, decision)
+            }
         }
         val g = generation
         val t = token ?: CancellationTokenSource(clock).token
@@ -208,5 +217,72 @@ class FetchManager(
             }
         }
         return false
+    }
+
+    /**
+     * C3 v1 (R0271, RES-0119): respuesta sustituta del filtro. Se
+     * sirve ANTES de cache y transporte: no-store (NUNCA puebla la
+     * cache de la URL original), sin Set-Cookie, CORS calculado por
+     * el HOST reflejando el origen del iniciador solo en cross-origin
+     * explicito y Range honrado con 206 parcial o DENIED (rango
+     * invalido documentado); delivered NO cuenta la sustitucion.
+     */
+    private fun respuestaSustituta(
+        request: FetchRequest,
+        ctx: RequestContext?,
+        decision: FilterDecision.Substitute
+    ): Outcome<FetchResponse> {
+        val bytes = decision.bytes
+        val total = bytes.size
+        val headers = LinkedHashMap<String, String>()
+        headers["Content-Type"] = decision.contentType
+        headers["Accept-Ranges"] = "bytes"
+        headers["Cache-Control"] = "no-store"
+        if (ctx != null && ctx.initiatorUrl.isNotEmpty() && ctx.thirdParty == true) {
+            val origen = origenDe(ctx.initiatorUrl)
+            if (origen.isNotEmpty()) headers["Access-Control-Allow-Origin"] = origen
+        }
+        var desde = 0
+        var hasta = total - 1
+        var status = 200
+        val range = headerValue(request.headers, "Range")
+        if (range != null) {
+            val m = Regex("^bytes=(\\d+)-(\\d*)$").find(range.trim())
+            if (m == null) {
+                return Outcome.failure(ErrorInfo(ErrorCode.DENIED, "rango invalido"))
+            }
+            desde = m.groupValues[1].toInt()
+            if (m.groupValues[2].isNotEmpty()) hasta = m.groupValues[2].toInt()
+            if (desde > hasta || desde >= total) {
+                return Outcome.failure(ErrorInfo(ErrorCode.DENIED, "rango invalido"))
+            }
+            if (hasta > total - 1) hasta = total - 1
+            status = 206
+            headers["Content-Range"] = "bytes " + desde + "-" + hasta + "/" + total
+        }
+        val cuerpoGet = bytes.sliceArray(desde..hasta)
+        headers["Content-Length"] = cuerpoGet.size.toString()
+        val cuerpo = if (request.method == "HEAD") ByteArray(0) else cuerpoGet
+        return Outcome.success(FetchResponse(status, headers, cuerpo))
+    }
+
+    /** Origen crudo del iniciador (tras "://", sin userinfo ni ruta). */
+    private fun origenDe(url: String): String {
+        val i = url.indexOf("://")
+        if (i < 0) return ""
+        var s = url.substring(i + 3)
+        val corte = s.indexOfAny(charArrayOf('/', '?', '#'))
+        if (corte >= 0) s = s.substring(0, corte)
+        val at = s.lastIndexOf('@')
+        if (at >= 0) s = s.substring(at + 1)
+        return s
+    }
+
+    /** Valor de una cabecera sin importar mayusculas; null si no esta. */
+    private fun headerValue(headers: Map<String, String>, nombre: String): String? {
+        for ((k, v) in headers) {
+            if (k.equals(nombre, ignoreCase = true)) return v
+        }
+        return null
     }
 }

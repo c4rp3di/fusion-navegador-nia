@@ -255,7 +255,9 @@ class BrowserActivity : Activity() {
             filtroDePerfil = { perfil, tabId ->
                 PluginNetFilter(
                     runtimeModulos, registroModulos, perfil.configModulos,
-                    { _ -> contextoModulos.actual(tabId) }
+                    { _ -> contextoModulos.actual(tabId) },
+                    { id, nombre -> gestorModulos.recursoSustituible(id, nombre) },
+                    diagModulos
                 )
             }
         )
@@ -313,10 +315,15 @@ class BrowserActivity : Activity() {
      *  no tiene frame tree). */
     private val contextoModulos by lazy { ContextoModulos("shell-" + clock.nowMillis()) }
 
+    /** C3 v1 (R0271, RES-0119): canal de diagnostico compartido por
+     *  el gestor y el filtro de red del shell; los recursos
+     *  sustituibles los resuelve el gestor del paquete instalado. */
+    private val diagModulos by lazy { DiagModulos(inspectorModulos) }
+
     private val gestorModulos by lazy {
         GestorModulos(
             registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"), null,
-            tabs.perfil(ProfileKind.NORMAL)?.configModulos, DiagModulos(inspectorModulos)
+            tabs.perfil(ProfileKind.NORMAL)?.configModulos, diagModulos
         )
     }
 

@@ -38,6 +38,10 @@ class FetchManagerTest {
         body: ByteArray = ByteArray(0)
     ): TransportResult = TransportResult.Success(FetchResponse(status, headers, body))
 
+    private class FiltroFijo(private val decision: FilterDecision) : RequestFilter {
+        override fun decide(context: RequestContext): FilterDecision = decision
+    }
+
     private fun <T> valor(o: Outcome<T>): T {
         assertTrue(o is Outcome.Success)
         return (o as Outcome.Success).value as T
@@ -257,5 +261,84 @@ class FetchManagerTest {
         val m = FetchManager(t)
         val resp = valor(m.fetch(m.newRequest("GET", "https://a.example/")))
         assertEquals(0, resp.body.size)
+    }
+
+    @Test fun sustitucionSeSirveSinCacheNiTransporte() {
+        val t = FakeTransport()
+        val cache = HttpCache(FakeClock(1000))
+        val bytes = "video juguete".toByteArray(Charsets.UTF_8)
+        val m = FetchManager(
+            t, FakeClock(1000), cache,
+            FiltroFijo(FilterDecision.Substitute("demo.mod", bytes, "video/mp4"))
+        )
+        val resp = valor(m.fetch(m.newRequest("GET", "https://cdn.example.org/v.mp4")))
+        assertEquals(200, resp.status)
+        assertEquals("video/mp4", resp.headers["Content-Type"])
+        assertEquals("bytes", resp.headers["Accept-Ranges"])
+        assertEquals("no-store", resp.headers["Cache-Control"])
+        assertEquals(bytes.size.toString(), resp.headers["Content-Length"])
+        assertTrue(resp.body.contentEquals(bytes))
+        assertEquals("la sustitucion no toca el transporte", 0, t.requests.size)
+        assertEquals("la sustitucion no cuenta como entrega", 0, m.deliveredCount())
+        assertTrue(
+            "la sustitucion jamas puebla la cache",
+            cache.lookup("GET", "https://cdn.example.org/v.mp4") is HttpCache.Lookup.Miss
+        )
+        assertEquals(0, cache.count())
+    }
+
+    @Test fun sustitucionConRangeParcialResponde206() {
+        val bytes = ByteArray(200) { it.toByte() }
+        val m = FetchManager(
+            FakeTransport(),
+            filter = FiltroFijo(FilterDecision.Substitute("demo.mod", bytes, "video/mp4"))
+        )
+        val req = m.newRequest("GET", "https://cdn.example.org/v.mp4", mapOf("Range" to "bytes=0-99"))
+        val resp = valor(m.fetch(req))
+        assertEquals(206, resp.status)
+        assertEquals("bytes 0-99/200", resp.headers["Content-Range"])
+        assertEquals("100", resp.headers["Content-Length"])
+        assertEquals(100, resp.body.size)
+        assertTrue(resp.body.contentEquals(bytes.sliceArray(0..99)))
+    }
+
+    @Test fun sustitucionConRangeInvalidoDenegada() {
+        val bytes = "x".toByteArray(Charsets.UTF_8)
+        val m = FetchManager(
+            FakeTransport(),
+            filter = FiltroFijo(FilterDecision.Substitute("demo.mod", bytes, "video/mp4"))
+        )
+        val req = m.newRequest("GET", "https://cdn.example.org/v.mp4", mapOf("Range" to "bytes=9-3"))
+        assertEquals(ErrorCode.DENIED, fallo(m.fetch(req)).code)
+    }
+
+    @Test fun sustitucionHeadNoLlevaCuerpo() {
+        val bytes = "video juguete".toByteArray(Charsets.UTF_8)
+        val m = FetchManager(
+            FakeTransport(),
+            filter = FiltroFijo(FilterDecision.Substitute("demo.mod", bytes, "video/mp4"))
+        )
+        val resp = valor(m.fetch(m.newRequest("HEAD", "https://cdn.example.org/v.mp4")))
+        assertEquals(200, resp.status)
+        assertEquals(0, resp.body.size)
+        assertEquals(
+            "el content-length es del cuerpo que GET habria dado",
+            bytes.size.toString(),
+            resp.headers["Content-Length"]
+        )
+    }
+
+    @Test fun sustitucionCrossOriginReflejaElOrigenDelIniciador() {
+        val bytes = "x".toByteArray(Charsets.UTF_8)
+        val m = FetchManager(
+            FakeTransport(),
+            filter = FiltroFijo(FilterDecision.Substitute("demo.mod", bytes, "video/mp4"))
+        )
+        val ctx = RequestContext("https://cdn.example.org/v.mp4", "fetch", "https://sitio.com/pagina", true)
+        val resp = valor(m.fetch(m.newRequest("GET", "https://cdn.example.org/v.mp4"), null, -1, ctx))
+        assertEquals("sitio.com", resp.headers["Access-Control-Allow-Origin"])
+        val same = RequestContext("https://sitio.com/v.mp4", "fetch", "https://sitio.com/pagina", false)
+        val resp2 = valor(m.fetch(m.newRequest("GET", "https://sitio.com/v.mp4"), null, -1, same))
+        assertTrue("same-origin sin ACAO", !resp2.headers.containsKey("Access-Control-Allow-Origin"))
     }
 }

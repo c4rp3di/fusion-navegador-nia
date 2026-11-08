@@ -260,4 +260,48 @@ class ModuleRegistryTest {
             "category = toolbar" + "\n"
         assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
     }
+
+    @Test fun sustitutosValidosLleganAlManifest() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch, network.response" + "\n" +
+            "capabilities = bloquear, modificar" + "\n" +
+            "api-version = 2" + "\n" +
+            "sustitutos = juguete.mp4, banner.png" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals(listOf("juguete.mp4", "banner.png"), mod.manifest.sustitutos)
+    }
+
+    @Test fun sustitutosDemasiadosRechazado() {
+        val lista = (1..9).joinToString(", ") { "r" + it + ".mp4" }
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch, network.response" + "\n" +
+            "capabilities = bloquear, modificar" + "\n" +
+            "api-version = 2" + "\n" +
+            "sustitutos = " + lista + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
+    }
+
+    @Test fun sustitutoRepetidoRechazado() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch, network.response" + "\n" +
+            "capabilities = bloquear, modificar" + "\n" +
+            "api-version = 2" + "\n" +
+            "sustitutos = juguete.mp4, juguete.mp4" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
+    }
+
+    @Test fun sustitutosSinCoherenciaRechazado() {
+        val sinModificar = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch, network.response" + "\n" +
+            "capabilities = bloquear" + "\n" +
+            "api-version = 2" + "\n" +
+            "sustitutos = juguete.mp4" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinModificar)).code)
+        val sinPermiso = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch" + "\n" +
+            "capabilities = bloquear, modificar" + "\n" +
+            "api-version = 2" + "\n" +
+            "sustitutos = juguete.mp4" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinPermiso)).code)
+    }
 }

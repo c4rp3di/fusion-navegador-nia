@@ -462,4 +462,54 @@ class NiamodTest {
         )
         assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
     }
+
+    @Test
+    fun paqueteConSustitutoLoRetieneConSha256() {
+        val kp = par()
+        val mp4 = "MP4 de juguete".toByteArray(Charsets.UTF_8)
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, network.response",
+            apiVersion = 2,
+            caps = "bloquear, modificar",
+            extra = "sustitutos = juguete.mp4\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/juguete.mp4" to mp4))
+        val r = Niamod.inspeccionar(bytes)
+        assertTrue(r is Outcome.Success)
+        val p = (r as Outcome.Success).value as PaqueteNiamod
+        val recurso = p.sustitutos["juguete.mp4"]
+        assertTrue(recurso != null)
+        assertTrue(recurso!!.bytes.contentEquals(mp4))
+        assertEquals(hex(sha256(mp4)), recurso.sha256)
+    }
+
+    @Test
+    fun paqueteConSustitutoAusenteRechazado() {
+        val kp = par()
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, network.response",
+            apiVersion = 2,
+            caps = "bloquear, modificar",
+            extra = "sustitutos = juguete.mp4\n"
+        )
+        val bytes = paquete(m, codigo(), kp)
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
+
+    @Test
+    fun paqueteConSustitutoDemasiadoGrandeRechazado() {
+        val kp = par()
+        val mp4 = ByteArray(65_537)
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, network.response",
+            apiVersion = 2,
+            caps = "bloquear, modificar",
+            extra = "sustitutos = juguete.mp4\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/juguete.mp4" to mp4))
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
 }

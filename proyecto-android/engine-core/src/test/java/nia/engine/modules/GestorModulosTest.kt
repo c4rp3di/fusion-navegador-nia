@@ -36,6 +36,9 @@ import nia.engine.profile.ConfigStore
  * C10 v2 (R0267, RES-0118): dispararNavegar con EventContext lleva
  * el diagnostico del modulo al inspector del host (gemelo 2
  * corridas, huella 14.14.25e8790c).
+ * C3 v1 (R0271, RES-0119): recursoSustituible expone los recursos
+ * del paquete instalado y los retira con el modulo (gemelo 2
+ * corridas, huella 33.33.1f2c43d20ca9851c).
  */
 class GestorModulosTest {
 
@@ -510,5 +513,38 @@ class GestorModulosTest {
         assertEquals(1, resSin.disparados)
         assertEquals("sin contexto nia.diag se abstiene: no hay evento nuevo", 1, inspector.all().size)
         assertEquals("la cuota del modulo solo cuenta lo escrito", 1, diag.escritos("demo.niamod"))
+    }
+
+    @Test
+    fun recursoSustituibleSeTomaDelPaqueteInstalado() {
+        val g = nuevo()
+        val kp = par()
+        val mp4 = "juguete demo".toByteArray(Charsets.UTF_8)
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, network.response\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "sustitutos = juguete.mp4\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(manifiesto, kp, listOf("datos/juguete.mp4" to mp4))
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        val recurso = g.recursoSustituible("demo.niamod", "juguete.mp4")
+        assertTrue("el recurso vive con el paquete instalado", recurso != null)
+        assertTrue(recurso!!.bytes.contentEquals(mp4))
+        assertEquals(hex(sha256(mp4)), recurso.sha256)
+        assertTrue("un nombre no declarado no resuelve", g.recursoSustituible("demo.niamod", "otro.mp4") == null)
+    }
+
+    @Test
+    fun desinstalarRetiraLosRecursosSustituibles() {
+        val g = nuevo()
+        val kp = par()
+        val mp4 = "juguete demo".toByteArray(Charsets.UTF_8)
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, network.response\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "sustitutos = juguete.mp4\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(manifiesto, kp, listOf("datos/juguete.mp4" to mp4))
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        ok(g.desinstalar("demo.niamod"))
+        assertTrue("desinstalar retira los recursos", g.recursoSustituible("demo.niamod", "juguete.mp4") == null)
     }
 }

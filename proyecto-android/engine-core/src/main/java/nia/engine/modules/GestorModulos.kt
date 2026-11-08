@@ -40,6 +40,10 @@ import nia.engine.profile.ConfigStore
  * nia.ajustes.leer, datos con nia.datos.leer y escribe diagnostico
  * con nia.diag.evento. Sin config o sin diag el entorno llega con
  * esas piezas en null: el entry de api-version 1 no cambia.
+ *
+ * C3 v1 (R0271, RES-0119): el gestor retiene los recursos de
+ * sustitucion del paquete instalado y los expone al filtro de red
+ * del shell (recursoSustituible); viven y mueren con el modulo.
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -120,6 +124,7 @@ class GestorModulos(
     private val pendientes = HashMap<String, String>()
     private val uiModelos = HashMap<String, UiModelDeclarado>()
     private val datosPaquetes = HashMap<String, Map<String, String>>()
+    private val sustitutosPaquetes = HashMap<String, Map<String, RecursoSustituto>>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
     data class Alcance(val global: Boolean, val origenes: Set<String>) {
@@ -322,6 +327,7 @@ class GestorModulos(
         codigos[id] = p.entryTexto
         uiModelos[id] = p.uiModel
         datosPaquetes[id] = p.datos
+        sustitutosPaquetes[id] = p.sustitutos
         ancladas[id] = p.huellaClave
         if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
             pendientes[id] = p.nextHuella
@@ -364,6 +370,13 @@ class GestorModulos(
     @Synchronized
     fun uiModelDe(id: String): UiModelDeclarado? = uiModelos[id]
 
+    /** C3 v1 (R0271, RES-0119): recurso de sustitucion del paquete
+     *  instalado o null (sin modulo, sin recurso o desinstalado); lo
+     *  resuelve el filtro de red ANTES de servir la sustitucion. */
+    @Synchronized
+    fun recursoSustituible(id: String, nombre: String): RecursoSustituto? =
+        sustitutosPaquetes[id]?.get(nombre)
+
     /** Retira el modulo entero: sesion, registro, alcance y contadores. */
     @Synchronized
     fun desinstalar(id: String): Outcome<Unit> {
@@ -377,6 +390,7 @@ class GestorModulos(
         alcances.remove(id)
         uiModelos.remove(id)
         datosPaquetes.remove(id)
+        sustitutosPaquetes.remove(id)
         guardar()
         return Outcome.success(Unit)
     }

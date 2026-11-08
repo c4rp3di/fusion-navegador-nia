@@ -54,10 +54,17 @@ data class RequestContext(
     }
 }
 
-/** Decision cerrada del filtro de red: continuar o bloquear por un modulo. */
+/** Decision cerrada del filtro de red: continuar, bloquear por un
+ *  modulo o sustituir la respuesta con el recurso del modulo (C3 v1,
+ *  R0271, RES-0119). */
 sealed class FilterDecision {
     object Allow : FilterDecision()
     data class Block(val moduleId: String) : FilterDecision()
+    data class Substitute(
+        val moduleId: String,
+        val bytes: ByteArray,
+        val contentType: String
+    ) : FilterDecision()
 }
 
 /** Filtro de red consultado ANTES de red, cache y service worker. */

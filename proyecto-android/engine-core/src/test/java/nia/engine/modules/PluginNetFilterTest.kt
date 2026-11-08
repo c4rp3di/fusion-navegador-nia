@@ -1,5 +1,7 @@
 package nia.engine.modules
 
+import java.security.MessageDigest
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,6 +31,9 @@ import nia.engine.profile.ConfigStore
  * C10 v2 (R0267, RES-0118): contextoDe aporta el EventContext real
  * de cada peticion y nia.diag escribe en el inspector del host
  * (gemelo 2 corridas, huella 14.14.25e8790c).
+ * C3 v1 (R0271, RES-0119): veredicto sustituir con gates
+ * fail-closed y diagnostico sustituido/no disponible (gemelo 2
+ * corridas, huella 33.33.1f2c43d20ca9851c).
  */
 class PluginNetFilterTest {
 
@@ -63,6 +68,46 @@ class PluginNetFilterTest {
 
     private val entryCondicional =
         "nia.onRequest(function (u) { return u.indexOf('/ads/') >= 0 ? 'block' : 'allow'; });"
+
+    private val manifestSustituto =
+        "id = demo.api2\nversion = 1\nentry = entry.js\npermissions = network.fetch, network.response\ncapabilities = bloquear, modificar\napi-version = 2\nsustitutos = juguete.mp4"
+
+    private val entrySustituto =
+        "nia.onRequest(function (c) { return 'sustituir: juguete.mp4'; });"
+
+    private fun sha256Hex(b: ByteArray): String {
+        val d = MessageDigest.getInstance("SHA-256").digest(b)
+        val sb = StringBuilder(d.size * 2)
+        for (x in d) {
+            val v = x.toInt() and 0xFF
+            sb.append("0123456789abcdef"[v shr 4])
+            sb.append("0123456789abcdef"[v and 0xF])
+        }
+        return sb.toString()
+    }
+
+    private class MontajeSustituto(val filtro: PluginNetFilter, val inspector: InspectorSession)
+
+    /** Monta el modulo con el manifiesto dado y el filtro C3 completo. */
+    private fun montarSustituto(
+        manifiesto: String,
+        entry: String,
+        recurso: RecursoSustituto?,
+        ctx: EventContext?
+    ): MontajeSustituto {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        assertTrue(reg.install(manifiesto) is Outcome.Success)
+        assertTrue(rt.load("demo.api2", entry) is Outcome.Success)
+        val inspector = InspectorSession(FakeClock(9L))
+        val filtro = PluginNetFilter(
+            rt, reg, null,
+            { _ -> ctx },
+            { _, _ -> recurso },
+            DiagModulos(inspector)
+        )
+        return MontajeSustituto(filtro, inspector)
+    }
 
     @Test
     fun bloqueoExtremoAFinSinLlamarAlTransporte() {
@@ -348,5 +393,117 @@ class PluginNetFilterTest {
             fNulo.decide(RequestContext.of("https://cdn.example.org/y.png", "image", "")) is FilterDecision.Allow
         )
         assertEquals("proveedor null: sin contexto no hay evento", 0, inspector.all().size)
+    }
+
+    @Test
+    fun api2SustituyeElRecursoDelModulo() {
+        val mp4 = "MP4 de juguete".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val montaje = montarSustituto(manifestSustituto, entrySustituto, recurso, ctx)
+        val d = montaje.filtro.decide(
+            RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")
+        )
+        assertTrue(d is FilterDecision.Substitute)
+        assertEquals("demo.api2", (d as FilterDecision.Substitute).moduleId)
+        assertTrue(d.bytes.contentEquals(mp4))
+        assertEquals("video/mp4", d.contentType)
+        val eventos = montaje.inspector.all()
+        assertEquals("el diagnostico del exito llega al inspector", 1, eventos.size)
+        assertEquals(EventLevel.INFO, eventos[0].level)
+        assertEquals("sustituido juguete.mp4", eventos[0].payload["texto"])
+        assertEquals("el contexto del proveedor viaja al evento", ctx, eventos[0].context)
+    }
+
+    @Test
+    fun api2UnaNavegacionDeDocumentoJamasSeSustituye() {
+        val mp4 = "MP4".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val f = montarSustituto(manifestSustituto, entrySustituto, recurso, ctx).filtro
+        assertTrue(
+            f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "document", "")) is FilterDecision.Block
+        )
+    }
+
+    @Test
+    fun api2TipoNoSustituibleCaeABlock() {
+        val mp4 = "MP4".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val f = montarSustituto(manifestSustituto, entrySustituto, recurso, ctx).filtro
+        assertTrue(
+            f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "script", "")) is FilterDecision.Block
+        )
+    }
+
+    @Test
+    fun api1IgnoraElVeredictoSustituir() {
+        val manifest =
+            "id = demo.api2\nversion = 1\nentry = entry.js\npermissions = network.fetch\ncapabilities = bloquear"
+        val mp4 = "MP4".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val f = montarSustituto(manifest, entrySustituto, recurso, ctx).filtro
+        assertTrue(
+            "api-version 1 mantiene su semantica: el veredicto raro no bloquea",
+            f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Allow
+        )
+    }
+
+    @Test
+    fun api2SinCapabilityModificarCaeABlock() {
+        val manifest =
+            "id = demo.api2\nversion = 1\nentry = entry.js\npermissions = network.fetch, network.response\ncapabilities = bloquear\napi-version = 2"
+        val mp4 = "MP4".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val f = montarSustituto(manifest, entrySustituto, recurso, ctx).filtro
+        assertTrue(
+            f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Block
+        )
+    }
+
+    @Test
+    fun api2RecursoAlteradoCaeABlockYDiagnostica() {
+        val mp4 = "MP4 de juguete".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto(
+            "juguete.mp4", mp4, sha256Hex("MANIPULADO".toByteArray(Charsets.UTF_8))
+        )
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val montaje = montarSustituto(manifestSustituto, entrySustituto, recurso, ctx)
+        assertTrue(
+            montaje.filtro.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Block
+        )
+        val eventos = montaje.inspector.all()
+        assertEquals("el fallo escribe no disponible en el canal del host", 1, eventos.size)
+        assertEquals(EventLevel.WARNING, eventos[0].level)
+        assertEquals("no disponible: juguete.mp4", eventos[0].payload["texto"])
+    }
+
+    @Test
+    fun api2TopeDeSustitucionesPorDocumento() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        assertTrue(reg.install(manifestSustituto) is Outcome.Success)
+        assertTrue(rt.load("demo.api2", entrySustituto) is Outcome.Success)
+        val mp4 = "MP4 de juguete".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        var ctx: EventContext? = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val f = PluginNetFilter(rt, reg, null, { _ -> ctx }, { _, _ -> recurso }, null)
+        repeat(50) {
+            assertTrue(
+                f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Substitute
+            )
+        }
+        assertTrue(
+            "la sustitucion 51 del mismo documento cae en Block",
+            f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Block
+        )
+        ctx = EventContext("s-demo", "t-1", "main", "d-2-1", 1L)
+        assertTrue(
+            "otro documento sigue sustituyendo",
+            f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Substitute
+        )
     }
 }

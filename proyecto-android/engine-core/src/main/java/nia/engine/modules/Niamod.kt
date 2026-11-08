@@ -36,6 +36,8 @@ import nia.engine.js.JsParser
  * uimodel/1, R0260); (5c) extraccion de datos/ para el entry (T030 v2,
  * R0263, RES-0117: api-version 2 la lee con nia.datos.leer; topes 256
  * KiB por archivo y 1 MiB total, nombre relativo plano);
+ * (5d) C3 (R0271, RES-0119): recursos de sustitucion de datos/ en
+ * bytes crudos con su sha256 (tope 64 KiB, declarados en sustitutos);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
  * mal, hash mal, limite mal o incoherencia = NO se instala).
@@ -58,6 +60,13 @@ data class EntradaZip(
     val extAttrs: Long
 )
 
+/** Recurso de sustitucion validado (C3 v1, R0271, RES-0119). */
+data class RecursoSustituto(
+    val nombre: String,
+    val bytes: ByteArray,
+    val sha256: String
+)
+
 /** Paquete .niamod validado por completo (T095, ADR-005). */
 data class PaqueteNiamod(
     val manifiestoTexto: String,
@@ -69,7 +78,8 @@ data class PaqueteNiamod(
     val uiModel: UiModelDeclarado,
     val archivosDatos: Int,
     val bytesDatos: Long,
-    val datos: Map<String, String>
+    val datos: Map<String, String>,
+    val sustitutos: Map<String, RecursoSustituto> = emptyMap()
 )
 
 object Niamod {
@@ -89,6 +99,9 @@ object Niamod {
 
     /** T030 v2 (R0263, RES-0117): tope total acumulado de datos/. */
     const val MAX_DATOS_TOTAL = 1_048_576
+
+    /** C3 v1 (R0271, RES-0119): tope de UN recurso de sustitucion. */
+    const val MAX_SUSTITUTO = 65_536
 
     /**
      * Validacion completa del paquete en el ORDEN del ADR-005; el
@@ -315,6 +328,22 @@ object Niamod {
             datosPaquete[nombre.removePrefix("datos/")] = String(capturado, Charsets.UTF_8)
         }
 
+        // (5d) C3 v1 (R0271, RES-0119): recursos de sustitucion
+        // declarados en el manifiesto, retenidos de datos/ en BYTES
+        // crudos (no el String del entry) con su sha256; ausente o
+        // demasiado grande NO instala (fail-closed).
+        val sustitutosPaquete = LinkedHashMap<String, RecursoSustituto>()
+        for (nombre in manifest.sustitutos) {
+            val crudo = capturados["datos/" + nombre]
+            if (crudo == null) return invalid("sustituto ausente en datos/: " + nombre)
+            if (crudo.size > MAX_SUSTITUTO) {
+                return invalid("sustituto demasiado grande: " + nombre)
+            }
+            sustitutosPaquete[nombre] = RecursoSustituto(
+                nombre, crudo, hex(MessageDigest.getInstance("SHA-256").digest(crudo))
+            )
+        }
+
         // (6) pre-parse del entry (JsParser de T029)
         val entryTexto = extraerEntry(bytes, manifest.entry)
             ?: return invalid("paquete sin entry declarada")
@@ -325,7 +354,7 @@ object Niamod {
         return Outcome.success(
             PaqueteNiamod(
                 manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella,
-                uiModel, datosArchivos, datosBytes, datosPaquete
+                uiModel, datosArchivos, datosBytes, datosPaquete, sustitutosPaquete
             )
         )
     }
