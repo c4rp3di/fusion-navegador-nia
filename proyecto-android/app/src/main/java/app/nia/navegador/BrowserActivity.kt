@@ -67,6 +67,7 @@ import nia.engine.modules.EstadoModulo
 import nia.engine.modules.FichaModulo
 import nia.engine.modules.GestorModulos
 import nia.engine.modules.ModuleRegistry
+import nia.engine.modules.PluginNetFilter
 import nia.engine.modules.PluginRuntime
 import nia.engine.modules.PreviaPaquete
 import nia.engine.paint.PaintOp
@@ -243,7 +244,9 @@ class BrowserActivity : Activity() {
         override fun nowMillis(): Long = System.currentTimeMillis()
     }
 
-    private val tabs by lazy { TabsManager(clock, HttpTransport(), File(cacheDir, "perfil-navegador")) }
+    private val tabs by lazy {
+        TabsManager(clock, HttpTransport(), File(cacheDir, "perfil-navegador"), filter = filtroRed)
+    }
     /** Marcadores del motor (T060, verificado) con el ciclo de vida que
      * T076 cablea por fin: el estado vive en el BookmarkManager y
      * viaja a un archivo tabulado en filesDir; un archivo corrupto
@@ -285,9 +288,17 @@ class BrowserActivity : Activity() {
      *  el alcance por sitio persiste en modulos.tsv (lineas
      *  corruptas ignoradas, ADR-005). */
     private val registroModulos by lazy { ModuleRegistry() }
+    private val runtimeModulos by lazy { PluginRuntime(registroModulos) }
     private val gestorModulos by lazy {
-        GestorModulos(registroModulos, PluginRuntime(registroModulos), File(filesDir, "modulos.tsv"))
+        GestorModulos(registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"))
     }
+
+    /** T052+T094 (R0249, RES-0112): filtro de red del shell montado sobre
+     *  el MISMO runtime y registro del gestor: el hook onRequest de los
+     *  modulos activos decide ANTES de red/cache/SW en cada pestana
+     *  (documento y subrecursos) y un veredicto "block" corta la peticion
+     *  con DENIED; la pagina de error honesta lo explica al usuario. */
+    private val filtroRed by lazy { PluginNetFilter(runtimeModulos, registroModulos) }
 
     /** T106 v1 (RES-0100): estado de red contextual por pestana. */
     private val red = RegistroRed()
@@ -3323,4 +3334,5 @@ class BrowserActivity : Activity() {
         private const val REQUEST_GUARDAR_PDF = 50
     }
 }
+
 

@@ -9,11 +9,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 import nia.contracts.CancellationToken
+import nia.contracts.ErrorCode
 import nia.contracts.WallClock
 import nia.engine.nav.NavOutcome
+import nia.engine.nav.NavState
 import nia.engine.net.FetchRequest
 import nia.engine.net.FetchResponse
 import nia.engine.net.FetchTransport
+import nia.engine.net.FilterDecision
+import nia.engine.net.RequestContext
+import nia.engine.net.RequestFilter
 import nia.engine.net.TransportFailure
 import nia.engine.net.TransportResult
 import nia.engine.profile.FireLevel
@@ -21,7 +26,7 @@ import nia.engine.profile.ProfileKind
 
 /**
  * Espejo Kotlin del gemelo TS validado offline (2 corridas
- * identicas, huella 32333.48541.155): los 17 tests cubren la creacion con
+ * identicas, huella 32333.48541.155): los 20 tests cubren la creacion con
  * tarjetas ordenadas por tipo, el presupuesto por tipo, el
  * desalojo del mas viejo en las reabiertas, la pestana activa,
  * la actualizacion del shell, el duplicado, el cierre de la
@@ -30,8 +35,13 @@ import nia.engine.profile.ProfileKind
  * tipo), el aislamiento entre tipos, el vaciado de las
  * reabiertas de incognito, cerrarTodas, el reorden, Fire, la
  * limpieza dedicada del cache HTTP (T093 v4, R0183) y las cerradas
- * recientes con reabrirEn (T075 v1, R0184, RES-0087).
- * T073 v1 (RES-0079) + T093 v4 (R0183) + T075 v1 (R0184, RES-0087).
+ * recientes con reabrirEn (T075 v1, R0184, RES-0087) y el cableado
+ * del filtro de red (T052/T094, R0249, RES-0112; gemelo 2 corridas,
+ * huella 16.16.1556b2ab): el filtro decide ANTES de red/cache en el documento
+ * y los subrecursos de cada pestana (normal e incognito); un
+ * veredicto "block" corta la peticion con DENIED.
+ * T073 v1 (RES-0079) + T093 v4 (R0183) + T075 v1 (R0184, RES-0087)
+ * + T094 v2 (R0249, RES-0112).
  */
 class TabsManagerTest {
 
@@ -60,8 +70,13 @@ class TabsManagerTest {
         return d
     }
 
-    private fun manager(t: FetchTransport, maxTabs: Int = 20, maxReab: Int = 10): TabsManager =
-        TabsManager(FakeClock(), t, dir(), maxTabs, maxReab)
+    private fun manager(
+        t: FetchTransport,
+        maxTabs: Int = 20,
+        maxReab: Int = 10,
+        filter: RequestFilter? = null
+    ): TabsManager =
+        TabsManager(FakeClock(), t, dir(), maxTabs, maxReab, filter)
 
     private fun resp(status: Int, headers: Map<String, String>, body: String): FetchResponse =
         FetchResponse(status, headers, body.toByteArray())
@@ -69,6 +84,20 @@ class TabsManagerTest {
     private fun cargar(manager: TabsManager, id: Long, url: String) {
         val out = manager.nav(id)!!.navigate(url)
         assertTrue("la navegacion de la pestana fallo", out is NavOutcome.Loaded)
+    }
+
+    /** T052/T094 (R0249, RES-0112): filtro que registra cada consulta y
+     *  bloquea toda peticion cuya URL contiene el host dado. */
+    private class FiltroBloqueador(private val host: String) : RequestFilter {
+        val consultas = ArrayList<RequestContext>()
+        override fun decide(context: RequestContext): FilterDecision {
+            consultas.add(context)
+            return if (context.url.contains(host)) {
+                FilterDecision.Block("test.bloqueador")
+            } else {
+                FilterDecision.Allow
+            }
+        }
     }
 
     @Test
@@ -327,4 +356,61 @@ class TabsManagerTest {
         m.cerrar(n)
         assertEquals(listOf("tn"), m.reabiertas().map { it.title })
     }
+
+    @Test
+    fun filtroBloqueaElDocumentoAntesDelTransporte() {
+        val t = FakeTransport()
+        t.routes["http://anuncio.dev/pagina"] = resp(200, emptyMap(), "<html><body>ok</body></html>")
+        val filtro = FiltroBloqueador("anuncio.dev")
+        val m = manager(t, filter = filtro)
+        val id = (m.crear(ProfileKind.NORMAL, "http://anuncio.dev/pagina", "a", null) as TabCrear.Ok).id
+        val out = m.nav(id)!!.navigate("http://anuncio.dev/pagina")
+        assertTrue("el bloqueo del modulo falla la navegacion", out is NavOutcome.Failed)
+        val fallo = out as NavOutcome.Failed
+        assertEquals(ErrorCode.DENIED, fallo.code)
+        assertEquals(NavState.NAVIGATING, fallo.phase)
+        assertNull("el fallo es ANTES del commit: sin pagina", fallo.page)
+        assertEquals("el filtro decide ANTES de tocar el transporte", 0, t.requests.size)
+        assertEquals("solo se consulta el documento", 1, filtro.consultas.size)
+        assertEquals("document", filtro.consultas[0].resourceType)
+        assertEquals("http://anuncio.dev/pagina", filtro.consultas[0].url)
+        assertEquals("el iniciador del documento es vacio", "", filtro.consultas[0].initiatorUrl)
+    }
+
+    @Test
+    fun filtroQuePermiteNavegaIgualYConsultaSubrecursos() {
+        val t = FakeTransport()
+        t.routes["http://a.dev/"] = resp(
+            200, emptyMap(),
+            "<html><body><img src=\"/logo.png\">" +
+                "<script src=\"/app.js\"></script></body></html>"
+        )
+        t.routes["http://a.dev/logo.png"] = resp(200, emptyMap(), "img")
+        t.routes["http://a.dev/app.js"] = resp(200, emptyMap(), "var x = 1;")
+        val filtro = FiltroBloqueador("nadie.bloquea")
+        val m = manager(t, filter = filtro)
+        val id = (m.crear(ProfileKind.NORMAL, "http://a.dev/", "a", null) as TabCrear.Ok).id
+        val out = m.nav(id)!!.navigate("http://a.dev/")
+        assertTrue("con un filtro que siempre permite se navega igual", out is NavOutcome.Loaded)
+        assertEquals("document, image y script consultados al filtro", 3, filtro.consultas.size)
+        assertEquals("document", filtro.consultas[0].resourceType)
+        assertEquals("image", filtro.consultas[1].resourceType)
+        assertEquals("script", filtro.consultas[2].resourceType)
+        assertEquals("el iniciador de los subrecursos es el documento", "http://a.dev/", filtro.consultas[1].initiatorUrl)
+        assertEquals("las tres peticiones llegan al transporte", 3, t.requests.size)
+    }
+
+    @Test
+    fun elFiltroAplicaTambienALasPestanasIncognito() {
+        val t = FakeTransport()
+        t.routes["http://a.dev/"] = resp(200, emptyMap(), "<html><body>a</body></html>")
+        val filtro = FiltroBloqueador("a.dev")
+        val m = manager(t, filter = filtro)
+        val id = (m.crear(ProfileKind.INCOGNITO, "http://a.dev/", "a", null) as TabCrear.Ok).id
+        val out = m.nav(id)!!.navigate("http://a.dev/")
+        assertTrue("el filtro tambien corta el documento incognito", out is NavOutcome.Failed)
+        assertEquals(ErrorCode.DENIED, (out as NavOutcome.Failed).code)
+        assertEquals("el transporte incognito tampoco se toca", 0, t.requests.size)
+    }
 }
+

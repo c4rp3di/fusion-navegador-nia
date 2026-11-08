@@ -5,6 +5,7 @@ import java.io.File
 import nia.contracts.WallClock
 import nia.engine.nav.NavController
 import nia.engine.net.FetchTransport
+import nia.engine.net.RequestFilter
 import nia.engine.profile.BrowserProfile
 import nia.engine.profile.DataFire
 import nia.engine.profile.FireLevel
@@ -68,6 +69,12 @@ data class TabCerrada(
  * reabrirse (titulo/URL en memoria, nunca en disco). El perfil normal
  * sobrevive a cerrar sus pestanas (persistido).
  *
+ * T094 v2/T052 (R0249, RES-0112): filtro de red opcional que viaja al
+ * NavController de cada pestana creada (normal, incognito, duplicada o
+ * reabierta); sin filtro el comportamiento es exactamente el de antes.
+ * El hook onRequest de los modulos activos decide ANTES de red/cache/SW
+ * y un veredicto "block" corta la peticion con DENIED.
+ *
  * Exclusiones v1: sin grupos de pestanas, sin UI de strip (llega con el
  * shell), sin previews pintadas y sin persistencia de la sesion de
  * pestanas. El gemelo TS validado offline (2 corridas identicas, huella
@@ -78,7 +85,8 @@ class TabsManager(
     private val transport: FetchTransport,
     private val normalDir: File,
     private val maxTabsPorTipo: Int = MAX_TABS_POR_TIPO,
-    private val maxReabiertos: Int = MAX_REABIERTOS
+    private val maxReabiertos: Int = MAX_REABIERTOS,
+    private val filter: RequestFilter? = null
 ) {
     companion object {
         /** Tope de pestanas vivas por tipo (normal o incognito). */
@@ -126,7 +134,7 @@ class TabsManager(
     /** Crea una pestana del tipo con su NavController sobre el perfil del tipo. */
     fun crear(kind: ProfileKind, url: String, title: String, preview: String? = null): TabCrear {
         if (contar(kind) >= maxTabsPorTipo) return TabCrear.PresupuestoExcedido
-        val tab = Tab(nextId, kind, NavController(transport, clock, perfilDe(kind)), title, url, preview)
+        val tab = Tab(nextId, kind, NavController(transport, clock, perfilDe(kind), null, filter), title, url, preview)
         nextId += 1
         tabs.add(tab)
         if (activaId == -1L) activaId = tab.id
@@ -276,3 +284,4 @@ class TabsManager(
      *  reales); null si el tipo aun no tiene perfil creado. */
     fun perfil(kind: ProfileKind): BrowserProfile? = perfiles[kind]
 }
+
