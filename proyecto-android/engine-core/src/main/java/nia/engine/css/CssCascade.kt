@@ -254,14 +254,22 @@ object CssCascade {
 
     private val mediaFeatureRegex = Regex("^\\(\\s*(min-width|max-width)\\s*:\\s*([+-]?(\\d+(\\.\\d+)?|\\.\\d+))\\s*(px|em|rem)\\s*\\)$")
 
+    /** T067-B fix perf (R0241): precompiladas UNA vez; antes se
+     * creaban en CADA llamada de mediaMatches y el Pattern.compile
+     * en caliente bloqueo el hilo principal 2.5-4.7 s en dispositivo
+     * (logcat del usuario, R0240) recorriendo las @media de paginas
+     * reales; semantica IDENTICA, solo cambia el numero de compiles. */
+    private val mediaWsRegex = Regex("\\s+")
+    private val mediaAndRegex = Regex(" and ", RegexOption.IGNORE_CASE)
+
     /**
      * @media (v3): tokens separados por and; screen/all (con only) pasan;
      * cada feature (min-width|max-width) en px (em/rem contra la raiz 16px)
      * se evalua contra viewportWidth; cualquier token invalido no casa.
      */
     fun mediaMatches(query: String, viewportWidth: Double): Boolean {
-        val q = query.trim().replace(Regex("\\s+"), " ")
-        for (tok in q.split(Regex(" and ", RegexOption.IGNORE_CASE))) {
+        val q = query.trim().replace(mediaWsRegex, " ")
+        for (tok in q.split(mediaAndRegex)) {
             val t = tok.trim()
             if (t.isEmpty()) continue
             if (t == "screen" || t == "all" || t == "only screen" || t == "only all") continue
@@ -411,3 +419,4 @@ object CssCascade {
 
     private fun splitWs(s: String): List<String> = s.split(' ', '\t', '\n', '\r', '\u000C')
 }
+
