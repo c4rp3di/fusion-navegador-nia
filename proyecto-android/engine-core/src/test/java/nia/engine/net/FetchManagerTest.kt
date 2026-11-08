@@ -278,11 +278,11 @@ class FetchManagerTest {
         assertEquals("no-store", resp.headers["Cache-Control"])
         assertEquals(bytes.size.toString(), resp.headers["Content-Length"])
         assertTrue(resp.body.contentEquals(bytes))
-        assertEquals("la sustitucion no toca el transporte", 0, t.requests.size)
-        assertEquals("la sustitucion no cuenta como entrega", 0, m.deliveredCount())
+        assertEquals(0, t.requests.size, "la sustitucion no toca el transporte")
+        assertEquals(0, m.deliveredCount(), "la sustitucion no cuenta como entrega")
         assertTrue(
-            "la sustitucion jamas puebla la cache",
-            cache.lookup("GET", "https://cdn.example.org/v.mp4") is HttpCache.Lookup.Miss
+            cache.lookup("GET", "https://cdn.example.org/v.mp4") is HttpCache.Lookup.Miss,
+            "la sustitucion jamas puebla la cache"
         )
         assertEquals(0, cache.count())
     }
@@ -322,9 +322,9 @@ class FetchManagerTest {
         assertEquals(200, resp.status)
         assertEquals(0, resp.body.size)
         assertEquals(
-            "el content-length es del cuerpo que GET habria dado",
             bytes.size.toString(),
-            resp.headers["Content-Length"]
+            resp.headers["Content-Length"],
+            "el content-length es del cuerpo que GET habria dado"
         )
     }
 
@@ -339,6 +339,6 @@ class FetchManagerTest {
         assertEquals("sitio.com", resp.headers["Access-Control-Allow-Origin"])
         val same = RequestContext("https://sitio.com/v.mp4", "fetch", "https://sitio.com/pagina", false)
         val resp2 = valor(m.fetch(m.newRequest("GET", "https://sitio.com/v.mp4"), null, -1, same))
-        assertTrue("same-origin sin ACAO", !resp2.headers.containsKey("Access-Control-Allow-Origin"))
+        assertTrue(!resp2.headers.containsKey("Access-Control-Allow-Origin"), "same-origin sin ACAO")
     }
 }
