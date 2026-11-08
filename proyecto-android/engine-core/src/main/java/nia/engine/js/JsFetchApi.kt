@@ -9,6 +9,9 @@ import nia.contracts.WallClock
 import nia.engine.net.FetchManager
 import nia.engine.net.FetchResponse
 import nia.engine.net.FetchTransport
+import nia.engine.net.FilterDecision
+import nia.engine.net.RequestContext
+import nia.engine.net.RequestFilter
 
 /**
  * Fetch JS (T027 v1, RES-0033): expone fetch(url, opts) y AbortController
@@ -45,11 +48,21 @@ import nia.engine.net.FetchTransport
  * T034 v2 (RES-0045): con serviceWorkers inyectado, fetch consulta al
  * SW ACTIVE del scope ANTES del transporte (offline real: el cache
  * sirve sin red); sin SW o sin respondWith el transporte corre igual.
+ *
+ * T052 v1 (R0242): con filter inyectado, fetch consulta el filtro de
+ * red ANTES de la intercepcion del SW (orden sin bypass: filtro ->
+ * SW -> cache -> transporte; el manager interno queda SIN filtro,
+ * una sola consulta por peticion); Block rechaza la promise con
+ * FetchError de mensaje seguro. El contexto lleva tipo "fetch" e
+ * initiatorUrl del constructor; el hook del plugin sigue viendo
+ * solo la url (T030).
  */
 class JsFetchApi(
     transport: FetchTransport,
     private val clock: WallClock = SystemWallClock(),
-    private val serviceWorkers: JsServiceWorkers? = null
+    private val serviceWorkers: JsServiceWorkers? = null,
+    private val filter: RequestFilter? = null,
+    private val initiatorUrl: String = ""
 ) {
 
     private val manager = FetchManager(transport, clock)
@@ -114,6 +127,18 @@ class JsFetchApi(
                     JsRuntime.makeErrorObj("AbortError", "operacion abortada")
                 )
                 return@fn p
+            }
+            val flt = filter
+            if (flt != null) {
+                val decision = flt.decide(RequestContext.of(url, "fetch", initiatorUrl))
+                if (decision is FilterDecision.Block) {
+                    JsInterpreter.settleNativePromise(
+                        p,
+                        false,
+                        JsRuntime.makeErrorObj("FetchError", "peticion bloqueada por un modulo")
+                    )
+                    return@fn p
+                }
             }
             val sw = serviceWorkers
             if (sw != null) {

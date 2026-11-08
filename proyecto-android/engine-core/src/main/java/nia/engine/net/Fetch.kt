@@ -40,6 +40,13 @@ import nia.contracts.WallClock
  * se almacenan; una peticion con cache-control no-cache salta el
  * cache. Sin cache inyectado el comportamiento es exactamente el
  * de v1.
+ *
+ * v3 (R0242, T052): filtro de red opcional ANTES de cache y
+ * transporte. Con un RequestFilter inyectado, cada fetch consulta el
+ * filtro primero con el RequestContext del llamador (o uno por
+ * defecto, tipo "otro" sin iniciador); Block -> DENIED sin tocar ni
+ * cache ni transporte. Sin filtro el comportamiento es exactamente
+ * el de v2. El consult previo al service worker vive en JsFetchApi.
  */
 
 data class FetchRequest(
@@ -72,7 +79,8 @@ interface FetchTransport {
 class FetchManager(
     private val transport: FetchTransport,
     private val clock: WallClock = SystemWallClock(),
-    private val cache: HttpCache? = null
+    private val cache: HttpCache? = null,
+    private val filter: RequestFilter? = null
 ) {
     private val methods = setOf("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS")
     private var generation = 0L
@@ -102,11 +110,15 @@ class FetchManager(
      * Ejecuta una peticion con cancelacion cooperativa: el token externo
      * manda (el interno se crea solo si no se pasa ninguno) y el deadline
      * (si deadlineMillis > 0) se comprueba ANTES de llamar al transporte.
+     * T052 v1: con filter inyectado, la peticion se consulta ANTES de
+     * cache y transporte con el context del llamador (o uno por defecto);
+     * Block -> DENIED sin tocar la red.
      */
     fun fetch(
         request: FetchRequest,
         token: CancellationToken? = null,
-        deadlineMillis: Long = -1
+        deadlineMillis: Long = -1,
+        context: RequestContext? = null
     ): Outcome<FetchResponse> {
         if (!methods.contains(request.method)) {
             return Outcome.failure(ErrorInfo(ErrorCode.INVALID_INPUT, "metodo no soportado"))
@@ -114,6 +126,14 @@ class FetchManager(
         val lower = request.url.trim().lowercase()
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
             return Outcome.failure(ErrorInfo(ErrorCode.UNSUPPORTED, "esquema no soportado"))
+        }
+        val f = filter
+        if (f != null) {
+            val ctx = context ?: RequestContext.of(request.url, "otro", "")
+            val decision = f.decide(ctx)
+            if (decision is FilterDecision.Block) {
+                return Outcome.failure(ErrorInfo(ErrorCode.DENIED, "peticion bloqueada por un modulo"))
+            }
         }
         val g = generation
         val t = token ?: CancellationTokenSource(clock).token

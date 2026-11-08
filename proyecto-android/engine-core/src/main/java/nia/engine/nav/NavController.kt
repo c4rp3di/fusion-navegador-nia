@@ -14,6 +14,8 @@ import nia.engine.net.FetchResponse
 import nia.engine.net.FetchTransport
 import nia.engine.net.PoliticaHttpsOnly
 import nia.engine.net.RedirectPolicy
+import nia.engine.net.RequestContext
+import nia.engine.net.RequestFilter
 import nia.engine.net.SiteContext
 import nia.engine.net.TlsInfo
 import nia.engine.profile.BrowserProfile
@@ -72,6 +74,13 @@ import nia.engine.url.UrlParser
  * service workers (T034); back/forward que re-navega, sin snapshots. El
  * gemelo TS validado offline (2 corridas identicas, huella
  * f0bd98c8.2740b7a8.76) espeja estos 14 escenarios en NavControllerTest.
+ *
+ * T052 v1 (R0242): filtro de red opcional (RequestFilter) inyectado en
+ * su FetchManager y en el JsFetchApi de los scripts de la pagina: el
+ * documento lleva contexto tipo "document" y cada subrecurso
+ * (image, stylesheet, script) viaja con su tipo e iniciador; el
+ * tercero lo calcula el host contra Site v1. Sin filtro, el
+ * comportamiento es exactamente el de antes.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -129,9 +138,10 @@ class NavController(
     private val transport: FetchTransport,
     private val clock: WallClock,
     private val profile: BrowserProfile,
-    private val httpsOnly: PoliticaHttpsOnly? = null
+    private val httpsOnly: PoliticaHttpsOnly? = null,
+    private val filter: RequestFilter? = null
 ) {
-    private val manager = FetchManager(transport, clock, profile.cache)
+    private val manager = FetchManager(transport, clock, profile.cache, filter)
     private val history = ArrayList<String>()
     private var index = -1
     private var page: NavPage? = null
@@ -219,7 +229,7 @@ class NavController(
             val cookie = profile.cookies.cookieHeader(u.host, u.path, u.scheme == "https", SiteContext.TOP_LEVEL_CROSS_SITE)
             if (cookie.isNotEmpty()) headers["Cookie"] = cookie
             val request = manager.newRequest(method, current, headers)
-            val outcome = manager.fetch(request, null, deadlineMillis)
+            val outcome = manager.fetch(request, null, deadlineMillis, RequestContext.of(current, "document", ""))
             if (outcome is Outcome.Failure) {
                 return NavOutcome.Failed(NavState.NAVIGATING, outcome.error.code, outcome.error.safeMessage, null)
             }
@@ -277,12 +287,12 @@ class NavController(
         val subresources = ArrayList<NavSubresource>()
         val scripts = ArrayList<NavScript>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
-        val fetchApi = JsFetchApi(transport, clock)
+        val fetchApi = JsFetchApi(transport, clock, null, filter, current)
         var inlineCount = 0
         for (item in items) {
             when (item) {
                 is LoadItem.Subresource -> {
-                    val r = fetchSide(item.url, finalUrl, site)
+                    val r = fetchSide(item.url, finalUrl, site, item.kind, current)
                     if (r is SideResult.NavFailure) {
                         return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                     }
@@ -295,7 +305,7 @@ class NavController(
                 }
                 is LoadItem.ScriptSrc -> {
                     val ref = "src:" + item.url
-                    val r = fetchSide(item.url, finalUrl, site)
+                    val r = fetchSide(item.url, finalUrl, site, "script", current)
                     if (r is SideResult.NavFailure) {
                         return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                     }
@@ -343,7 +353,7 @@ class NavController(
      * Fetch lateral con mixed-content y cookies por contexto de sitio; un
      * CANCELLED o STALE_HANDLE aborta la navegacion (fallo tras el commit).
      */
-    private fun fetchSide(url: String, page: Url, pageSite: Site): SideResult {
+    private fun fetchSide(url: String, page: Url, pageSite: Site, kind: String, initiatorUrl: String): SideResult {
         if (page.scheme == "https" && url.startsWith("http://")) return SideResult.Blocked
         val u: Url = try {
             UrlParser.parse(url)
@@ -359,7 +369,7 @@ class NavController(
         val cookie = profile.cookies.cookieHeader(u.host, u.path, u.scheme == "https", context)
         if (cookie.isNotEmpty()) headers["Cookie"] = cookie
         val request = manager.newRequest("GET", url, headers)
-        val outcome = manager.fetch(request)
+        val outcome = manager.fetch(request, null, -1, RequestContext.of(url, kind, initiatorUrl))
         if (outcome is Outcome.Failure) {
             val code = outcome.error.code
             if (code == ErrorCode.CANCELLED || code == ErrorCode.STALE_HANDLE) {

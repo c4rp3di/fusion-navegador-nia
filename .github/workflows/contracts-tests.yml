@@ -140,6 +140,8 @@ jobs:
             engine-core/src/test/java/nia/engine/net/CookieJarTest.kt \
             engine-core/src/test/java/nia/engine/net/CorsTest.kt \
             engine-core/src/test/java/nia/engine/net/RedirectPolicyTest.kt \
+            engine-core/src/main/java/nia/engine/net/RequestFilter.kt \
+            engine-core/src/test/java/nia/engine/net/RequestFilterTest.kt \
             engine-core/src/main/java/nia/engine/storage/Storage.kt \
             engine-core/src/main/java/nia/engine/storage/IndexedDb.kt \
             engine-core/src/main/java/nia/engine/storage/StoragePersistence.kt \
@@ -177,6 +179,8 @@ jobs:
             engine-core/src/test/java/nia/engine/torrent/TorrentMagnetTest.kt \
             engine-core/src/main/java/nia/engine/modules/PluginRuntime.kt \
             engine-core/src/test/java/nia/engine/modules/PluginRuntimeTest.kt \
+            engine-core/src/main/java/nia/engine/modules/PluginNetFilter.kt \
+            engine-core/src/test/java/nia/engine/modules/PluginNetFilterTest.kt \
             engine-core/src/main/java/nia/engine/download/DownloadEngine.kt \
             engine-core/src/test/java/nia/engine/download/DownloadEngineTest.kt \
             engine-core/src/main/java/nia/engine/themes/ThemeManager.kt \
