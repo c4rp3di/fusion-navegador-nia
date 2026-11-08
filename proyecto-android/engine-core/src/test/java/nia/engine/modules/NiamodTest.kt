@@ -560,4 +560,52 @@ class NiamodTest {
         val bytes = paquete(m, codigo(), kp, listOf("datos/hoja.css" to ".a { color: red }".toByteArray(Charsets.UTF_8)))
         assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
     }
+
+    @Test
+    fun paqueteConScriptLoRetiene() {
+        val kp = par()
+        val js = "console.log('hola');"
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.script",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "script = doc.js\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/doc.js" to js.toByteArray(Charsets.UTF_8)))
+        val r = Niamod.inspeccionar(bytes)
+        assertTrue(r is Outcome.Success)
+        val p = (r as Outcome.Success).value as PaqueteNiamod
+        assertTrue(p.script != null)
+        assertEquals("doc.js", p.script!!.nombre)
+        assertEquals(js, p.script!!.js)
+    }
+
+    @Test
+    fun paqueteConScriptAusenteRechazado() {
+        val kp = par()
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.script",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "script = doc.js\n"
+        )
+        val bytes = paquete(m, codigo(), kp)
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
+
+    @Test
+    fun paqueteConScriptInvalidoRechazado() {
+        val kp = par()
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.script",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "script = doc.js\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/doc.js" to "var x = ;".toByteArray(Charsets.UTF_8)))
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
 }

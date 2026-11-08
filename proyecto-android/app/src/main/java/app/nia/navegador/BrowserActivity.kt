@@ -1527,6 +1527,11 @@ class BrowserActivity : Activity() {
      *  con la navegacion, una hoja por documento). */
     private var hojaParaPintar: String? = null
 
+    /** C5 v1 (R0280, RES-0121): script de documento ganador del disparo
+     *  de navegacion; lo consume el PINTADO del documento y su sesion
+     *  del event loop vive y muere con la navegacion (cancelacion). */
+    private var scriptParaPintar: String? = null
+
     /** Dialogo de cuotas visibles (T100): mapa honesto de la
      * interrupcion (pasos/allocs/tiempo y lo que NO miden), cuotas
      * activas tras los reintentos, conteo de scripts interrumpidos y
@@ -1939,6 +1944,9 @@ class BrowserActivity : Activity() {
         // C6 v1 (R0276, RES-0120): la hoja del documento la resuelve el
         // gestor tras el disparo (una por documento; gana el primero).
         hojaParaPintar = gestorModulos.hojaParaNavegacion(clave, ctx)?.css
+        // C5 v1 (R0280, RES-0121): el script del documento lo resuelve el
+        // gestor tras el disparo (uno por documento; gana el primero).
+        scriptParaPintar = gestorModulos.scriptParaNavegacion(clave, ctx)?.js
         if (res.disparados > 0) {
             resumenModulos = "modulos " + res.disparados + " notificado(s), errores: " + res.errores
         }
@@ -2229,8 +2237,11 @@ class BrowserActivity : Activity() {
     private fun pintar(html: String) {
         val hoja = hojaParaPintar
         hojaParaPintar = null
+        val script = scriptParaPintar
+        scriptParaPintar = null
         try {
             pagina.cargarHojaModulo(hoja)
+            pagina.cargarScriptModulo(script)
             pagina.loadPagina(html, cssNavegador(), true)
             scroll.scrollTo(0, 0)
         } catch (e: Exception) {
@@ -2267,6 +2278,8 @@ class BrowserActivity : Activity() {
         } else {
             // C6 v1: sin html la hoja ganada se descarta (vive con el documento)
             hojaParaPintar = null
+            // C5 v1: sin html el script ganado se descarta (vive con el documento)
+            scriptParaPintar = null
         }
     }
 

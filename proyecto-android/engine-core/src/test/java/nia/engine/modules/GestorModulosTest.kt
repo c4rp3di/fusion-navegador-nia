@@ -587,4 +587,46 @@ class GestorModulosTest {
         ok(g.desinstalar("demo.niamod"))
         assertTrue("desinstalar retira la hoja", g.hojaParaNavegacion("https://a.dev:443") == null)
     }
+
+    @Test
+    fun scriptParaNavegacionSeTomaDelModuloQueDiceScript() {
+        val g = nuevo()
+        val kp = par()
+        val js = "console.log('hola');"
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, document.script\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "script = doc.js\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(
+            manifiesto, kp, listOf("datos/doc.js" to js.toByteArray(Charsets.UTF_8)),
+            entry = "nia.onNavigate(function (url) { return \"script\"; });\n"
+"
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
+        val script = g.scriptParaNavegacion("https://a.dev:443")
+        assertTrue("el script la gana el modulo que dice script", script != null)
+        assertEquals(js, script!!.js)
+    }
+
+    @Test
+    fun desinstalarRetiraElScript() {
+        val g = nuevo()
+        val kp = par()
+        val js = "console.log('hola');"
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, document.script\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "script = doc.js\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(
+            entry = "nia.onNavigate(function (url) { return \"script\"; });\n"
+"
+            entry = "nia.onNavigate(function (url) { return "script"; });\n"
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
+        assertTrue(g.scriptParaNavegacion("https://a.dev:443") != null)
+        ok(g.desinstalar("demo.niamod"))
+        assertTrue("desinstalar retira el script", g.scriptParaNavegacion("https://a.dev:443") == null)
+    }
 }

@@ -54,6 +54,15 @@ import nia.engine.profile.ConfigStore
  * modulos api-version 1 se ignoran y los que pierden reciben
  * diagnostico "no disponible" (C10, solo con EventContext). UNA
  * hoja por documento: vive y muere con la navegacion.
+ *
+ * C5 v1 (R0280, RES-0121): el gestor retiene el script de documento
+ * del paquete instalado (scriptDeModulo) y resuelve el script del
+ * documento tras cada disparo de navegacion
+ * (scriptParaNavegacion): gana el primer modulo en orden de
+ * instalacion cuyo veredicto fue "script" en el ultimo disparo
+ * (api-version 2 con script declarado); UN script por documento:
+ * vive y muere con la navegacion (la cancelacion de su sesion la
+ * hace el shell al pintar el documento siguiente).
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -136,6 +145,7 @@ class GestorModulos(
     private val datosPaquetes = HashMap<String, Map<String, String>>()
     private val sustitutosPaquetes = HashMap<String, Map<String, RecursoSustituto>>()
     private val estilosPaquetes = HashMap<String, RecursoEstilo>()
+    private val scriptsPaquetes = HashMap<String, RecursoScript>()
     private val veredictosDisparo = LinkedHashMap<String, String>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
@@ -345,6 +355,11 @@ class GestorModulos(
         } else {
             estilosPaquetes.remove(id)
         }
+        if (p.script != null) {
+            scriptsPaquetes[id] = p.script
+        } else {
+            scriptsPaquetes.remove(id)
+        }
         ancladas[id] = p.huellaClave
         if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
             pendientes[id] = p.nextHuella
@@ -431,6 +446,43 @@ class GestorModulos(
         return ganadora
     }
 
+    /** C5 v1 (R0280, RES-0121): script de documento del paquete instalado
+     *  o null (sin modulo, sin script declarado o desinstalado). */
+    @Synchronized
+    fun scriptDeModulo(id: String): RecursoScript? = scriptsPaquetes[id]
+
+    /**
+     * C5 v1 (R0280, RES-0121): script del documento tras el disparo de
+     * navegacion: gana el primer modulo en ORDEN DE INSTALACION cuyo
+     * veredicto fue "script" en el ULTIMO disparo con alcance en el
+     * origen (api-version 2 con script declarado); api-version 1 o sin
+     * script se ignoran (abstencion) y los que pierden reciben
+     * diagnostico "no disponible" (solo con EventContext, C10).
+     * UN script por documento: vive y muere con la navegacion.
+     */
+    @Synchronized
+    fun scriptParaNavegacion(origen: String, ctxDiag: EventContext? = null): RecursoScript? {
+        var ganador: RecursoScript? = null
+        for (id in registry.installedIds()) {
+            val alcance = alcances[id] ?: Alcance(true, emptySet())
+            if (!alcance.aplica(origen)) continue
+            if (veredictosDisparo[id] != "script") continue
+            val manifest = registry.manifestOf(id) ?: continue
+            if (manifest.apiVersion < 2) continue
+            val script = scriptsPaquetes[id] ?: continue
+            if (ganador == null) {
+                ganador = script
+            } else if (ctxDiag != null && diag != null) {
+                diag.evento(
+                    id, EventLevel.WARNING,
+                    "script no disponible: ya hay otro script para este documento",
+                    ctxDiag
+                )
+            }
+        }
+        return ganador
+    }
+
     /** Retira el modulo entero: sesion, registro, alcance y contadores. */
     @Synchronized
     fun desinstalar(id: String): Outcome<Unit> {
@@ -446,6 +498,7 @@ class GestorModulos(
         datosPaquetes.remove(id)
         sustitutosPaquetes.remove(id)
         estilosPaquetes.remove(id)
+        scriptsPaquetes.remove(id)
         veredictosDisparo.remove(id)
         guardar()
         return Outcome.success(Unit)

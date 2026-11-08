@@ -332,4 +332,32 @@ class ModuleRegistryTest {
             "estilos = ../malo.css" + "\n"
         assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
     }
+
+    @Test fun scriptValidoLlegaAlManifest() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = document.script" + "\n" +
+            "capabilities = modificar" + "\n" +
+            "script = doc.js" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals("doc.js", mod.manifest.script)
+    }
+
+    @Test fun scriptSinCoherenciaRechazado() {
+        val sinModificar = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = document.script" + "\n" +
+            "script = doc.js" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinModificar)).code)
+        val sinPermiso = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "capabilities = modificar" + "\n" +
+            "script = doc.js" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinPermiso)).code)
+    }
+
+    @Test fun scriptNombreInvalidoRechazado() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = document.script" + "\n" +
+            "capabilities = modificar" + "\n" +
+            "script = ../malo.js" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
+    }
 }

@@ -33,9 +33,11 @@ import nia.engine.gestures.ConfigGestos
 import nia.engine.gestures.RastreadorBorde
 import nia.engine.gestures.ZoomToque
 import nia.engine.html.DomNode
+import nia.engine.js.JsEventLoop
 import nia.engine.layout.LayoutEngine
 import nia.engine.layout.LayoutResult
 import nia.engine.modules.EstilosModulos
+import nia.engine.modules.PluginRuntime
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
 import nia.engine.paint.PaintSceneBuilder
@@ -122,6 +124,16 @@ class PaintView(context: Context) : View(context) {
      *  documento (null = sin hoja); el overlay display:none se aplica
      *  en el MISMO pase de layout (sin flash, sin re-layout). */
     private var hojaModulo: String? = null
+
+    /** C5 v1 (R0280, RES-0121): script de documento del modulo ganador
+     *  (null = sin script); corre al inicio del documento en su PROPIA
+     *  sesion del event loop con DOM y cuotas de plugin. */
+    private var scriptModulo: String? = null
+
+    /** C5 v1 (R0280, RES-0121): sesion del loop del script VIVO; la
+     *  sesion anterior muere ANTES de abrir la del documento nuevo
+     *  (cancelacion al navegar). */
+    private var loopScript: JsEventLoop? = null
 
     private var builtRevision = -1
 
@@ -250,6 +262,11 @@ class PaintView(context: Context) : View(context) {
         seleccionTexto = null
         matchesBusqueda = emptyList()
         matchActual = -1
+        // C5 v1 (R0280, RES-0121): el documento de demo/SAF NO es
+        // documento de modulo: la sesion previa muere y el script
+        // ganado de otra navegacion se descarta.
+        scriptModulo = null
+        correrScriptDocumento()
         rebuild()
     }
 
@@ -270,6 +287,10 @@ class PaintView(context: Context) : View(context) {
         seleccionTexto = null
         matchesBusqueda = emptyList()
         matchActual = -1
+        // C5 v1 (R0280, RES-0121): el script de documento corre al
+        // INICIO del documento, ANTES del primer pintado (sus
+        // mutaciones viajan al layout en el MISMO rebuild).
+        correrScriptDocumento()
         rebuild()
         requestLayout()
         invalidate()
@@ -280,6 +301,31 @@ class PaintView(context: Context) : View(context) {
      *  tras el disparo de navegacion y vive con el documento. */
     fun cargarHojaModulo(css: String?) {
         hojaModulo = css
+    }
+
+    /** C5 v1 (R0280, RES-0121): fija el script de documento del modulo
+     *  para el PROXIMO documento (null = sin script); lo fija el shell
+     *  tras el disparo de navegacion y corre al inicio del documento. */
+    fun cargarScriptModulo(js: String?) {
+        scriptModulo = js
+    }
+
+    /** C5 v1 (R0280, RES-0121): corre el script de documento contra el
+     *  documento recien cargado (fail-closed: un script que revienta
+     *  JAMAS rompe la carga; sus mutaciones quedan) y cancela la
+     *  sesion del documento anterior ANTES de abrir la nueva. */
+    private fun correrScriptDocumento() {
+        loopScript?.end()
+        loopScript = null
+        val js = scriptModulo ?: return
+        val loop = JsEventLoop(PluginRuntime.DEFAULT_LIMITS)
+        try {
+            loop.evaluate(js, document)
+            loopScript = loop
+        } catch (e: Exception) {
+            // fail-closed: la navegacion jamas se rompe por el script
+            loop.end()
+        }
     }
 
     /** HTML fuente cargado (SAF: Guardar escribe esto, no el DOM mutado). */

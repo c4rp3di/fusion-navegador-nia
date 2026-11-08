@@ -41,6 +41,9 @@ import nia.engine.js.JsParser
  * (5e) C6 (R0276, RES-0120): hoja de estilos de datos/ como String
  * UTF-8 validado con la lista cerrada del host (tope 16 KiB,
  * declarada en estilos; ver EstilosModulos);
+ * (5f) C5 (R0280, RES-0121): script de documento de datos/ como
+ * String UTF-8 validado con el parser del host (tope 32 KiB,
+ * declarado en script);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
  * mal, hash mal, limite mal o incoherencia = NO se instala).
@@ -76,6 +79,12 @@ data class RecursoEstilo(
     val css: String
 )
 
+/** Script de documento validado (C5 v1, R0280, RES-0121). */
+data class RecursoScript(
+    val nombre: String,
+    val js: String
+)
+
 /** Paquete .niamod validado por completo (T095, ADR-005). */
 data class PaqueteNiamod(
     val manifiestoTexto: String,
@@ -89,7 +98,8 @@ data class PaqueteNiamod(
     val bytesDatos: Long,
     val datos: Map<String, String>,
     val sustitutos: Map<String, RecursoSustituto> = emptyMap(),
-    val estilo: RecursoEstilo? = null
+    val estilo: RecursoEstilo? = null,
+    val script: RecursoScript? = null
 )
 
 object Niamod {
@@ -115,6 +125,9 @@ object Niamod {
 
     /** C6 v1 (R0276, RES-0120): tope de la hoja de estilos del paquete. */
     const val MAX_ESTILO = 16_384
+
+    /** C5 v1 (R0280, RES-0121): tope del script de documento del paquete. */
+    const val MAX_SCRIPT = 32_768
 
     /**
      * Validacion completa del paquete en el ORDEN del ADR-005; el
@@ -375,6 +388,24 @@ object Niamod {
             RecursoEstilo(nombre, css)
         }
 
+        // (5f) C5 v1 (R0280, RES-0121): script de documento declarado en
+        // el manifiesto, retenido de datos/ como String UTF-8 y VALIDADO
+        // con el parser del host (JsParser, sin errores de parseo);
+        // ausente, demasiado grande o ilegible NO instala (fail-closed).
+        val scriptPaquete: RecursoScript? = manifest.script?.let { nombre ->
+            val crudo = capturados["datos/" + nombre]
+                ?: return invalid("script ausente en datos/: " + nombre)
+            if (crudo.size > MAX_SCRIPT) {
+                return invalid("script demasiado grande: " + nombre)
+            }
+            val js = String(crudo, Charsets.UTF_8)
+            val preScript = JsParser.parse(js)
+            if (preScript.program.errors.isNotEmpty() || preScript.lexErrors.isNotEmpty()) {
+                return invalid("script invalido: " + nombre)
+            }
+            RecursoScript(nombre, js)
+        }
+
         // (6) pre-parse del entry (JsParser de T029)
         val entryTexto = extraerEntry(bytes, manifest.entry)
             ?: return invalid("paquete sin entry declarada")
@@ -386,7 +417,7 @@ object Niamod {
             PaqueteNiamod(
                 manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella,
                 uiModel, datosArchivos, datosBytes, datosPaquete, sustitutosPaquete,
-                estiloPaquete
+                estiloPaquete, scriptPaquete
             )
         )
     }

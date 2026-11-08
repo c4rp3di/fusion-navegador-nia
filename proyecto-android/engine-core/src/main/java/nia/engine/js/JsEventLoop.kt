@@ -1,5 +1,7 @@
 package nia.engine.js
 
+import nia.engine.dom.DomDocument
+
 /**
  * Event loop del motor JS (T025 v1, RES-0032): tasks (timers) y microtasks
  * con reloj controlable y orden reproducible.
@@ -22,6 +24,12 @@ package nia.engine.js
  * de un setTimeout continua en el pump siguiente); end() corta la sesion.
  * El JsAbort (cuotas o interrupcion) aborta el pump y se reporta como
  * interrupted; la sesion se cierra con end().
+ *
+ * C5 v1 (R0280, RES-0121): evaluate(source, doc) abre la sesion con los
+ * bindings DOM del motor (JsDomBindings) ademas de la API de timers: es
+ * el camino del script de documento del contrato E4-C5, que corre al
+ * inicio del documento y muere con end() (cancelacion al navegar); el
+ * reloj sigue siendo virtual y solo avanza con advance().
  *
  * Exclusiones v1: un loop por sesion (el estado del interprete es global),
  * sin requestAnimationFrame, MessageChannel ni tasks de IO, sin
@@ -53,6 +61,20 @@ class JsEventLoop(private val limits: JsLimits = JsLimits()) {
     fun evaluate(source: String): JsEvalResult {
         val g = JsInterpreter.startLoopSession(limits)
         genv = g
+        installTimerApi(g)
+        return JsInterpreter.runInSession(source, g)
+    }
+
+    /**
+     * C5 v1 (R0280, RES-0121, E4): abre la sesion con los bindings DOM
+     * del motor (document sobre doc, JsDomBindings) ademas de la API de
+     * timers; el script de documento corre con cuotas y su sesion muere
+     * con end() (la cancelacion al navegar del contrato).
+     */
+    fun evaluate(source: String, doc: DomDocument): JsEvalResult {
+        val g = JsInterpreter.startLoopSession(limits)
+        genv = g
+        JsDomBindings.install(g, doc)
         installTimerApi(g)
         return JsInterpreter.runInSession(source, g)
     }

@@ -50,6 +50,10 @@ import nia.engine.broker.Renderer
  * C6 v1 (R0276, RES-0120, E4): clave OPCIONAL estilos (UN nombre
  * idValido) para la hoja de estilos del modulo; exige la capability
  * modificar y el permiso document.styles.
+ *
+ * C5 v1 (R0280, RES-0121, E4): clave OPCIONAL script (UN nombre
+ * idValido) para el script de documento del modulo; exige la
+ * capability modificar y el permiso document.script.
  */
 
 data class ModuleManifest(
@@ -65,7 +69,8 @@ data class ModuleManifest(
     val authorKey: String = "",
     val nextKey: String = "",
     val sustitutos: List<String> = emptyList(),
-    val estilos: String? = null
+    val estilos: String? = null,
+    val script: String? = null
 )
 
 object ModuleSchema {
@@ -85,10 +90,13 @@ object ModuleSchema {
     /** C6 v1 (R0276, RES-0120): permiso de la hoja de estilos. */
     const val DOCUMENT_STYLES = "document.styles"
 
+    /** C5 v1 (R0280, RES-0121): permiso del script de documento. */
+    const val DOCUMENT_SCRIPT = "document.script"
+
     val KEYS = setOf(
         "id", "version", "entry", "permissions",
         "name", "description", "api-version", "category", "capabilities",
-        "author-key", "next-key", "sustitutos", "estilos"
+        "author-key", "next-key", "sustitutos", "estilos", "script"
     )
 
     /** Categorias combinables del gestor (ADR-005, Delta P9). */
@@ -102,7 +110,7 @@ object ModuleSchema {
      * operaciones de pestana (tab.*) nunca se conceden a un modulo.
      */
     val ALLOWED_PERMISSIONS = setOf(
-        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE, DOCUMENT_STYLES
+        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE, DOCUMENT_STYLES, DOCUMENT_SCRIPT
     )
 
     fun validId(id: String): Boolean {
@@ -254,6 +262,16 @@ object ModuleParser {
                 return invalid("estilos exige el permiso document.styles")
             }
         }
+        val script = values["script"]
+        if (script != null) {
+            if (!UiModelModulos.idValido(script)) return invalid("script no valido: " + script)
+            if (!capabilities.contains("modificar")) {
+                return invalid("script exige la capability modificar")
+            }
+            if (!permissions.contains(ModuleSchema.DOCUMENT_SCRIPT)) {
+                return invalid("script exige el permiso document.script")
+            }
+        }
         val authorKey = values["author-key"] ?: ""
         if (authorKey.isNotEmpty() && !spkiValida(authorKey)) {
             return invalid("author-key no es un SPKI base64 valido")
@@ -271,7 +289,7 @@ object ModuleParser {
         return Outcome.success(
             ModuleManifest(
                 id, version, entry, permissions, name, description, apiVersion,
-                categories, capabilities, authorKey, nextKey, sustitutos, estilos
+                categories, capabilities, authorKey, nextKey, sustitutos, estilos, script
             )
         )
     }

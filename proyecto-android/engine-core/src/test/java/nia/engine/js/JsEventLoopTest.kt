@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+import nia.engine.dom.DomDocument
+
 /**
  * Tests del event loop (T025 v1, RES-0032): orden microtasks/tasks
  * reproducible con reloj virtual controlable.
@@ -234,5 +236,43 @@ class JsEventLoopTest {
         assertFalse(loop.hasPendingTasks)
         assertEquals("2", JsInterpreter.dumpResult(JsInterpreter.evaluate("1 + 1")))
         assertFalse(JsInterpreter.evaluate("1 + 1").interrupted)
+    }
+
+    @Test
+    fun evaluateConDocElScriptVeElDom() {
+        val doc = DomDocument.parse("<html><body><p id=\"a\">x</p></body></html>")
+        val loop = JsEventLoop()
+        val r = loop.evaluate("document.getElementById('a').textContent", doc)
+        assertEquals("x", str(r))
+        loop.end()
+    }
+
+    @Test
+    fun advanceCorreLosTimersDelScriptSobreElDom() {
+        val doc = DomDocument.parse("<html><body><p id=\"a\">x</p></body></html>")
+        val loop = JsEventLoop()
+        loop.evaluate(
+            "setTimeout(function () {" +
+                " document.getElementById('a').setAttribute('data-t', 'fue'); }, 50)",
+            doc
+        )
+        loop.advance(50)
+        assertEquals("fue", doc.attributeOf(doc.findFirst("p")!!, "data-t"))
+        loop.end()
+    }
+
+    @Test
+    fun endCancelaLaSesionDelScriptDeDocumento() {
+        val doc = DomDocument.parse("<html><body><p id=\"a\">x</p></body></html>")
+        val loop = JsEventLoop()
+        loop.evaluate(
+            "setTimeout(function () {" +
+                " document.getElementById('a').setAttribute('data-t', 'fue'); }, 50)",
+            doc
+        )
+        assertTrue(loop.hasPendingTasks)
+        loop.end()
+        assertFalse(loop.hasPendingTasks)
+        assertTrue(doc.attributeOf(doc.findFirst("p")!!, "data-t") == null)
     }
 }
