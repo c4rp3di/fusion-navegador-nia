@@ -44,6 +44,9 @@ import nia.engine.js.JsParser
  * (5f) C5 (R0280, RES-0121): script de documento de datos/ como
  * String UTF-8 validado con el parser del host (tope 32 KiB,
  * declarado en script);
+ * (5g) T053 (R0289, RES-0123): lista cosmetica EasyList de datos/
+ * como String UTF-8 validada con el parser del host (tope 64 KiB,
+ * declarada en cosmeticos);
  * (6) pre-parse del entry (JsParser de T029). Nada se parsea ni
  * evalua antes de 1-4 (fail-closed para la integridad, ADR-005: firma
  * mal, hash mal, limite mal o incoherencia = NO se instala).
@@ -85,6 +88,12 @@ data class RecursoScript(
     val js: String
 )
 
+/** Lista cosmetica EasyList validada (T053 v1, R0289, RES-0123). */
+data class RecursoCosmeticos(
+    val nombre: String,
+    val texto: String
+)
+
 /** Paquete .niamod validado por completo (T095, ADR-005). */
 data class PaqueteNiamod(
     val manifiestoTexto: String,
@@ -99,7 +108,8 @@ data class PaqueteNiamod(
     val datos: Map<String, String>,
     val sustitutos: Map<String, RecursoSustituto> = emptyMap(),
     val estilo: RecursoEstilo? = null,
-    val script: RecursoScript? = null
+    val script: RecursoScript? = null,
+    val cosmeticos: RecursoCosmeticos? = null
 )
 
 object Niamod {
@@ -128,6 +138,9 @@ object Niamod {
 
     /** C5 v1 (R0280, RES-0121): tope del script de documento del paquete. */
     const val MAX_SCRIPT = 32_768
+
+    /** T053 v1 (R0289, RES-0123): tope de la lista cosmetica del paquete. */
+    const val MAX_COSMETICOS = 65_536
 
     /**
      * Validacion completa del paquete en el ORDEN del ADR-005; el
@@ -406,6 +419,24 @@ object Niamod {
             RecursoScript(nombre, js)
         }
 
+        // (5g) T053 v1 (R0289, RES-0123): lista cosmetica declarada en
+        // el manifiesto, retenida de datos/ como String UTF-8 y VALIDADA
+        // con el parser del host (CosmeticosModulos.parse, subconjunto
+        // EasyList); ausente, demasiado grande o ilegible NO instala
+        // (fail-closed).
+        val cosmeticosPaquete: RecursoCosmeticos? = manifest.cosmeticos?.let { nombre ->
+            val crudo = capturados["datos/" + nombre]
+                ?: return invalid("cosmeticos ausentes en datos/: " + nombre)
+            if (crudo.size > MAX_COSMETICOS) {
+                return invalid("cosmeticos demasiado grandes: " + nombre)
+            }
+            val texto = String(crudo, Charsets.UTF_8)
+            if (CosmeticosModulos.parse(texto) == null) {
+                return invalid("cosmeticos invalidos: " + nombre)
+            }
+            RecursoCosmeticos(nombre, texto)
+        }
+
         // (6) pre-parse del entry (JsParser de T029)
         val entryTexto = extraerEntry(bytes, manifest.entry)
             ?: return invalid("paquete sin entry declarada")
@@ -417,7 +448,7 @@ object Niamod {
             PaqueteNiamod(
                 manifiesto, manifest, entryTexto, huellaPaquete, huellaClave, nextHuella,
                 uiModel, datosArchivos, datosBytes, datosPaquete, sustitutosPaquete,
-                estiloPaquete, scriptPaquete
+                estiloPaquete, scriptPaquete, cosmeticosPaquete
             )
         )
     }

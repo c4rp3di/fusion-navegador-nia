@@ -53,7 +53,10 @@ import nia.engine.broker.Renderer
  *
  * C5 v1 (R0280, RES-0121, E4): clave OPCIONAL script (UN nombre
  * idValido) para el script de documento del modulo; exige la
- * capability modificar y el permiso document.script.
+ * capability modificar y el permiso document.script. T053 v1
+ * (R0289, RES-0123): la clave cosmeticos declara una lista cosmetica
+ * EasyList de datos/ (idValido) para el modulo; exige la capability
+ * modificar y el permiso document.cosmetic.
  */
 
 data class ModuleManifest(
@@ -70,7 +73,8 @@ data class ModuleManifest(
     val nextKey: String = "",
     val sustitutos: List<String> = emptyList(),
     val estilos: String? = null,
-    val script: String? = null
+    val script: String? = null,
+    val cosmeticos: String? = null
 )
 
 object ModuleSchema {
@@ -93,10 +97,13 @@ object ModuleSchema {
     /** C5 v1 (R0280, RES-0121): permiso del script de documento. */
     const val DOCUMENT_SCRIPT = "document.script"
 
+    /** T053 v1 (R0289, RES-0123): permiso de la lista cosmetica. */
+    const val DOCUMENT_COSMETIC = "document.cosmetic"
+
     val KEYS = setOf(
         "id", "version", "entry", "permissions",
         "name", "description", "api-version", "category", "capabilities",
-        "author-key", "next-key", "sustitutos", "estilos", "script"
+        "author-key", "next-key", "sustitutos", "estilos", "script", "cosmeticos"
     )
 
     /** Categorias combinables del gestor (ADR-005, Delta P9). */
@@ -110,7 +117,8 @@ object ModuleSchema {
      * operaciones de pestana (tab.*) nunca se conceden a un modulo.
      */
     val ALLOWED_PERMISSIONS = setOf(
-        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE, DOCUMENT_STYLES, DOCUMENT_SCRIPT
+        BrokerOps.STORAGE_READ, BrokerOps.NETWORK_FETCH, NETWORK_RESPONSE, DOCUMENT_STYLES, DOCUMENT_SCRIPT,
+        DOCUMENT_COSMETIC
     )
 
     fun validId(id: String): Boolean {
@@ -272,6 +280,16 @@ object ModuleParser {
                 return invalid("script exige el permiso document.script")
             }
         }
+        val cosmeticos = values["cosmeticos"]
+        if (cosmeticos != null) {
+            if (!UiModelModulos.idValido(cosmeticos)) return invalid("cosmeticos no validos: " + cosmeticos)
+            if (!capabilities.contains("modificar")) {
+                return invalid("cosmeticos exigen la capability modificar")
+            }
+            if (!permissions.contains(ModuleSchema.DOCUMENT_COSMETIC)) {
+                return invalid("cosmeticos exigen el permiso document.cosmetic")
+            }
+        }
         val authorKey = values["author-key"] ?: ""
         if (authorKey.isNotEmpty() && !spkiValida(authorKey)) {
             return invalid("author-key no es un SPKI base64 valido")
@@ -289,7 +307,7 @@ object ModuleParser {
         return Outcome.success(
             ModuleManifest(
                 id, version, entry, permissions, name, description, apiVersion,
-                categories, capabilities, authorKey, nextKey, sustitutos, estilos, script
+                categories, capabilities, authorKey, nextKey, sustitutos, estilos, script, cosmeticos
             )
         )
     }

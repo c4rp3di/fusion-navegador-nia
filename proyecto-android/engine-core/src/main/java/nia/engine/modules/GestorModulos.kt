@@ -71,6 +71,14 @@ import nia.engine.profile.ConfigStore
  * estaExceptuado las expone al filtro de red del shell; el TSV
  * escribe GLOBAL_EXCEPTO para el alcance global con excepciones
  * (las lineas GLOBAL/SITIO de antes cargan identicas).
+ *
+ * T053 v1 (R0289, RES-0123): el gestor retiene la lista cosmetica del
+ * paquete instalado (recursoCosmeticos) y resuelve la lista del
+ * documento tras cada disparo de navegacion
+ * (cosmeticosParaNavegacion): gana el primer modulo en orden de
+ * instalacion cuyo veredicto fue "cosmeticos" en el ultimo disparo
+ * (api-version 2 con cosmeticos declarados); UNA lista por documento:
+ * vive y muere con la navegacion.
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -155,6 +163,7 @@ class GestorModulos(
     private val sustitutosPaquetes = HashMap<String, Map<String, RecursoSustituto>>()
     private val estilosPaquetes = HashMap<String, RecursoEstilo>()
     private val scriptsPaquetes = HashMap<String, RecursoScript>()
+    private val cosmeticosPaquetes = HashMap<String, RecursoCosmeticos>()
     private val veredictosDisparo = LinkedHashMap<String, String>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
@@ -376,6 +385,11 @@ class GestorModulos(
         } else {
             scriptsPaquetes.remove(id)
         }
+        if (p.cosmeticos != null) {
+            cosmeticosPaquetes[id] = p.cosmeticos
+        } else {
+            cosmeticosPaquetes.remove(id)
+        }
         ancladas[id] = p.huellaClave
         if (p.nextHuella != null && p.nextHuella != p.huellaClave) {
             pendientes[id] = p.nextHuella
@@ -467,6 +481,11 @@ class GestorModulos(
     @Synchronized
     fun scriptDeModulo(id: String): RecursoScript? = scriptsPaquetes[id]
 
+    /** T053 v1 (R0289, RES-0123): lista cosmetica del paquete instalado
+     *  o null (sin modulo, sin cosmeticos declarados o desinstalado). */
+    @Synchronized
+    fun recursoCosmeticos(id: String): RecursoCosmeticos? = cosmeticosPaquetes[id]
+
     /**
      * C5 v1 (R0280, RES-0121): script del documento tras el disparo de
      * navegacion: gana el primer modulo en ORDEN DE INSTALACION cuyo
@@ -499,6 +518,39 @@ class GestorModulos(
         return ganador
     }
 
+    /**
+     * T053 v1 (R0289, RES-0123): lista cosmetica del documento tras el
+     * disparo de navegacion: gana el primer modulo en ORDEN DE
+     * INSTALACION cuyo veredicto fue "cosmeticos" en el ULTIMO disparo
+     * con alcance en el origen (api-version 2 con cosmeticos
+     * declarados); api-version 1 o sin cosmeticos se ignoran
+     * (abstencion) y los que pierden reciben diagnostico
+     * "no disponible" (solo con EventContext, C10). UNA lista por
+     * documento: vive y muere con la navegacion.
+     */
+    @Synchronized
+    fun cosmeticosParaNavegacion(origen: String, ctxDiag: EventContext? = null): RecursoCosmeticos? {
+        var ganador: RecursoCosmeticos? = null
+        for (id in registry.installedIds()) {
+            val alcance = alcances[id] ?: Alcance(true, emptySet())
+            if (!alcance.aplica(origen)) continue
+            if (veredictosDisparo[id] != "cosmeticos") continue
+            val manifest = registry.manifestOf(id) ?: continue
+            if (manifest.apiVersion < 2) continue
+            val lista = cosmeticosPaquetes[id] ?: continue
+            if (ganador == null) {
+                ganador = lista
+            } else if (ctxDiag != null && diag != null) {
+                diag.evento(
+                    id, EventLevel.WARNING,
+                    "cosmeticos no disponible: ya hay otra lista para este documento",
+                    ctxDiag
+                )
+            }
+        }
+        return ganador
+    }
+
     /** Retira el modulo entero: sesion, registro, alcance y contadores. */
     @Synchronized
     fun desinstalar(id: String): Outcome<Unit> {
@@ -515,6 +567,7 @@ class GestorModulos(
         sustitutosPaquetes.remove(id)
         estilosPaquetes.remove(id)
         scriptsPaquetes.remove(id)
+        cosmeticosPaquetes.remove(id)
         veredictosDisparo.remove(id)
         guardar()
         return Outcome.success(Unit)

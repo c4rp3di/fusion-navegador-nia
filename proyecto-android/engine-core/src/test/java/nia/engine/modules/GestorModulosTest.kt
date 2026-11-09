@@ -632,6 +632,65 @@ class GestorModulosTest {
     }
 
     @Test
+    fun cosmeticosParaNavegacionSeTomanDelModuloQueDiceCosmeticos() {
+        val g = nuevo()
+        val kp = par()
+        val lista = "##.anuncio\n"
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, document.cosmetic\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "cosmeticos = lista.txt\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(
+            manifiesto, kp, listOf("datos/lista.txt" to lista.toByteArray(Charsets.UTF_8)),
+            entry = "nia.onNavigate(function (url) { return \"cosmeticos\"; });\n"
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
+        val cosmeticos = g.cosmeticosParaNavegacion("https://a.dev:443")
+        assertTrue("la lista la gana el modulo que dice cosmeticos", cosmeticos != null)
+        assertEquals(lista, cosmeticos!!.texto)
+    }
+
+    @Test
+    fun desinstalarRetiraLosCosmeticos() {
+        val g = nuevo()
+        val kp = par()
+        val lista = "##.anuncio\n"
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, document.cosmetic\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "cosmeticos = lista.txt\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(
+            manifiesto, kp, listOf("datos/lista.txt" to lista.toByteArray(Charsets.UTF_8)),
+            entry = "nia.onNavigate(function (url) { return \"cosmeticos\"; });\n"
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
+        assertTrue(g.cosmeticosParaNavegacion("https://a.dev:443") != null)
+        ok(g.desinstalar("demo.niamod"))
+        assertTrue("desinstalar retira la lista", g.cosmeticosParaNavegacion("https://a.dev:443") == null)
+    }
+
+    @Test
+    fun excepcionDeSitioAbstieneLosCosmeticos() {
+        val g = nuevo()
+        val kp = par()
+        val lista = "##.anuncio\n"
+        val manifiesto = "id = demo.niamod\nversion = 2\nentry = entry.js\n" +
+            "permissions = network.fetch, document.cosmetic\nname = Demo niamod\n" +
+            "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
+            "cosmeticos = lista.txt\nauthor-key = " + spki(kp) + "\n"
+        val bytes = paqueteNiamod(
+            manifiesto, kp, listOf("datos/lista.txt" to lista.toByteArray(Charsets.UTF_8)),
+            entry = "nia.onNavigate(function (url) { return \"cosmeticos\"; });\n"
+        )
+        ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
+        ok(g.exceptuarSitio("demo.niamod", "https://a.dev:443"))
+        g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
+        assertTrue("el origen exceptuado no gana la lista", g.cosmeticosParaNavegacion("https://a.dev:443") == null)
+    }
+
+    @Test
     fun exceptuarSitioAbstieneEnEseOrigen() {
         val g = nuevo()
         ok(g.instalarDemo())

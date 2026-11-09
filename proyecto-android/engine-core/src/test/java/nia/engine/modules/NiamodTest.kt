@@ -608,4 +608,53 @@ class NiamodTest {
         val bytes = paquete(m, codigo(), kp, listOf("datos/doc.js" to "var x = ;".toByteArray(Charsets.UTF_8)))
         assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
     }
+
+    @Test
+    fun paqueteConCosmeticosLoRetiene() {
+        val kp = par()
+        val lista = "##.anuncio\n"
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.cosmetic",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "cosmeticos = lista.txt\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/lista.txt" to lista.toByteArray(Charsets.UTF_8)))
+        val r = Niamod.inspeccionar(bytes)
+        assertTrue(r is Outcome.Success)
+        val p = (r as Outcome.Success).value as PaqueteNiamod
+        assertTrue(p.cosmeticos != null)
+        assertEquals("lista.txt", p.cosmeticos!!.nombre)
+        assertEquals(lista, p.cosmeticos!!.texto)
+    }
+
+    @Test
+    fun paqueteConCosmeticosAusentesRechazado() {
+        val kp = par()
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.cosmetic",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "cosmeticos = lista.txt\n"
+        )
+        val bytes = paquete(m, codigo(), kp)
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
+
+    @Test
+    fun paqueteConCosmeticosIlegiblesRechazado() {
+        val kp = par()
+        val lista = "||example.com^\n"
+        val m = manifiesto(
+            spki(kp),
+            permisos = "network.fetch, document.cosmetic",
+            apiVersion = 2,
+            caps = "observar, modificar",
+            extra = "cosmeticos = lista.txt\n"
+        )
+        val bytes = paquete(m, codigo(), kp, listOf("datos/lista.txt" to lista.toByteArray(Charsets.UTF_8)))
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(Niamod.inspeccionar(bytes)).code)
+    }
 }

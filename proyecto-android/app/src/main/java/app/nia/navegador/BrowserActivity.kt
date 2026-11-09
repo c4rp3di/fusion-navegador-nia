@@ -1535,6 +1535,13 @@ class BrowserActivity : Activity() {
      *  del event loop vive y muere con la navegacion (cancelacion). */
     private var scriptParaPintar: String? = null
 
+    /** T053 v1 (R0289, RES-0123): lista cosmetica ganadora del disparo
+     *  de navegacion y el HOST al que aplica; la consume el PINTADO del
+     *  documento (vive y muere con la navegacion, una lista por
+     *  documento). */
+    private var cosmeticosParaPintar: String? = null
+    private var hostCosmeticos: String? = null
+
     /** Dialogo de cuotas visibles (T100): mapa honesto de la
      * interrupcion (pasos/allocs/tiempo y lo que NO miden), cuotas
      * activas tras los reintentos, conteo de scripts interrumpidos y
@@ -2000,6 +2007,11 @@ class BrowserActivity : Activity() {
         // C5 v1 (R0280, RES-0121): el script del documento lo resuelve el
         // gestor tras el disparo (uno por documento; gana el primero).
         scriptParaPintar = gestorModulos.scriptParaNavegacion(clave, ctx)?.js
+        // T053 v1 (R0289, RES-0123): la lista cosmetica del documento la
+        // resuelve el gestor tras el disparo (una por documento; gana el
+        // primero) y su alcance es el HOST del origen.
+        cosmeticosParaPintar = gestorModulos.cosmeticosParaNavegacion(clave, ctx)?.texto
+        hostCosmeticos = t.host
         if (res.disparados > 0) {
             resumenModulos = "modulos " + res.disparados + " notificado(s), errores: " + res.errores
         }
@@ -2292,9 +2304,14 @@ class BrowserActivity : Activity() {
         hojaParaPintar = null
         val script = scriptParaPintar
         scriptParaPintar = null
+        val cosmeticos = cosmeticosParaPintar
+        cosmeticosParaPintar = null
+        val hostCos = hostCosmeticos
+        hostCosmeticos = null
         try {
             pagina.cargarHojaModulo(hoja)
             pagina.cargarScriptModulo(script)
+            pagina.cargarCosmeticosModulo(cosmeticos, hostCos)
             pagina.loadPagina(html, cssNavegador(), true)
             scroll.scrollTo(0, 0)
         } catch (e: Exception) {
@@ -2333,6 +2350,10 @@ class BrowserActivity : Activity() {
             hojaParaPintar = null
             // C5 v1: sin html el script ganado se descarta (vive con el documento)
             scriptParaPintar = null
+            // T053 v1: sin html la lista cosmetica ganada se descarta
+            // (vive con el documento)
+            cosmeticosParaPintar = null
+            hostCosmeticos = null
         }
     }
 

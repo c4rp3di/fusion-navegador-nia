@@ -360,4 +360,26 @@ class ModuleRegistryTest {
             "script = ../malo.js" + "\n"
         assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(texto)).code)
     }
+
+    @Test fun cosmeticosValidosLleganAlManifest() {
+        val texto = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch, document.cosmetic" + "\n" +
+            "capabilities = observar, modificar" + "\n" +
+            "api-version = 2" + "\n" +
+            "cosmeticos = lista.txt" + "\n"
+        val mod = ok(ModuleRegistry().install(texto))
+        assertEquals("lista.txt", mod.manifest.cosmeticos)
+    }
+
+    @Test fun cosmeticosSinCoherenciaRechazado() {
+        val sinPermiso = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch" + "\n" +
+            "capabilities = observar, modificar" + "\n" +
+            "cosmeticos = lista.txt" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinPermiso)).code)
+        val sinModificar = "id = demo.modulo" + "\n" + "version = 2" + "\n" + "entry = main.js" + "\n" +
+            "permissions = network.fetch, document.cosmetic" + "\n" +
+            "cosmeticos = lista.txt" + "\n"
+        assertEquals(ErrorCode.INVALID_INPUT, fallo(ModuleRegistry().install(sinModificar)).code)
+    }
 }

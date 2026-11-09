@@ -36,7 +36,9 @@ import nia.engine.html.DomNode
 import nia.engine.js.JsEventLoop
 import nia.engine.layout.LayoutEngine
 import nia.engine.layout.LayoutResult
+import nia.engine.modules.CosmeticosModulos
 import nia.engine.modules.EstilosModulos
+import nia.engine.modules.ListaCosmetica
 import nia.engine.modules.PluginRuntime
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
@@ -134,6 +136,14 @@ class PaintView(context: Context) : View(context) {
      *  sesion anterior muere ANTES de abrir la del documento nuevo
      *  (cancelacion al navegar). */
     private var loopScript: JsEventLoop? = null
+
+    /** T053 v1 (R0289, RES-0123): lista cosmetica del modulo ganador
+     *  ya PARSEADA para el host del documento (null = sin lista); el
+     *  overlay la aplica el layout en el MISMO pase de display:none. */
+    private var listaCosmeticos: ListaCosmetica? = null
+
+    /** T053 v1: host del documento al que aplica la lista cosmetica. */
+    private var hostCosmeticos: String? = null
 
     private var builtRevision = -1
 
@@ -266,6 +276,11 @@ class PaintView(context: Context) : View(context) {
         // documento de modulo: la sesion previa muere y el script
         // ganado de otra navegacion se descarta.
         scriptModulo = null
+        // T053 v1 (R0289, RES-0123): el documento de demo/SAF NO es
+        // documento de modulo: la lista cosmetica ganada de otra
+        // navegacion se descarta.
+        listaCosmeticos = null
+        hostCosmeticos = null
         correrScriptDocumento()
         rebuild()
     }
@@ -308,6 +323,14 @@ class PaintView(context: Context) : View(context) {
      *  tras el disparo de navegacion y corre al inicio del documento. */
     fun cargarScriptModulo(js: String?) {
         scriptModulo = js
+    }
+
+    /** T053 v1 (R0289, RES-0123): fija la lista cosmetica del modulo
+     *  para el PROXIMO documento (null = sin lista); la PARSEA una
+     *  sola vez aqui (fail-closed: lista invalida = sin overlay). */
+    fun cargarCosmeticosModulo(texto: String?, host: String?) {
+        hostCosmeticos = host
+        listaCosmeticos = if (texto == null || host == null) null else CosmeticosModulos.parse(texto)
     }
 
     /** C5 v1 (R0280, RES-0121): corre el script de documento contra el
@@ -403,12 +426,19 @@ class PaintView(context: Context) : View(context) {
         return sb.toString()
     }
 
-    /** C6 v1 (R0276, RES-0120): styleOf con el overlay de la hoja del
-     *  modulo (fail-closed: hoja invalida o sin matches = computed tal
-     *  cual); el display:none casado viaja al layout en el MISMO pase. */
+    /** C6 v1 (R0276, RES-0120) + T053 v1 (R0289, RES-0123): styleOf con
+     *  el overlay UNIDO de la hoja del modulo y la lista cosmetica
+     *  (fail-closed: hoja o lista invalida o sin matches = computed
+     *  tal cual); el display:none casado viaja al layout en el MISMO
+     *  pase. */
     private fun styleOfDe(computed: CssComputedStyle): (DomNode, String) -> String? {
-        val hoja = hojaModulo ?: return { node, name -> computed.propertyOf(node, name) }
-        val ocultos = EstilosModulos.ocultos(rootDoc, hoja)
+        val ocultosHoja = if (hojaModulo != null) EstilosModulos.ocultos(rootDoc, hojaModulo) else emptySet()
+        val ocultosCosmeticos = if (listaCosmeticos != null && hostCosmeticos != null) {
+            CosmeticosModulos.ocultos(rootDoc, listaCosmeticos!!, hostCosmeticos!!)
+        } else {
+            emptySet()
+        }
+        val ocultos = ocultosHoja + ocultosCosmeticos
         if (ocultos.isEmpty()) return { node, name -> computed.propertyOf(node, name) }
         return { node, name ->
             if (name == "display" && node in ocultos) "none" else computed.propertyOf(node, name)
