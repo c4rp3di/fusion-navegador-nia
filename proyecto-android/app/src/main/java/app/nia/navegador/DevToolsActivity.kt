@@ -50,13 +50,22 @@ import nia.engine.js.JsInterpreter
  * T028 v4 (R0086, RES-0048): seccion DEBUGGER del reporte: la sesion de
  * debug del motor (DebugSession con reanudacion real) sobre una demo
  * determinista sin red, con el call stack real de la pausa.
+ * T094 v5 (R0296, RES-0124): seccion MODULOS del reporte: el estado
+ * DECLARATIVO de los modulos instalados viaja por el intent extra
+ * "modulos" (construido en vivo por el navegador); sin extra, nota
+ * honesta de abrirlo desde el Menu del navegador.
  */
 class DevToolsActivity : Activity() {
 
     private lateinit var text: TextView
 
+    /** T094 v5 (R0296, RES-0124): reporte declarativo de modulos que
+     *  viaja por el intent (null cuando se abre desde la demo). */
+    private var modulosDeclarados: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        modulosDeclarados = intent.getStringExtra("modulos")
         val scroll = ScrollView(this)
         text = TextView(this)
         text.typeface = Typeface.MONOSPACE
@@ -116,6 +125,9 @@ class DevToolsActivity : Activity() {
         sb.append('\n')
         sb.append("== DEBUGGER (demo determinista, reanudacion real) ==").append('\n')
         sb.append(demoDebugger())
+        sb.append('\n')
+        sb.append("== MODULOS (paneles declarados) ==").append('\n')
+        sb.append(modulosDeclarados ?: "(sin datos: abrelo desde el Menu del navegador)").append('\n')
         val sel = DevToolsState.selectedNodeId
         if (sel != null) {
             val h = model.handleWithNodeId(sel)

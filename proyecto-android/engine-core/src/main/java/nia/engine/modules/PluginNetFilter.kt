@@ -1,8 +1,11 @@
 package nia.engine.modules
 
+import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 import nia.contracts.Outcome
 
@@ -116,14 +119,19 @@ class PluginNetFilter(
         }
     }
 
-    /** T054 v1: cuenta un bloqueo del modulo (companion del proceso). */
+    /** T054 v1: cuenta un bloqueo del modulo (companion del proceso);
+     *  T094 v5 (R0296, RES-0124) marca pendientes SIN I/O en el camino
+     *  caliente (el guardado es best-effort desde el shell). */
     private fun bloquear(id: String) {
         bloqueosProceso.computeIfAbsent(id) { AtomicInteger() }.incrementAndGet()
+        pendientes.set(true)
     }
 
-    /** T054 v1: cuenta una sustitucion del modulo (companion). */
+    /** T054 v1: cuenta una sustitucion del modulo (companion);
+     *  T094 v5 marca pendientes SIN I/O en el camino caliente. */
     private fun sustituir(id: String) {
         sustitucionesProceso.computeIfAbsent(id) { AtomicInteger() }.incrementAndGet()
+        pendientes.set(true)
     }
 
     /**
@@ -207,13 +215,84 @@ class PluginNetFilter(
         const val MAX_SUSTITUCIONES_POR_DOCUMENTO = 50
 
         /** T054 v1 (R0284, RES-0122): contadores del PROCESO (hay un
-         *  filtro por pestana/perfil): en memoria, se pierden al
-         *  reiniciar. */
+         *  filtro por pestana/perfil); T094 v5 (R0296, RES-0124) los
+         *  persiste en un TSV opcional fijado por el shell. */
         internal val bloqueosProceso = ConcurrentHashMap<String, AtomicInteger>()
         internal val sustitucionesProceso = ConcurrentHashMap<String, AtomicInteger>()
 
         fun bloqueosDe(id: String): Int = bloqueosProceso[id]?.get() ?: 0
 
         fun sustitucionesDe(id: String): Int = sustitucionesProceso[id]?.get() ?: 0
+
+        /** T094 v5: archivo TSV de los contadores (id TAB bloqueos TAB
+         *  sustituciones por linea, ids ordenados); null = SIN
+         *  persistencia y los contadores vivos NO se pierden. */
+        private val persistencia = AtomicReference<File?>(null)
+
+        /** T094 v5: hay incrementos desde el ultimo guardado (el camino
+         *  caliente solo MARCA, nunca escribe). */
+        private val pendientes = AtomicBoolean(false)
+
+        /** T094 v5: fija el archivo y CARGA el TSV existente
+         *  (best-effort: lineas corruptas o partes no numericas se
+         *  ignoran, igual que modulos.tsv). */
+        fun persistirContadoresEn(archivo: File?) {
+            persistencia.set(archivo)
+            if (archivo != null) cargarContadores(archivo)
+        }
+
+        /** T094 v5: escribe SOLO si hay incrementos sin guardar (el
+         *  shell lo llama en onPause; un kill puede perder lo contado
+         *  desde el ultimo guardado, sin doble contabilidad). */
+        fun guardarContadoresSiPendientes() {
+            if (!pendientes.get()) return
+            val archivo = persistencia.get() ?: return
+            guardarContadores(archivo)
+            pendientes.set(false)
+        }
+
+        /** T094 v5: consulta honesta para test y diagnostico. */
+        fun hayContadoresPendientes(): Boolean = pendientes.get()
+
+        /** T094 v5: borra TODOS los contadores y persiste el vacio
+         *  (idempotente: no queda nada colgado). */
+        fun reiniciarContadores() {
+            bloqueosProceso.clear()
+            sustitucionesProceso.clear()
+            val archivo = persistencia.get()
+            if (archivo != null) guardarContadores(archivo)
+            pendientes.set(false)
+        }
+
+        private fun cargarContadores(archivo: File) {
+            if (!archivo.exists()) return
+            try {
+                for (linea in archivo.readText().lines()) {
+                    val t = linea.trim()
+                    if (t.isEmpty()) continue
+                    val p = t.split('\t')
+                    if (p.size < 3) continue
+                    val b = p[1].trim().toIntOrNull() ?: continue
+                    val s = p[2].trim().toIntOrNull() ?: continue
+                    if (b > 0) bloqueosProceso[p[0]] = AtomicInteger(b)
+                    if (s > 0) sustitucionesProceso[p[0]] = AtomicInteger(s)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        private fun guardarContadores(archivo: File) {
+            try {
+                val ordenados = (bloqueosProceso.keys + sustitucionesProceso.keys).toSortedSet()
+                val sb = StringBuilder()
+                for (id in ordenados) {
+                    sb.append(id).append('\t')
+                        .append(bloqueosDe(id)).append('\t')
+                        .append(sustitucionesDe(id)).append('\n')
+                }
+                archivo.writeText(sb.toString())
+            } catch (_: Exception) {
+            }
+        }
     }
 }

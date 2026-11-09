@@ -517,6 +517,10 @@ class BrowserActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // T094 v5 (R0296, RES-0124): persistencia de los contadores del
+        // filtro (TSV en filesDir; el guardado es best-effort en onPause,
+        // sin I/O al bloquear; lineas corruptas ignoradas al cargar).
+        PluginNetFilter.persistirContadoresEn(File(filesDir, "filtro-contadores.tsv"))
         val raiz = LinearLayout(this)
         raiz.orientation = LinearLayout.VERTICAL
         raiz.layoutParams = ViewGroup.LayoutParams(
@@ -1038,7 +1042,8 @@ class BrowserActivity : Activity() {
             "Modulos",
             "Imprimir / PDF",
             "Permisos por sitio",
-            "Workers / SW"
+            "Workers / SW",
+            "DevTools (paneles declarados)"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -1082,6 +1087,7 @@ class BrowserActivity : Activity() {
                     31 -> imprimirPagina()
                     32 -> mostrarPermisos()
                     33 -> mostrarWorkersSw()
+                    34 -> abrirDevToolsModulos()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1595,9 +1601,71 @@ class BrowserActivity : Activity() {
         return n
     }
 
+    /** T094 v5 (R0296, RES-0124): abre el panel DevTools con el reporte
+     *  DECLARATIVO de los modulos: viaja por el intent (vivo al abrir,
+     *  sin estado global; la demo de MainActivity sigue sin modulos). */
+    private fun abrirDevToolsModulos() {
+        val abrir = Intent(this, DevToolsActivity::class.java)
+        abrir.putExtra("modulos", reporteModulos())
+        traza("modulos", "devtools declarativo abierto con " + gestorModulos.fichas().size + " modulo(s)")
+        startActivity(abrir)
+    }
+
+    /** T094 v5: reporte declarativo vivo por modulo: estado, version,
+     *  permisos, actividad del gestor, contadores del filtro y el
+     *  ui-model declarado (ajustes con su valor REAL de la config del
+     *  perfil normal, acciones como catalogo SIN ejecucion y paneles
+     *  id+titulo: la interactividad requiere reabrir T030). */
+    private fun reporteModulos(): String {
+        val fichas = gestorModulos.fichas()
+        val config = tabs.perfil(ProfileKind.NORMAL)?.configModulos
+        val sb = StringBuilder()
+        if (fichas.isEmpty()) {
+            sb.append("(sin modulos instalados)").append('\n')
+            return sb.toString()
+        }
+        for (f in fichas) {
+            sb.append("modulo ").append(f.id)
+                .append(" - ").append(textoEstadoModulo(f)).append('\n')
+            sb.append("  version: ").append(f.version)
+                .append("; permisos: ")
+                .append(if (f.permissions.isEmpty()) "ninguno" else f.permissions.joinToString(", "))
+                .append('\n')
+            sb.append("  actividad: disparos=").append(f.disparos)
+                .append(" errores=").append(f.errores).append('\n')
+            if (f.ultimoVeredicto.isNotEmpty()) {
+                sb.append("  ultimo veredicto: ").append(f.ultimoVeredicto).append('\n')
+            }
+            sb.append("  filtro: bloqueos=").append(PluginNetFilter.bloqueosDe(f.id))
+                .append(" sustituciones=").append(PluginNetFilter.sustitucionesDe(f.id))
+                .append('\n')
+            sb.append("  alcance: ")
+                .append(if (f.alcanceGlobal) "global" else "solo " + f.alcanceOrigenes.size + " origen(es)")
+                .append("; excepciones: ").append(f.alcanceExcepciones.size).append('\n')
+            val ui = gestorModulos.uiModelDe(f.id)
+            if (ui == null || ui.vacio) {
+                sb.append("  ui-model: sin declaraciones").append('\n')
+            } else {
+                for (a in ui.ajustes) {
+                    val valor = config?.leer(f.id, "uim." + a.id)
+                        ?: (if (a.defecto) "true" else "false")
+                    sb.append("  ajuste ").append(a.id).append(": ").append(a.titulo)
+                        .append(" = ").append(if (valor == "true") "si" else "no").append('\n')
+                }
+                for (ac in ui.acciones) {
+                    sb.append("  accion ").append(ac.id).append(": ").append(ac.titulo)
+                        .append(" (catalogo sin ejecucion)").append('\n')
+                }
+                for (p in ui.paneles) {
+                    sb.append("  panel ").append(p.id).append(": ").append(p.titulo).append('\n')
+                }
+            }
+        }
+        return sb.toString()
+    }
+
     /** T094 v1 (R0226, RES-0106, ADR-005): gestor de modulos del
-     *  shell sobre el registro (T009) y el runtime (T029/T030) del
-     *  motor. Lista fichas con estado y actividad; sin modulos
+     *  shell sobre el registro (T009) y el runtime (T029/T030) del     *  motor. Lista fichas con estado y actividad; sin modulos
      *  ofrece instalar el demo embebido (el canal .niamod con firma
      *  llega con el instalador T095); tocar una ficha abre el
      *  detalle con las acciones reales del runtime. */
@@ -3012,6 +3080,14 @@ class BrowserActivity : Activity() {
     }
 
     /** El documento SAF elegido alimenta el sink reabrible del motor. */
+    /** T094 v5 (R0296, RES-0124): guarda los contadores del filtro al
+     *  salir de primer plano (best-effort: solo un kill del proceso pierde
+     *  lo contado desde el ultimo guardado, sin doble contabilidad). */
+    override fun onPause() {
+        PluginNetFilter.guardarContadoresSiPendientes()
+        super.onPause()
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_DESCARGA && resultCode == RESULT_OK) {

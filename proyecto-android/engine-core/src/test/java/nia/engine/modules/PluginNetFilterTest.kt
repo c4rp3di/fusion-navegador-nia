@@ -1,8 +1,11 @@
 package nia.engine.modules
 
+import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -594,5 +597,102 @@ class PluginNetFilterTest {
                 RequestContext.of("https://cdn.example.org/ads/x.png", "image", "https://b.dev:443/pagina")
             ) is FilterDecision.Block
         )
+    }
+
+    @Test
+    fun persistirContadoresCargaTsvPrevio() {
+        val dir = Files.createTempDirectory("filtro-contadores").toFile()
+        try {
+            val archivo = File(dir, "filtro-contadores.tsv")
+            archivo.writeText(
+                "demo.persistido\t5\t2\n" +
+                "linea corrupta\n" +
+                "demo.mal\tNo\t1\n" +
+                "demo.neg\t-3\t0\n"
+            )
+            PluginNetFilter.persistirContadoresEn(archivo)
+            assertEquals(5, PluginNetFilter.bloqueosDe("demo.persistido"))
+            assertEquals(2, PluginNetFilter.sustitucionesDe("demo.persistido"))
+            assertEquals("la linea corrupta se ignora", 0, PluginNetFilter.bloqueosDe("demo.mal"))
+            assertEquals("el negativo no carga", 0, PluginNetFilter.bloqueosDe("demo.neg"))
+        } finally {
+            PluginNetFilter.persistirContadoresEn(null)
+            PluginNetFilter.reiniciarContadores()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun bloqueoMarcaPendientesYGuardarEscribeTsv() {
+        val dir = Files.createTempDirectory("filtro-contadores").toFile()
+        try {
+            val archivo = File(dir, "filtro-contadores.tsv")
+            val reg = ModuleRegistry(null)
+            val rt = PluginRuntime(reg)
+            instalar(reg, rt, "demo.persist", entryCondicional)
+            val f = PluginNetFilter(rt, reg)
+            PluginNetFilter.persistirContadoresEn(archivo)
+            PluginNetFilter.reiniciarContadores()
+            assertTrue(
+                f.decide(RequestContext.of("https://example.com/ads/x.png", "image", "")) is FilterDecision.Block
+            )
+            assertTrue("el bloqueo marca pendientes", PluginNetFilter.hayContadoresPendientes())
+            PluginNetFilter.guardarContadoresSiPendientes()
+            assertFalse("guardar limpia pendientes", PluginNetFilter.hayContadoresPendientes())
+            assertEquals(1, PluginNetFilter.bloqueosDe("demo.persist"))
+            assertEquals("demo.persist\t1\t0\n", archivo.readText())
+            PluginNetFilter.reiniciarContadores()
+            assertEquals("reiniciar borra en memoria", 0, PluginNetFilter.bloqueosDe("demo.persist"))
+            PluginNetFilter.persistirContadoresEn(archivo)
+            assertEquals("recargar restaura los contadores", 1, PluginNetFilter.bloqueosDe("demo.persist"))
+        } finally {
+            PluginNetFilter.persistirContadoresEn(null)
+            PluginNetFilter.reiniciarContadores()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun persistirNuloApagaSinExcepcionesNiArchivo() {
+        val dir = Files.createTempDirectory("filtro-contadores").toFile()
+        try {
+            val archivo = File(dir, "filtro-contadores.tsv")
+            PluginNetFilter.persistirContadoresEn(null)
+            PluginNetFilter.reiniciarContadores()
+            val reg = ModuleRegistry(null)
+            val rt = PluginRuntime(reg)
+            instalar(reg, rt, "demo.apagado", entryCondicional)
+            val f = PluginNetFilter(rt, reg)
+            assertTrue(
+                f.decide(RequestContext.of("https://example.com/ads/x.png", "image", "")) is FilterDecision.Block
+            )
+            assertEquals("sin archivo los contadores viven igual", 1, PluginNetFilter.bloqueosDe("demo.apagado"))
+            PluginNetFilter.guardarContadoresSiPendientes()
+            assertFalse("sin persistencia no se escribe nada", archivo.exists())
+        } finally {
+            PluginNetFilter.persistirContadoresEn(null)
+            PluginNetFilter.reiniciarContadores()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun reiniciarContadoresPersisteElVacio() {
+        val dir = Files.createTempDirectory("filtro-contadores").toFile()
+        try {
+            val archivo = File(dir, "filtro-contadores.tsv")
+            archivo.writeText("demo.viejo\t7\t4\n")
+            PluginNetFilter.persistirContadoresEn(archivo)
+            assertEquals(7, PluginNetFilter.bloqueosDe("demo.viejo"))
+            assertEquals(4, PluginNetFilter.sustitucionesDe("demo.viejo"))
+            PluginNetFilter.reiniciarContadores()
+            assertEquals(0, PluginNetFilter.bloqueosDe("demo.viejo"))
+            assertEquals("el vacio se persiste", "", archivo.readText())
+            assertFalse("reiniciar limpia pendientes", PluginNetFilter.hayContadoresPendientes())
+        } finally {
+            PluginNetFilter.persistirContadoresEn(null)
+            PluginNetFilter.reiniciarContadores()
+            dir.deleteRecursively()
+        }
     }
 }
