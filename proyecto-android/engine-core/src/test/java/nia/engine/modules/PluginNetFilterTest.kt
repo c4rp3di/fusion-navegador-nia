@@ -34,6 +34,10 @@ import nia.engine.profile.ConfigStore
  * C3 v1 (R0271, RES-0119): veredicto sustituir con gates
  * fail-closed y diagnostico sustituido/no disponible (gemelo 2
  * corridas, huella 33.33.1f2c43d20ca9851c).
+ * T054 v1 (R0284, RES-0122): excepciones de sitio (exceptuado
+ * abstiene sin disparar el hook, origen del contexto iniciador)
+ * y contadores de bloqueos/sustituciones por modulo (gemelo 2
+ * corridas, huella 34.34.9b2eb42d).
  */
 class PluginNetFilterTest {
 
@@ -74,6 +78,9 @@ class PluginNetFilterTest {
 
     private val entrySustituto =
         "nia.onRequest(function (c) { return 'sustituir: juguete.mp4'; });"
+
+    private val manifestStats =
+        "id = demo.stats\nversion = 1\nentry = entry.js\npermissions = network.fetch, network.response\ncapabilities = bloquear, modificar\napi-version = 2\nsustitutos = juguete.mp4"
 
     private fun sha256Hex(b: ByteArray): String {
         val d = MessageDigest.getInstance("SHA-256").digest(b)
@@ -504,6 +511,86 @@ class PluginNetFilterTest {
         assertTrue(
             "otro documento sigue sustituyendo",
             f.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Substitute
+        )
+    }
+
+    @Test
+    fun decideCuentaBloqueosPorModulo() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        instalar(reg, rt, "demo.contablock", entryCondicional)
+        val f = PluginNetFilter(rt, reg)
+        assertTrue(
+            f.decide(RequestContext.of("https://example.com/ads/x.png", "image", "")) is FilterDecision.Block
+        )
+        assertTrue(
+            f.decide(RequestContext.of("https://example.com/ads/y.png", "image", "")) is FilterDecision.Block
+        )
+        assertTrue(
+            f.decide(RequestContext.of("https://example.com/ok.png", "image", "")) is FilterDecision.Allow
+        )
+        assertEquals(
+            "dos bloqueos contados para el modulo",
+            2,
+            PluginNetFilter.bloqueosDe("demo.contablock")
+        )
+        assertEquals(
+            "las peticiones permitidas no cuentan",
+            0,
+            PluginNetFilter.sustitucionesDe("demo.contablock")
+        )
+        assertEquals(
+            "un modulo sin bloqueos marca cero",
+            0,
+            PluginNetFilter.bloqueosDe("demo.nada")
+        )
+    }
+
+    @Test
+    fun decideCuentaSustitucionesCompartidasEntreFiltros() {
+        val mp4 = "MP4 de juguete".toByteArray(Charsets.UTF_8)
+        val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
+        val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
+        val m1 = montarSustituto(manifestStats, entrySustituto, recurso, ctx)
+        val m2 = montarSustituto(manifestStats, entrySustituto, recurso, ctx)
+        assertTrue(
+            m1.filtro.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Substitute
+        )
+        assertTrue(
+            m2.filtro.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Substitute
+        )
+        assertEquals(
+            "los contadores son del proceso: comparten pestanas",
+            2,
+            PluginNetFilter.sustitucionesDe("demo.stats")
+        )
+    }
+
+    @Test
+    fun moduloExceptuadoSeAbstieneSinDispararElHook() {
+        val reg = ModuleRegistry(null)
+        val rt = PluginRuntime(reg)
+        instalar(reg, rt, "demo.exceptuado", entryCondicional)
+        val filtro = PluginNetFilter(
+            rt, reg, null, null, null, null,
+            { id, origen -> id == "demo.exceptuado" && origen == "https://a.dev:443" }
+        )
+        assertTrue(
+            "el modulo exceptuado se abstiene",
+            filtro.decide(
+                RequestContext.of("https://cdn.example.org/ads/x.png", "image", "https://a.dev:443/pagina")
+            ) is FilterDecision.Allow
+        )
+        assertEquals(
+            "sin hook no hay bloqueos del modulo",
+            0,
+            PluginNetFilter.bloqueosDe("demo.exceptuado")
+        )
+        assertTrue(
+            "fuera de la excepcion el modulo bloquea",
+            filtro.decide(
+                RequestContext.of("https://cdn.example.org/ads/x.png", "image", "https://b.dev:443/pagina")
+            ) is FilterDecision.Block
         )
     }
 }

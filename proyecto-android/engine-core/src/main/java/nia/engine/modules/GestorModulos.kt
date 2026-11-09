@@ -63,6 +63,14 @@ import nia.engine.profile.ConfigStore
  * (api-version 2 con script declarado); UN script por documento:
  * vive y muere con la navegacion (la cancelacion de su sesion la
  * hace el shell al pintar el documento siguiente).
+ *
+ * T054 v1 (R0284, RES-0122): excepciones de sitio. Alcance gana
+ * excepto (origenes donde un modulo GLOBAL se abstiene);
+ * exceptuarSitio/permitirSitio las anotan (solo alcance GLOBAL,
+ * INVALID_INPUT honesto en SITIO), hacerGlobal las CONSERVA y
+ * estaExceptuado las expone al filtro de red del shell; el TSV
+ * escribe GLOBAL_EXCEPTO para el alcance global con excepciones
+ * (las lineas GLOBAL/SITIO de antes cargan identicas).
  */
 
 /** Estado visible de un modulo en el gestor (ADR-005). */
@@ -84,6 +92,7 @@ data class FichaModulo(
     val estado: EstadoModulo,
     val alcanceGlobal: Boolean,
     val alcanceOrigenes: List<String>,
+    val alcanceExcepciones: List<String>,
     val hooksStartup: Int,
     val hooksNavigate: Int,
     val hooksRequest: Int,
@@ -149,8 +158,14 @@ class GestorModulos(
     private val veredictosDisparo = LinkedHashMap<String, String>()
 
     /** Alcance de un modulo: global o solo estos origenes (ADR-005). */
-    data class Alcance(val global: Boolean, val origenes: Set<String>) {
-        fun aplica(origen: String): Boolean = global || origenes.contains(origen)
+    data class Alcance(
+        val global: Boolean,
+        val origenes: Set<String>,
+        val excepto: Set<String> = emptySet()
+    ) {
+        /** T054 v1: la excepcion veta el origen ANTES del alcance. */
+        fun aplica(origen: String): Boolean =
+            !excepto.contains(origen) && (global || origenes.contains(origen))
     }
 
     init {
@@ -185,6 +200,7 @@ class GestorModulos(
                     estado = estado,
                     alcanceGlobal = alcance.global,
                     alcanceOrigenes = ArrayList(alcance.origenes),
+                    alcanceExcepciones = ArrayList(alcance.excepto),
                     hooksStartup = sesion?.hookCount(PluginEvent.STARTUP) ?: 0,
                     hooksNavigate = sesion?.hookCount(PluginEvent.NAVIGATE) ?: 0,
                     hooksRequest = sesion?.hookCount(PluginEvent.REQUEST) ?: 0,
@@ -520,7 +536,8 @@ class GestorModulos(
         return Outcome.success(Unit)
     }
 
-    /** Devuelve el modulo al alcance global. */
+    /** Devuelve el modulo al alcance global (T054: conserva las
+     *  excepciones de sitio anotadas). */
     @Synchronized
     fun hacerGlobal(id: String): Outcome<Unit> {
         if (!registry.isInstalled(id)) {
@@ -528,10 +545,57 @@ class GestorModulos(
                 ErrorInfo(ErrorCode.INVALID_INPUT, "modulo no instalado: " + id)
             )
         }
-        alcances[id] = Alcance(true, emptySet())
+        alcances[id] = Alcance(true, emptySet(), alcances[id]?.excepto ?: emptySet())
         guardar()
         return Outcome.success(Unit)
     }
+
+    /** T054 v1 (R0284, RES-0122): anota una EXCEPCION de origen en un
+     *  modulo de alcance global (ADR-005): el modulo se abstiene en
+     *  ese origen en onNavigate y en el filtro de red
+     *  (estaExceptuado). En alcance SITIO se rechaza (INVALID_INPUT):
+     *  quitar el origen de la lista ya existe. */
+    @Synchronized
+    fun exceptuarSitio(id: String, origen: String): Outcome<Unit> {
+        if (!registry.isInstalled(id)) {
+            return Outcome.failure(
+                ErrorInfo(ErrorCode.INVALID_INPUT, "modulo no instalado: " + id)
+            )
+        }
+        val actual = alcances[id] ?: Alcance(true, emptySet())
+        if (!actual.global) {
+            return Outcome.failure(
+                ErrorInfo(ErrorCode.INVALID_INPUT, "exceptuar exige alcance global: " + id)
+            )
+        }
+        val nuevos = LinkedHashSet(actual.excepto)
+        nuevos.add(origen)
+        alcances[id] = Alcance(true, actual.origenes, nuevos)
+        guardar()
+        return Outcome.success(Unit)
+    }
+
+    /** T054 v1: retira la excepcion de origen (no-op si no estaba). */
+    @Synchronized
+    fun permitirSitio(id: String, origen: String): Outcome<Unit> {
+        if (!registry.isInstalled(id)) {
+            return Outcome.failure(
+                ErrorInfo(ErrorCode.INVALID_INPUT, "modulo no instalado: " + id)
+            )
+        }
+        val actual = alcances[id] ?: return Outcome.success(Unit)
+        val nuevos = LinkedHashSet(actual.excepto)
+        nuevos.remove(origen)
+        alcances[id] = Alcance(actual.global, actual.origenes, nuevos)
+        guardar()
+        return Outcome.success(Unit)
+    }
+
+    /** T054 v1: consulta de excepcion para el filtro de red (corre
+     *  en hilos de red); sin alcance anotado no hay excepcion. */
+    @Synchronized
+    fun estaExceptuado(id: String, origen: String): Boolean =
+        alcances[id]?.excepto?.contains(origen) == true
 
     /**
      * Notifica onNavigate a los modulos ACTIVOS con alcance en el
@@ -575,7 +639,12 @@ class GestorModulos(
             for ((id, a) in alcances) {
                 sb.append(id).append('\t')
                 if (a.global) {
-                    sb.append("GLOBAL")
+                    if (a.excepto.isEmpty()) {
+                        sb.append("GLOBAL")
+                    } else {
+                        sb.append("GLOBAL_EXCEPTO").append('\t')
+                            .append(a.excepto.joinToString("|"))
+                    }
                 } else {
                     sb.append("SITIO").append('\t').append(a.origenes.joinToString("|"))
                 }
@@ -603,6 +672,14 @@ class GestorModulos(
                             emptySet()
                         }
                         alcances[p[0]] = Alcance(false, origenes)
+                    }
+                    "GLOBAL_EXCEPTO" -> {
+                        val excepto = if (p.size >= 3) {
+                            p[2].split('|').filter { it.isNotEmpty() }.toSet()
+                        } else {
+                            emptySet()
+                        }
+                        alcances[p[0]] = Alcance(true, emptySet(), excepto)
                     }
                     else -> {} // linea corrupta: se ignora
                 }

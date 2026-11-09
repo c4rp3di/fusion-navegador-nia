@@ -257,7 +257,10 @@ class BrowserActivity : Activity() {
                     runtimeModulos, registroModulos, perfil.configModulos,
                     { _ -> contextoModulos.actual(tabId) },
                     { id, nombre -> gestorModulos.recursoSustituible(id, nombre) },
-                    diagModulos
+                    diagModulos,
+                    // T054 v1 (R0284, RES-0122): el filtro consulta las
+                    // excepciones de sitio del host antes de disparar.
+                    { id, origen -> gestorModulos.estaExceptuado(id, origen) }
                 )
             }
         )
@@ -1699,6 +1702,15 @@ class BrowserActivity : Activity() {
         sb.append("alcance: ")
             .append(if (f.alcanceGlobal) "global" else "solo " + f.alcanceOrigenes.size + " origen(es)")
             .append('\n')
+        sb.append("excepciones: ").append(f.alcanceExcepciones.size).append(" origen(es)")
+        if (f.alcanceExcepciones.isNotEmpty()) {
+            sb.append(" (").append(f.alcanceExcepciones.joinToString(", ")).append(")")
+        }
+        sb.append('\n')
+        // T054 v1: estadisticas del filtro (proceso, en memoria).
+        sb.append("filtro: bloqueos=").append(PluginNetFilter.bloqueosDe(f.id))
+            .append(" sustituciones=").append(PluginNetFilter.sustitucionesDe(f.id))
+            .append('\n')
         sb.append("firma: no (paquete demo in-process; el canal .niamod llega con T095)")
         AlertDialog.Builder(this)
             .setTitle("Modulo: " + f.id)
@@ -1709,8 +1721,8 @@ class BrowserActivity : Activity() {
     }
 
     /** Acciones del modulo (T094): activar/desactivar, alcance
-     *  global/sitio (es del HOST, ADR-005) y desinstalar con
-     *  confirmacion explicita (ADR-019). */
+     *  global/sitio y excepciones de sitio (es del HOST, ADR-005;
+     *  T054) y desinstalar con confirmacion explicita (ADR-019). */
     private fun accionesModulo(id: String) {
         val acciones = arrayOf(
             "Activar o desactivar",
@@ -1719,6 +1731,8 @@ class BrowserActivity : Activity() {
             "Actualizar listas ahora",
             "Solo en este sitio",
             "Hacer global",
+            "Exceptuar este sitio",
+            "Quitar excepcion de este sitio",
             "Desinstalar",
             "Ajustes declarados (uimodel)"
         )
@@ -1732,8 +1746,10 @@ class BrowserActivity : Activity() {
                     3 -> actualizarListasModulo(id)
                     4 -> limitarModuloASitio(id)
                     5 -> globalizarModulo(id)
-                    6 -> confirmarDesinstalarModulo(id)
-                    7 -> ajustesDeclaradosModulo(id)
+                    6 -> exceptuarSitioModulo(id)
+                    7 -> quitarExcepcionModulo(id)
+                    8 -> confirmarDesinstalarModulo(id)
+                    9 -> ajustesDeclaradosModulo(id)
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -1909,6 +1925,43 @@ class BrowserActivity : Activity() {
         }
         estado.text = "modulo global: " + id
         traza("modulos", "alcance global: " + id)
+    }
+
+    /** T054 v1 (R0284, RES-0122): excepcion de sitio del HOST
+     *  (ADR-005): el modulo de alcance global se abstiene en el
+     *  origen REAL de la pagina actual, tanto en onNavigate como
+     *  en el filtro de red. */
+    private fun exceptuarSitioModulo(id: String) {
+        val o = origenSitioActual()
+        if (o == null) {
+            estado.text = "sin origen en la pagina actual"
+            return
+        }
+        val clave = o.scheme + "://" + o.host + ":" + o.port
+        val r = gestorModulos.exceptuarSitio(id, clave)
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo exceptuar: " + r.error.safeMessage
+            return
+        }
+        estado.text = "modulo exceptuado en " + o.host
+        traza("modulos", "excepcion sitio: " + id + " (" + o.host + ")")
+    }
+
+    /** T054 v1: retira la excepcion del origen actual (si estaba). */
+    private fun quitarExcepcionModulo(id: String) {
+        val o = origenSitioActual()
+        if (o == null) {
+            estado.text = "sin origen en la pagina actual"
+            return
+        }
+        val clave = o.scheme + "://" + o.host + ":" + o.port
+        val r = gestorModulos.permitirSitio(id, clave)
+        if (r is Outcome.Failure) {
+            estado.text = "no se pudo quitar: " + r.error.safeMessage
+            return
+        }
+        estado.text = "excepcion retirada en " + o.host
+        traza("modulos", "excepcion retirada: " + id + " (" + o.host + ")")
     }
 
     private fun confirmarDesinstalarModulo(id: String) {

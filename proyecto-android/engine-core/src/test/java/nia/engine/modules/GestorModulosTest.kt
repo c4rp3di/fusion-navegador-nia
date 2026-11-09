@@ -39,6 +39,9 @@ import nia.engine.profile.ConfigStore
  * C3 v1 (R0271, RES-0119): recursoSustituible expone los recursos
  * del paquete instalado y los retira con el modulo (gemelo 2
  * corridas, huella 33.33.1f2c43d20ca9851c).
+ * T054 v1 (R0284, RES-0122): excepciones de sitio del alcance
+ * global (exceptuar/permitir/estaExceptuado, TSV GLOBAL_EXCEPTO
+ * retrocompatible) (gemelo 2 corridas, huella 34.34.9b2eb42d).
  */
 class GestorModulosTest {
 
@@ -626,5 +629,104 @@ class GestorModulosTest {
         assertTrue(g.scriptParaNavegacion("https://a.dev:443") != null)
         ok(g.desinstalar("demo.niamod"))
         assertTrue("desinstalar retira el script", g.scriptParaNavegacion("https://a.dev:443") == null)
+    }
+
+    @Test
+    fun exceptuarSitioAbstieneEnEseOrigen() {
+        val g = nuevo()
+        ok(g.instalarDemo())
+        ok(g.exceptuarSitio("demo.observador", "https://a.test:443"))
+        assertEquals(
+            "el origen exceptuado no dispara",
+            0,
+            g.dispararNavegar("https://a.test:443", "https://a.test:443").disparados
+        )
+        assertEquals(
+            "los demas origenes siguen disparando",
+            1,
+            g.dispararNavegar("https://b.test:443", "https://b.test:443").disparados
+        )
+        val f = g.ficha("demo.observador")!!
+        assertEquals(listOf("https://a.test:443"), f.alcanceExcepciones)
+    }
+
+    @Test
+    fun exceptuarSitioExigeAlcanceGlobal() {
+        val g = nuevo()
+        ok(g.instalarDemo())
+        ok(g.soloEnEsteSitio("demo.observador", "https://a.test:443"))
+        val r = g.exceptuarSitio("demo.observador", "https://a.test:443")
+        assertTrue(r is Outcome.Failure)
+        assertEquals(
+            ErrorCode.INVALID_INPUT,
+            (r as Outcome.Failure).error.code
+        )
+    }
+
+    @Test
+    fun permitirSitioRetiraLaExcepcion() {
+        val g = nuevo()
+        ok(g.instalarDemo())
+        ok(g.exceptuarSitio("demo.observador", "https://a.test:443"))
+        ok(g.permitirSitio("demo.observador", "https://a.test:443"))
+        assertEquals(
+            "sin excepcion el modulo vuelve a disparar",
+            1,
+            g.dispararNavegar("https://a.test:443", "https://a.test:443").disparados
+        )
+        val f = g.ficha("demo.observador")!!
+        assertTrue(f.alcanceExcepciones.isEmpty())
+    }
+
+    @Test
+    fun hacerGlobalConservaLasExcepciones() {
+        val g = nuevo()
+        ok(g.instalarDemo())
+        ok(g.exceptuarSitio("demo.observador", "https://a.test:443"))
+        ok(g.hacerGlobal("demo.observador"))
+        assertTrue(
+            "hacer global no borra las excepciones",
+            g.estaExceptuado("demo.observador", "https://a.test:443")
+        )
+    }
+
+    @Test
+    fun excepcionesPersistenEntreInstancias() {
+        val dir = Files.createTempDirectory("gestor-test").toFile()
+        try {
+            val almacen = File(dir, "modulos.tsv")
+            val g1 = nuevo(almacen)
+            ok(g1.instalarDemo())
+            ok(g1.exceptuarSitio("demo.observador", "https://a.test:443"))
+            ok(g1.exceptuarSitio("demo.observador", "https://b.test:443"))
+            val g2 = nuevo(almacen)
+            ok(g2.instalarDemo())
+            val f = g2.ficha("demo.observador")!!
+            assertEquals(2, f.alcanceExcepciones.size)
+            assertTrue(g2.estaExceptuado("demo.observador", "https://a.test:443"))
+            assertEquals(
+                "el origen sin excepcion sigue disparando",
+                1,
+                g2.dispararNavegar("https://c.test:443", "https://c.test:443").disparados
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun tsvViejoSinExcepcionesCargaIgual() {
+        val dir = Files.createTempDirectory("gestor-test").toFile()
+        try {
+            val almacen = File(dir, "modulos.tsv")
+            almacen.writeText("demo.observador\tGLOBAL\n")
+            val g = nuevo(almacen)
+            ok(g.instalarDemo())
+            val f = g.ficha("demo.observador")!!
+            assertTrue(f.alcanceGlobal)
+            assertTrue(f.alcanceExcepciones.isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }
