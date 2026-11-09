@@ -38,7 +38,6 @@ import nia.engine.layout.LayoutEngine
 import nia.engine.layout.LayoutResult
 import nia.engine.modules.CosmeticosModulos
 import nia.engine.modules.EstilosModulos
-import nia.engine.modules.ListaCosmetica
 import nia.engine.modules.PluginRuntime
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
@@ -140,7 +139,7 @@ class PaintView(context: Context) : View(context) {
     /** T053 v1 (R0289, RES-0123): lista cosmetica del modulo ganador
      *  ya PARSEADA para el host del documento (null = sin lista); el
      *  overlay la aplica el layout en el MISMO pase de display:none. */
-    private var listaCosmeticos: ListaCosmetica? = null
+    private var listaCosmeticos: CosmeticosModulos.ListaCosmetica? = null
 
     /** T053 v1: host del documento al que aplica la lista cosmetica. */
     private var hostCosmeticos: String? = null
@@ -432,7 +431,7 @@ class PaintView(context: Context) : View(context) {
      *  tal cual); el display:none casado viaja al layout en el MISMO
      *  pase. */
     private fun styleOfDe(computed: CssComputedStyle): (DomNode, String) -> String? {
-        val ocultosHoja = if (hojaModulo != null) EstilosModulos.ocultos(rootDoc, hojaModulo) else emptySet()
+        val ocultosHoja = if (hojaModulo != null) EstilosModulos.ocultos(rootDoc, hojaModulo!!) else emptySet()
         val ocultosCosmeticos = if (listaCosmeticos != null && hostCosmeticos != null) {
             CosmeticosModulos.ocultos(rootDoc, listaCosmeticos!!, hostCosmeticos!!)
         } else {
