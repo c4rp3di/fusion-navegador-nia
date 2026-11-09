@@ -82,7 +82,7 @@ class PluginNetFilter(
         for (id in registry.installedIds()) {
             val session = runtime.sessionOf(id) ?: continue
             if (config != null && !config.enabled(id)) continue
-            if (exceptuado != null && origenCtx != null && exceptuado(id, origenCtx)) continue
+            if (origenCtx != null && exceptuado?.invoke(id, origenCtx) == true) continue
             if (session.hookCount(PluginEvent.REQUEST) == 0) continue
             val fired = session.fire(PluginEvent.REQUEST, context, contextoDe?.invoke(context))
             if (fired is Outcome.Success) {
