@@ -95,17 +95,19 @@ class PluginNetFilterTest {
 
     private class MontajeSustituto(val filtro: PluginNetFilter, val inspector: InspectorSession)
 
-    /** Monta el modulo con el manifiesto dado y el filtro C3 completo. */
+    /** Monta el modulo con el manifiesto dado y el filtro C3 completo
+     *  (id del modulo; demo.api2 por defecto). */
     private fun montarSustituto(
         manifiesto: String,
         entry: String,
         recurso: RecursoSustituto?,
-        ctx: EventContext?
+        ctx: EventContext?,
+        id: String = "demo.api2"
     ): MontajeSustituto {
         val reg = ModuleRegistry(null)
         val rt = PluginRuntime(reg)
         assertTrue(reg.install(manifiesto) is Outcome.Success)
-        assertTrue(rt.load("demo.api2", entry) is Outcome.Success)
+        assertTrue(rt.load(id, entry) is Outcome.Success)
         val inspector = InspectorSession(FakeClock(9L))
         val filtro = PluginNetFilter(
             rt, reg, null,
@@ -551,8 +553,8 @@ class PluginNetFilterTest {
         val mp4 = "MP4 de juguete".toByteArray(Charsets.UTF_8)
         val recurso = RecursoSustituto("juguete.mp4", mp4, sha256Hex(mp4))
         val ctx = EventContext("s-demo", "t-1", "main", "d-1-1", 1L)
-        val m1 = montarSustituto(manifestStats, entrySustituto, recurso, ctx)
-        val m2 = montarSustituto(manifestStats, entrySustituto, recurso, ctx)
+        val m1 = montarSustituto(manifestStats, entrySustituto, recurso, ctx, "demo.stats")
+        val m2 = montarSustituto(manifestStats, entrySustituto, recurso, ctx, "demo.stats")
         assertTrue(
             m1.filtro.decide(RequestContext.of("https://cdn.example.org/v.mp4", "fetch", "")) is FilterDecision.Substitute
         )
