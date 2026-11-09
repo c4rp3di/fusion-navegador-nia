@@ -600,7 +600,6 @@ class GestorModulosTest {
         val bytes = paqueteNiamod(
             manifiesto, kp, listOf("datos/doc.js" to js.toByteArray(Charsets.UTF_8)),
             entry = "nia.onNavigate(function (url) { return \"script\"; });\n"
-"
         )
         ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
         g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
@@ -619,9 +618,8 @@ class GestorModulosTest {
             "category = background\ncapabilities = observar, modificar\napi-version = 2\n" +
             "script = doc.js\nauthor-key = " + spki(kp) + "\n"
         val bytes = paqueteNiamod(
+            manifiesto, kp, listOf("datos/doc.js" to js.toByteArray(Charsets.UTF_8)),
             entry = "nia.onNavigate(function (url) { return \"script\"; });\n"
-"
-            entry = "nia.onNavigate(function (url) { return "script"; });\n"
         )
         ok(g.instalarPaquete(bytes, AprobacionPaquete(huella(kp), true)))
         g.dispararNavegar("https://a.dev:443", "https://a.dev/pagina")
