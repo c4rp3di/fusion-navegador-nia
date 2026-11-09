@@ -392,7 +392,7 @@ class PluginNetFilterTest {
         val carga = rt.load(
             "demo.api2",
             "nia.onRequest(function (c) { return 'n=' + nia.diag.evento('info', 'x'); });",
-            EntornoModulo(null, UiModelDeclarado(emptyList(), emptyList(), emptyList()), emptyMap(), diag)
+            EntornoModulo(null, UiModelDeclarado(emptyList(), emptyList(), emptyMap()), emptyMap(), diag)
         )
         assertTrue(carga is Outcome.Success)
         val f = PluginNetFilter(rt, reg)
