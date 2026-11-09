@@ -641,6 +641,7 @@ class PluginNetFilterTest {
             assertFalse("guardar limpia pendientes", PluginNetFilter.hayContadoresPendientes())
             assertEquals(1, PluginNetFilter.bloqueosDe("demo.persist"))
             assertEquals("demo.persist\t1\t0\n", archivo.readText())
+            PluginNetFilter.persistirContadoresEn(null)
             PluginNetFilter.reiniciarContadores()
             assertEquals("reiniciar borra en memoria", 0, PluginNetFilter.bloqueosDe("demo.persist"))
             PluginNetFilter.persistirContadoresEn(archivo)
