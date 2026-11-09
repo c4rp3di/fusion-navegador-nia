@@ -18,7 +18,7 @@ import nia.engine.html.DomNode
  */
 class CosmeticosModulosTest {
 
-    private fun valida(texto: String): ListaCosmetica {
+    private fun valida(texto: String): CosmeticosModulos.ListaCosmetica {
         val r = CosmeticosModulos.parse(texto)
         assertTrue("la lista valida parsea", r != null)
         return r!!
