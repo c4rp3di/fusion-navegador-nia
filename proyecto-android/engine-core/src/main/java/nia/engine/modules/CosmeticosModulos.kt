@@ -32,8 +32,7 @@ import nia.engine.html.DomNode
  */
 object CosmeticosModulos {
 
-    /** Tope de lineas de la lista (split('
-'), fail-closed). */
+    /** Tope de lineas de la lista (split('\n'), fail-closed). */
     const val MAX_LINEAS = 4096
 
     /** Tope de selectores de la lista (suma de todas las reglas). */
@@ -62,8 +61,7 @@ object CosmeticosModulos {
      * reglas validas.
      */
     fun parse(texto: String): ListaCosmetica? {
-        val lineas = texto.split('
-')
+        val lineas = texto.split('\n')
         if (lineas.size > MAX_LINEAS) return null
         val reglas = ArrayList<ReglaCosmetica>()
         val excepciones = HashSet<String>()
