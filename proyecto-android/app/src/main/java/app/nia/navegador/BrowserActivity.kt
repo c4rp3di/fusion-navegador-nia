@@ -384,7 +384,7 @@ class BrowserActivity : Activity() {
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
-    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -542,6 +542,34 @@ class BrowserActivity : Activity() {
                 "Limite del cache HTTP",
                 "El cache vive con presupuesto LRU fijo del motor (T026 v3); ajustar su tamano llega con una version siguiente",
                 TipoOpcion.TEXTO, "fijo", disponible = false
+            )
+        )
+        // T093 v9 (R0340, RES-0138): secciones Media y Perfiles
+        // honestas: el motor de media (T036) aun no se integra en las
+        // paginas del navegador y el gestor de perfiles multiples
+        // requiere aceptacion especifica de aislamiento (T112).
+        s.registrar(
+            OpcionAjuste(
+                "media.autoplay", "Media",
+                "Reproduccion automatica",
+                "El MediaEngine del motor (T036) aun no se integra en las paginas del navegador; sin autoplay que regular",
+                TipoOpcion.BOOL, "true", disponible = false
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "media.subtitulos", "Media",
+                "Subtitulos",
+                "Los subtitulos WebVTT/SRT viven en el MediaEngine del motor (T036 v2); su UI en el navegador llega con T104",
+                TipoOpcion.BOOL, "false", disponible = false
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "perfiles.gestor", "Perfiles",
+                "Gestor de perfiles",
+                "Multiples perfiles con aislamiento llegan con T112 y requieren aceptacion especifica; hoy hay perfil normal persistido e incognito en memoria",
+                TipoOpcion.BOOL, "false", disponible = false
             )
         )
         // T078 v1 (R0199, RES-0094): la seccion Gestos del motor; los
