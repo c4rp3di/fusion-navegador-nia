@@ -285,6 +285,13 @@ import nia.engine.workers.VisorWorkers
  * proceso en background puede morir y el audio con el; sin
  * re-request de focus por cada play (v2) y sin PiP (T109 v2).
  *
+ * T109 v2 (R0366, RES-0148): politica de media de T109: la
+ * reproduccion in-page queda ATADA a su pestana (pestanaMedia): cerrar
+ * esa pestana para el player (sin reproduccion huerfana) y el Fire
+ * TOTAL del tipo de esa pestana tambien lo para; el Fire de sesion NO
+ * toca la reproduccion (politica explicita). El player standalone
+ * (menu 37) no esta atado a pestana alguna y sigue igual.
+ *
  * Exclusiones v6: sin grupos ni previews pintadas, la sesion de
  * pestanas NORMALES ya se restaura tras proceso muerto (T109 v1; el
  * incognito JAMAS: vive solo en memoria), Fire solo del perfil del tipo
@@ -455,6 +462,11 @@ class BrowserActivity : Activity() {
     private var pausadoPorFocus = false
     private var enDuck = false
     private var volumenPreDuck = 1.0
+
+    /** T109 v2 (R0366, RES-0148): pestana que origino la media in-page
+     *  (null si el player es standalone): cerrar la pestana o el Fire
+     *  TOTAL de su tipo paran la reproduccion (politica de T109). */
+    private var pestanaMedia: Long? = null
 
     /** T092 v2 (R0358, RES-0145): puente REAL de las paginas (TK-111-1). */
     private val puenteMediaPagina = PuenteMediaPagina()
@@ -2863,6 +2875,13 @@ class BrowserActivity : Activity() {
         val titulo = tabs.tarjeta(id)?.title ?: ""
         val cierre = tabs.cerrar(id) ?: return
         red.borrar(id)
+        // T109 v2 (R0366, RES-0148): la politica de media para la
+        // reproduccion in-page al morir su pestana (nunca huerfana).
+        val mediaParada = playerAbierto && id == pestanaMedia
+        if (mediaParada) {
+            cerrarPlayer()
+            traza("media", "pestana del medio cerrada: player parado")
+        }
         val mensaje = if (cierre.perfilBorrado) {
             traza("tabs", "ultima incognito cerrada: perfil borrado (wipe)")
             "ultima incognito cerrada: perfil borrado de memoria"
@@ -2876,7 +2895,7 @@ class BrowserActivity : Activity() {
         } else {
             cambiarPestana(activa)
         }
-        estado.text = mensaje
+        estado.text = if (mediaParada) mensaje + " | media de la pagina parada" else mensaje
         avisoCierre.removeCallbacks(esconderAviso)
         if (cierre.perfilBorrado) {
             avisoCierre.visibility = LinearLayout.GONE
@@ -3730,6 +3749,9 @@ class BrowserActivity : Activity() {
      *  viene del onPrepared REAL del backend; NUNCA se inventa una
      *  duracion ni se da por lista la fuente antes de tiempo. */
     private fun abrirPlayer(origen: String, fuente: String) {
+        // T109 v2 (R0366, RES-0148): el standalone NO esta atado a
+        // pestana; "pagina" la fija el puente antes de llegar aqui.
+        if (origen != "pagina") pestanaMedia = null
         val contenedor = LinearLayout(this)
         contenedor.orientation = LinearLayout.VERTICAL
         val superficie = SurfaceView(this)
@@ -3876,7 +3898,12 @@ class BrowserActivity : Activity() {
      *  eventos asincronos hacia la pagina (v3). */
     private inner class PuenteMediaPagina : MediaPuente {
         override fun reproducir(url: String, esVideo: Boolean) {
-            runOnUiThread { abrirPlayer("pagina", url) }
+            runOnUiThread {
+                // T109 v2 (R0366, RES-0148): la media in-page queda
+                // atada a la pestana activa que la pidio.
+                pestanaMedia = tabs.activa()
+                abrirPlayer("pagina", url)
+            }
         }
 
         override fun pausar() {
@@ -3915,8 +3942,14 @@ class BrowserActivity : Activity() {
         playerAbierto = false
         media.close()
         soltarAudioFocus()
+        pestanaMedia = null
         traza("media", "player cerrado")
     }
+
+    /** T109 v2 (R0366, RES-0148): tipo de la pestana que origino la
+     *  media in-page; null si el player es standalone o sin pestana. */
+    private fun tipoPestanaMedia(): ProfileKind? =
+        pestanaMedia?.let { id -> tabs.tarjeta(id)?.kind }
 
     /** T065 v1 (R0364, RES-0147): pide el audio focus REAL del sistema
      *  (USAGE_MEDIA en API 26+ con AudioFocusRequest; STREAM_MUSIC
@@ -4651,7 +4684,16 @@ class BrowserActivity : Activity() {
         }
         val linea = if (nivel == FireLevel.SESION) "sesion" else "total"
         traza("fire", linea + " " + tipo.toString().lowercase() + " " + resumen)
-        estado.text = "fire " + linea + " aplicado: " + resumen
+        // T109 v2 (R0366, RES-0148): el Fire TOTAL del tipo de la
+        // pestana que origino la media in-page TAMBIEN la para; el de
+        // sesion NO toca la reproduccion (politica explicita).
+        if (playerAbierto && nivel == FireLevel.TOTAL && tipo == tipoPestanaMedia()) {
+            cerrarPlayer()
+            traza("media", "fire total paro la media in-page")
+            estado.text = "fire " + linea + " aplicado: " + resumen + " | media de la pagina parada"
+        } else {
+            estado.text = "fire " + linea + " aplicado: " + resumen
+        }
         if (nivel == FireLevel.TOTAL && tipo == ProfileKind.NORMAL) {
             val borradas = historial.limpiar()
             traza("hist", "fire total: historial limpiado (" + borradas + ")")
