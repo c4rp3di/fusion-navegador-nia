@@ -373,6 +373,14 @@ class BrowserActivity : Activity() {
      * notificaciones quedan para el smoke en dispositivo. */
     private val poolDescargas = Executors.newFixedThreadPool(2)
     private val descargas = DownloadEngine(PlatformDownloadTransport(), poolDescargas, maxConcurrent = 2, maxRetries = 1)
+
+    /** T072 (R0323, RES-0131): pool acotado para las navegaciones del
+     *  shell (resto del hallazgo 3.1 del informe externo: un Thread
+     *  nuevo por navegacion, SIN tope). Dos hilos: la politica del
+     *  TabsManager navega SOLO la pestana activa y dos dan holgura
+     *  sin crecer JAMAS con las navegaciones. El Stop y cerrar siguen
+     *  cancelando de verdad por generacion (T011 v5). */
+    private val poolNavegacion = Executors.newFixedThreadPool(2)
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
@@ -918,7 +926,7 @@ class BrowserActivity : Activity() {
         progreso.setFraccion(0.2f)
         traza("nav", "navegar " + hostDe(url))
         val ctxModulo = if (id == null) null else contextoModulos.nuevaNavegacion(id)
-        Thread {
+        poolNavegacion.execute {
             val inicio = clock.nowMillis()
             val o = nc.navigate(url)
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
@@ -941,7 +949,7 @@ class BrowserActivity : Activity() {
                     if (resumenModulos.isNotEmpty()) estado.append(" | " + resumenModulos)
                 }
             }
-        }.start()
+        }
     }
 
     private fun navegarOutcome(accion: (NavController) -> NavOutcome?) {
@@ -957,7 +965,7 @@ class BrowserActivity : Activity() {
         progreso.setFraccion(0.2f)
         traza("nav", "back/forward")
         val ctxModulo = if (id == null) null else contextoModulos.nuevaNavegacion(id)
-        Thread {
+        poolNavegacion.execute {
             val inicio = clock.nowMillis()
             val o = accion(nc)
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
@@ -984,7 +992,7 @@ class BrowserActivity : Activity() {
                     if (resumenModulos.isNotEmpty()) estado.append(" | " + resumenModulos)
                 }
             }
-        }.start()
+        }
     }
 
     private fun manejaFallo(f: NavOutcome.Failed, dominioImplicito: Boolean, textoOriginal: String?) {
