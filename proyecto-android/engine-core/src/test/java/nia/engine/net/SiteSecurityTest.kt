@@ -87,6 +87,7 @@ class SiteSecurityTest {
         assertEquals(
             listOf(
                 "Conexion NO cifrada (HTTP)",
+                PanelIdentidad.AVISO_SIN_CIFRAR,
                 "Sin certificado que mostrar",
                 PanelIdentidad.NO_GARANTIZA_CONFIANZA
             ),
@@ -296,5 +297,12 @@ class SiteSecurityTest {
         assertTrue(p.subresources.isNotEmpty())
         assertEquals("blocked-mixed-content", p.subresources[0].outcome)
         assertTrue(t.peticiones.none { it.contains("m.test") })
+    }
+
+    @Test
+    fun panelHttpAvisoClaroTrasElTitulo() {
+        val lineas = PanelIdentidad.lineas("http://a.test/", null)
+        assertEquals("Conexion NO cifrada (HTTP)", lineas[0])
+        assertEquals(PanelIdentidad.AVISO_SIN_CIFRAR, lineas[1])
     }
 }

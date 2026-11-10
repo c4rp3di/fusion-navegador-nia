@@ -29,6 +29,9 @@ object PanelIdentidad {
 
     const val NO_GARANTIZA_CONFIANZA = "El cifrado no hace que el sitio sea de confiar"
 
+    /** T084 v2 (R0319, RES-0129): aviso claro del cleartext (decision del usuario R0318). */
+    const val AVISO_SIN_CIFRAR = "AVISO: esta pagina viaja sin cifrar; cualquiera en la red puede leerla o cambiarla"
+
     fun lineas(url: String, tls: TlsInfo?): List<String> {
         val bajo = url.trim().lowercase()
         if (bajo.startsWith("https://")) {
@@ -54,6 +57,7 @@ object PanelIdentidad {
         if (bajo.startsWith("http://")) {
             return listOf(
                 "Conexion NO cifrada (HTTP)",
+                AVISO_SIN_CIFRAR,
                 "Sin certificado que mostrar",
                 NO_GARANTIZA_CONFIANZA
             )

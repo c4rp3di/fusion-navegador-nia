@@ -3,8 +3,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- T084 v2 (R0319, RES-0129): decision del usuario (R0318: abrir
+         pero avisar claro). Sin esto, Android (targetSdk 34) tumba el
+         socket http en silencio: el motor acepta http pero el SO lo
+         bloquea (hallazgo 3.6 del informe externo). El aviso claro vive
+         en el panel de identidad (PanelIdentidad.AVISO_SIN_CIFRAR) y
+         mixed-content y la degradacion https a http siguen prohibidos. -->
     <application
         android:label="Navegador NIA"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <!-- T072 v2 (R0168, RES-0078): el navegador es la pantalla inicial;
