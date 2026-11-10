@@ -532,11 +532,14 @@ class BrowserActivity : Activity() {
                 TipoOpcion.ENTERO, "40", 10L, 200L
             )
         )
+        // Arreglo Ajustes (R0382, RES-0153): las descripciones de estas opciones
+        // caben en MAX_CAMPO (64) del SettingsManager: una descripcion
+        // mas larga se rechaza EN SILENCIO y la opcion JAMAS se registra.
         s.registrar(
             OpcionAjuste(
                 "limpieza.historial", "Limpieza",
                 "Borrar historial",
-                "Borra el rango elegido del historial de pestanas normales (hoy, 7 dias, 30 dias o todo) tras confirmar; la opcion vuelve a nada",
+                "Borra el rango elegido (hoy, 7/30 dias o todo) tras confirmar",
                 TipoOpcion.ELECCION, "nada",
                 elecciones = listOf("nada", "hoy", "7-dias", "30-dias", "todo")
             )
@@ -545,7 +548,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "limpieza.fire-sesion", "Limpieza",
                 "Fire de sesion",
-                "Borra el sessionStorage del perfil del tipo de pestana activa tras confirmar (ADR-019)",
+                "Borra el sessionStorage del perfil activo tras confirmar",
                 TipoOpcion.ELECCION, "conservar",
                 elecciones = listOf("conservar", "ejecutar")
             )
@@ -554,7 +557,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "limpieza.fire-total", "Limpieza",
                 "Fire total",
-                "Borra TODO el estado del perfil del tipo activo tras confirmar (ADR-019); el historial muere si el tipo es normal",
+                "Borra TODO el estado del perfil activo (ADR-019)",
                 TipoOpcion.ELECCION, "conservar",
                 elecciones = listOf("conservar", "ejecutar")
             )
@@ -563,7 +566,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "limpieza.retencion", "Limpieza",
                 "Retencion del historial",
-                "Al arrancar y al cambiar este ajuste se borra del historial lo mas viejo que la ventana (7, 30 o 90 dias; nada conserva todo)",
+                "Borra al arrancar lo mas viejo que la ventana (7/30/90 dias)",
                 TipoOpcion.ELECCION, "nada",
                 elecciones = listOf("nada", "7-dias", "30-dias", "90-dias")
             )
@@ -572,7 +575,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "limpieza.cache", "Limpieza",
                 "Borrar cache",
-                "Borra SOLO el cache HTTP de los perfiles vivos con conteo (cookies, storage e historial viven; no es Fire)",
+                "Borra SOLO el cache HTTP de los perfiles vivos con conteo",
                 TipoOpcion.ELECCION, "conservar",
                 elecciones = listOf("conservar", "ejecutar")
             )
@@ -600,7 +603,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "buscador.predeterminado", "Busqueda",
                 "Buscador del omnibox",
-                "Motor de la busqueda del omnibox y del fallback de DNS (duckduckgo o wikipedia)",
+                "Motor del omnibox y fallback DNS (duckduckgo o wikipedia)",
                 TipoOpcion.ELECCION, "duckduckgo", elecciones = listOf("duckduckgo", "wikipedia")
             )
         )
@@ -661,7 +664,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "red.busqueda-dns", "Red",
                 "Busqueda al fallar el DNS",
-                "Proponer buscar el texto en DuckDuckGo cuando un dominio implicito no resuelve; apagada va directa a la pagina de error",
+                "Buscar en DDG el texto cuando el dominio implicito no resuelve",
                 TipoOpcion.BOOL, "true"
             )
         )
@@ -669,7 +672,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "red.dnt", "Red",
                 "Do Not Track (DNT)",
-                "El motor aun no envia cabeceras DNT en sus peticiones; llega con el proximo hito de fetch",
+                "El motor aun no envia cabeceras DNT; llega con el hito de fetch",
                 TipoOpcion.BOOL, "false", disponible = false
             )
         )
@@ -677,7 +680,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "red.cache-limite", "Red",
                 "Limite del cache HTTP",
-                "El cache vive con presupuesto LRU fijo del motor (T026 v3); ajustar su tamano llega con una version siguiente",
+                "Presupuesto LRU fijo del motor (T026 v3); ajustar llega despues",
                 TipoOpcion.TEXTO, "fijo", disponible = false
             )
         )
@@ -691,7 +694,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "media.autoplay", "Media",
                 "Reproduccion automatica",
-                "El MediaEngine del motor (T036) no se integra en las paginas del navegador (player standalone en el menu desde T092 v1); sin autoplay que regular",
+                "El MediaEngine (T036) no se integra en paginas; sin autoplay",
                 TipoOpcion.BOOL, "true", disponible = false
             )
         )
@@ -699,7 +702,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "media.subtitulos", "Media",
                 "Subtitulos",
-                "Los subtitulos WebVTT/SRT viven en el MediaEngine del motor (T036 v2); su UI en el navegador llega con T104",
+                "Subtitulos WebVTT/SRT del MediaEngine (T036 v2); UI con T104",
                 TipoOpcion.BOOL, "false", disponible = false
             )
         )
@@ -707,7 +710,7 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "perfiles.gestor", "Perfiles",
                 "Gestor de perfiles",
-                "Multiples perfiles con aislamiento llegan con T112 y requieren aceptacion especifica; hoy hay perfil normal persistido e incognito en memoria",
+                "Multiples perfiles con aislamiento requieren aceptacion (T112)",
                 TipoOpcion.BOOL, "false", disponible = false
             )
         )
