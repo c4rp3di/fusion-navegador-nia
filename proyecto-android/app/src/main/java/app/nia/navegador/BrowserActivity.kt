@@ -3,12 +3,14 @@ package app.nia.navegador
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.PictureInPictureParams
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -28,6 +30,7 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import android.util.Log
+import android.util.Rational
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
@@ -4652,6 +4655,57 @@ class BrowserActivity : Activity() {
         if (playerAbierto) cerrarPlayer()
         soltarAudioFocus()
         super.onDestroy()
+    }
+
+    /** T109 v3 (R0388, RES-0155): al irse el usuario (inicio o
+     *  recientes) con el player abierto y reproduciendo, entra en
+     *  PiP para que el video siga en una ventana pequena; la
+     *  reproduccion de fondo ya vive en T065 v2. */
+    override fun onUserLeaveHint() {
+        if (playerAbierto && media.state() == MediaState.PLAYING) entrarPip()
+        super.onUserLeaveHint()
+    }
+
+    /** T109 v3 (R0388, RES-0155): proporcion REAL del video del
+     *  backend (16:9 sin video, acotada a los limites del sistema);
+     *  JAMAS se inventa una proporcion. */
+    private fun entrarPip() {
+        val dim = backendMedia.tamanoVideo()
+        val racional = if (dim != null && dim.first > 0 && dim.second > 0) {
+            val propor = dim.first.toDouble() / dim.second
+            when {
+                propor < 0.41841 -> Rational(41841, 100000)
+                propor > 2.3925 -> Rational(23925, 10000)
+                else -> Rational(dim.first, dim.second)
+            }
+        } else {
+            Rational(16, 9)
+        }
+        try {
+            enterPictureInPictureMode(
+                PictureInPictureParams.Builder().setAspectRatio(racional).build()
+            )
+            traza("media", "pip activado")
+        } catch (noPip: IllegalStateException) {
+            traza("media", "pip no disponible")
+        }
+    }
+
+    /** T109 v3 (R0388, RES-0155): en PiP la ventana se encoge con el
+     *  dialogo del player dentro; SIN controles overlay propios en
+     *  v3: los del sistema (notificacion/lockscreen, T065 v2)
+     *  siguen a mano. */
+    override fun onPictureInPictureModeChanged(enPip: Boolean, nueva: Configuration) {
+        super.onPictureInPictureModeChanged(enPip, nueva)
+        traza("media", if (enPip) "en pip" else "fuera de pip")
+    }
+
+    /** T109 v3 (R0388, RES-0155): rotacion/split SIN recrear la
+     *  activity (configChanges en el manifest): la UI programatica
+     *  se re-maquetea sola y el player NO muere al girar. */
+    override fun onConfigurationChanged(nueva: Configuration) {
+        super.onConfigurationChanged(nueva)
+        traza("media", "cambio de configuracion (rotacion/split)")
     }
 
     /** T065 v2 (R0385, RES-0154): permiso de notificaciones (33+);

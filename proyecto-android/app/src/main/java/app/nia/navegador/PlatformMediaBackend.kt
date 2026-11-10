@@ -35,6 +35,16 @@ class PlatformMediaBackend(private val context: Context) : MediaBackend {
         player?.setSurface(s)
     }
 
+    /** T109 v3 (R0388, RES-0155): tamano REAL del video del
+     *  MediaPlayer para la proporcion del PiP; null sin video o sin
+     *  fuente preparada (JAMAS se inventa). */
+    fun tamanoVideo(): Pair<Int, Int>? {
+        val p = player ?: return null
+        val ancho = p.videoWidth
+        val alto = p.videoHeight
+        return if (ancho > 0 && alto > 0) ancho to alto else null
+    }
+
     override fun prepare(source: MediaSource) {
         release()
         val mp = MediaPlayer()

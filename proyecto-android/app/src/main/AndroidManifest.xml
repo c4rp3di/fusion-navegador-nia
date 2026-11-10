@@ -24,9 +24,14 @@
 
         <!-- T072 v2 (R0168, RES-0078): el navegador es la pantalla inicial;
              las demos del motor quedan en MainActivity, abierta del menu. -->
+        <!-- T109 v3 (R0388, RES-0155): PiP soportado para el player y
+             rotacion/split SIN recrear la activity (la UI programatica
+             se re-maquetea sola y el player NO muere al girar). -->
         <activity
             android:name=".BrowserActivity"
-            android:exported="true">
+            android:exported="true"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
