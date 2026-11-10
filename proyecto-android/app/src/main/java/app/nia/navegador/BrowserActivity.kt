@@ -112,6 +112,8 @@ import nia.engine.net.RegistroRed
 import nia.engine.omnibox.OmniboxInput
 import nia.engine.omnibox.OmniboxSugerencias
 import nia.engine.omnibox.Sugerencia
+import nia.engine.profile.BackupInfo
+import nia.engine.profile.BackupsPerfil
 import nia.engine.profile.FireLevel
 import nia.engine.profile.ProfileKind
 import nia.engine.settings.OpcionAjuste
@@ -373,6 +375,21 @@ class BrowserActivity : Activity() {
     /** T080 v1 (RES-0097): preferencias por sitio persistidas en
      *  sitios.tsv (clave = origen, NUNCA la URL completa). */
     private val sitios by lazy { SitiosManager(File(filesDir, "sitios.tsv")) }
+
+    /** T112 v2 (R0379, RES-0152): backups del perfil NORMAL con el
+     *  BackupsPerfil del motor (v1, verificado): SOLO areas de la
+     *  lista permitida (marcadores, historial, ajustes, sitios);
+     *  cookies, storage, IndexedDb y secretos JAMAS entran. */
+    private val backupsPerfil by lazy {
+        BackupsPerfil(
+            File(filesDir, "backups-perfil"),
+            setOf("marcadores", "historial", "ajustes", "sitios")
+        )
+    }
+
+    /** Staging de la restauracion (T112 v2): aplicar lo que hay
+     *  aqui es SIEMPRE decision explicita del usuario. */
+    private val stagingCopias by lazy { File(filesDir, "backups-staging") }
 
     /** T089 v1 (RES-0109): broker de permisos por sitio del motor
      *  (permisos.tsv, solo decisiones permanentes): sin backend
@@ -692,6 +709,26 @@ class BrowserActivity : Activity() {
                 "Gestor de perfiles",
                 "Multiples perfiles con aislamiento llegan con T112 y requieren aceptacion especifica; hoy hay perfil normal persistido e incognito en memoria",
                 TipoOpcion.BOOL, "false", disponible = false
+            )
+        )
+        // T112 v2 (R0379, RES-0152): seccion Copias sobre el
+        // BackupsPerfil del motor (v1 verificado): crear y gestionar
+        // son acciones de un uso (patron Limpieza) y JAMAS viajan
+        // cookies, storage, IndexedDb ni secretos.
+        s.registrar(
+            OpcionAjuste(
+                "copias.crear", "Copias",
+                "Crear copia del perfil",
+                "Copia de marcadores, historial, ajustes y sitios (sin secretos)",
+                TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "copias.gestionar", "Copias",
+                "Copias guardadas",
+                "Lista las copias validas: restaurar o borrar",
+                TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
             )
         )
         // T078 v1 (R0199, RES-0094): la seccion Gestos del motor; los
@@ -4975,6 +5012,245 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** Seccion Copias (T112 v2): acciones de un uso sobre el
+     *  BackupsPerfil del motor (v1, verificado); como en Limpieza,
+     *  la opcion JAMAS queda colgada fuera de su defecto. */
+    private fun elegirCopias(op: OpcionAjuste) {
+        AlertDialog.Builder(this)
+            .setTitle(op.titulo)
+            .setMessage(op.descripcion)
+            .setItems(op.elecciones.toTypedArray()) { _, cual ->
+                aplicarCopias(op, op.elecciones[cual])
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Ejecuta la accion de Copias (T112 v2); el defecto (nada) no
+     *  ejecuta nada, como en Limpieza. */
+    private fun aplicarCopias(op: OpcionAjuste, eleccion: String) {
+        if (eleccion == op.defecto) {
+            estado.text = op.titulo + " sin cambios"
+            traza("copias", "sin cambios " + op.id)
+            return
+        }
+        if (op.id == "copias.crear") {
+            confirmarCrearCopia()
+        } else {
+            gestionarCopias()
+        }
+    }
+
+    /** Pide confirmacion y crea la copia (T112 v2): SOLO areas de
+     *  la lista permitida con el export REAL de cada gestor;
+     *  cookies, storage, IndexedDb y secretos JAMAS viajan. */
+    private fun confirmarCrearCopia() {
+        AlertDialog.Builder(this)
+            .setTitle("Crear copia del perfil")
+            .setMessage(
+                "Crea una copia de marcadores, historial, ajustes y sitios " +
+                    "(JAMAS cookies, storage ni secretos). Cuota 5: la mas vieja se rota. Crear?"
+            )
+            .setPositiveButton("Crear") { _, _ -> crearCopia() }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun crearCopia() {
+        val areas = LinkedHashMap<String, String>()
+        areas["marcadores"] = marcadores.exportar()
+        areas["historial"] = historial.exportar()
+        areas["ajustes"] = ajustes.exportar()
+        areas["sitios"] = sitios.exportar()
+        val r = backupsPerfil.crear(areas)
+        if (r is Outcome.Success) {
+            val info = r.value
+            estado.text = "copia v" + info.version + " creada (" +
+                backupsPerfil.total() + "/" + BackupsPerfil.MAX_BACKUPS + ")"
+            traza("copias", "creada v" + info.version + " (" +
+                backupsPerfil.total() + "/" + BackupsPerfil.MAX_BACKUPS + ")")
+        } else if (r is Outcome.Failure) {
+            estado.text = "copia no creada: " + r.error.safeMessage
+            traza("copias", "crear fallo: " + r.error.safeMessage)
+        }
+    }
+
+    /** Lista las copias validas (T112 v2): las corruptas JAMAS
+     *  aparecen (v1) y el listado es version/areas/bytes, SIN
+     *  contenido del perfil. */
+    private fun gestionarCopias() {
+        val lista = backupsPerfil.listar()
+        if (lista.isEmpty()) {
+            estado.text = "sin copias guardadas"
+            traza("copias", "gestionar: ninguna")
+            return
+        }
+        val lineas = ArrayList<String>()
+        for (info in lista) {
+            lineas.add("v" + info.version + " - " + info.areas.size + " areas - " + info.bytes + " B")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Copias (" + lista.size + "/" + BackupsPerfil.MAX_BACKUPS + ")")
+            .setItems(lineas.toTypedArray()) { _, cual -> elegirCopia(lista[cual]) }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Toca una copia (T112 v2): restaurar a staging (aplicar es
+     *  SIEMPRE otro paso explicito) o borrar con confirmacion. */
+    private fun elegirCopia(info: BackupInfo) {
+        AlertDialog.Builder(this)
+            .setTitle("Copia v" + info.version)
+            .setItems(arrayOf("Restaurar (staging)", "Borrar")) { _, cual ->
+                if (cual == 0) {
+                    confirmarRestaurarCopia(info)
+                } else {
+                    confirmarBorrarCopia(info)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Restaura a staging SIN tocar el perfil vivo (T112 v2): el
+     *  staging se limpia antes y aplicar es SIEMPRE explicito. */
+    private fun confirmarRestaurarCopia(info: BackupInfo) {
+        AlertDialog.Builder(this)
+            .setTitle("Restaurar copia v" + info.version)
+            .setMessage(
+                "Escribe la copia v" + info.version + " a staging (" +
+                    info.areas.size + " areas). El perfil vivo NO se toca: aplicar sera otro paso. Restaurar?"
+            )
+            .setPositiveButton("Restaurar") { _, _ -> restaurarCopia(info) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun restaurarCopia(info: BackupInfo) {
+        limpiarStaging()
+        val r = backupsPerfil.restaurar(info.nombre, stagingCopias)
+        if (r is Outcome.Success) {
+            val aplicables = areasStaging()
+            estado.text = "staging v" + info.version + " (" + aplicables.size + " areas)"
+            traza("copias", "staging v" + info.version + " (" + aplicables.size + " areas)")
+            AlertDialog.Builder(this)
+                .setTitle("Aplicar al perfil?")
+                .setMessage(
+                    "El staging de la copia v" + info.version + " trae " +
+                        aplicables.size + " areas (" + aplicables.joinToString(", ") +
+                        "). Aplicar reemplaza esas areas por las de la copia. Aplicar?"
+                )
+                .setPositiveButton("Aplicar") { _, _ -> aplicarStaging() }
+                .setNegativeButton("Descartar") { _, _ ->
+                    limpiarStaging()
+                    estado.text = "staging descartado"
+                    traza("copias", "staging descartado")
+                }
+                .show()
+        } else if (r is Outcome.Failure) {
+            limpiarStaging()
+            estado.text = "no restaurada: " + r.error.safeMessage
+            traza("copias", "restaurar fallo: " + r.error.safeMessage)
+        }
+    }
+
+    /** Borra una copia con confirmacion (T112 v2); borrar sirve
+     *  tambien para erradicar lo que listar no muestra (v1). */
+    private fun confirmarBorrarCopia(info: BackupInfo) {
+        AlertDialog.Builder(this)
+            .setTitle("Borrar copia v" + info.version + "?")
+            .setMessage("La copia v" + info.version + " (" + info.bytes + " B) se borrara del disco. Borrar?")
+            .setPositiveButton("Borrar") { _, _ ->
+                val r = backupsPerfil.borrar(info.nombre)
+                if (r is Outcome.Success) {
+                    estado.text = "copia v" + info.version + " borrada (" +
+                        backupsPerfil.total() + " vivas)"
+                    traza("copias", "borrada v" + info.version)
+                } else if (r is Outcome.Failure) {
+                    estado.text = "no borrada: " + r.error.safeMessage
+                    traza("copias", "borrar fallo: " + r.error.safeMessage)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Areas con archivo en el staging (T112 v2): SOLO areas de la
+     *  lista permitida, en orden fijo. */
+    private fun areasStaging(): List<String> {
+        val res = ArrayList<String>()
+        for (area in listOf("marcadores", "historial", "ajustes", "sitios")) {
+            if (File(stagingCopias, area + ".tsv").isFile) {
+                res.add(area)
+            }
+        }
+        return res
+    }
+
+    /** Aplica el staging al perfil vivo (T112 v2): cada area es
+     *  TODO-o-NADA en su gestor REAL (un fallo no toca esa area),
+     *  el informe va por nombre de area y NUNCA se imprime
+     *  contenido del perfil; el staging queda limpio. */
+    private fun aplicarStaging() {
+        val ok = ArrayList<String>()
+        val mal = ArrayList<String>()
+        for (area in areasStaging()) {
+            val f = File(stagingCopias, area + ".tsv")
+            val texto = try {
+                f.readText()
+            } catch (ilegible: Exception) {
+                mal.add(area)
+                continue
+            }
+            if (aplicarAreaCopia(area, texto)) {
+                ok.add(area)
+            } else {
+                mal.add(area)
+            }
+        }
+        limpiarStaging()
+        if (mal.isEmpty()) {
+            estado.text = "copias aplicadas: " + ok.joinToString(", ")
+        } else {
+            estado.text = "aplicadas: " +
+                (if (ok.isEmpty()) "ninguna" else ok.joinToString(", ")) +
+                "; fallidas: " + mal.joinToString(", ")
+        }
+        traza("copias", "aplicar (" + ok.size + " ok, " + mal.size + " fallo)")
+        if (ok.contains("ajustes")) {
+            aplicarGestos()
+            recreate()
+        } else if (ok.contains("sitios")) {
+            recargar()
+        }
+    }
+
+    /** Aplica UN area del staging a su gestor (T112 v2): el gestor
+     *  decide TODO-o-NADA y persiste el; los marcadores se
+     *  persisten con el ciclo del shell (guardarMarcadores). */
+    private fun aplicarAreaCopia(area: String, texto: String): Boolean {
+        when (area) {
+            "marcadores" -> {
+                if (marcadores.importar(texto) is Outcome.Failure) return false
+                guardarMarcadores()
+                return true
+            }
+            "historial" -> return historial.importar(texto)
+            "ajustes" -> return ajustes.importar(texto)
+            "sitios" -> return sitios.importar(texto)
+        }
+        return false
+    }
+
+    /** Borra TODO el staging (T112 v2): nada de la copia queda en
+     *  disco tras aplicar, descartar o fallar. */
+    private fun limpiarStaging() {
+        val archivos = stagingCopias.listFiles() ?: return
+        for (f in archivos) {
+            f.delete()
+        }
+    }
+
     /** Tipo de perfil de la pestana activa (normal si no hay). */
     private fun tipoActivo(): ProfileKind {
         val id = tabs.activa()
@@ -5155,6 +5431,8 @@ class BrowserActivity : Activity() {
             TipoOpcion.ELECCION -> {
                 if (op.seccion == "Limpieza" && op.id != "limpieza.retencion") {
                     elegirLimpieza(op)
+                } else if (op.seccion == "Copias") {
+                    elegirCopias(op)
                 } else if (op.id == "contenido.sitios") {
                     aplicarBorradoSitios()
                 } else {
