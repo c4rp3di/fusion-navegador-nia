@@ -32,6 +32,12 @@ import nia.engine.net.FetchResponse
  * vive en el cliente) y sin UI de ajustes de la cuenta (T054). Los
  * estados del proveedor se mapean: 401 y 403 DENIED, 429 QUOTA y el
  * resto no-2xx NETWORK.
+ *
+ * T050 v2 (R0373, RES-0150): buscarPorHash (moviehash de video via
+ * OpenSubtitlesHash), probarConexion para el "Probar conexion" de
+ * T104 y constructor con bearerInicial para restaurar la sesion
+ * persistida por OpenSubtitlesSesion. El token JAMAS viaja en un
+ * safeMessage. Siguen excluidos: paginacion, subidas y UI (T104).
  */
 
 /** Cuenta del proveedor: apiKey obligatoria, usuario y clave opcional. */
@@ -67,10 +73,11 @@ data class OpenSubtitlesPista(
 
 class OpenSubtitlesClient(
     private val config: OpenSubtitlesConfig,
-    private val http: FetchManager
+    private val http: FetchManager,
+    bearerInicial: String? = null
 ) {
 
-    private var bearer: String? = null
+    private var bearer: String? = bearerInicial
 
     /** Sesion iniciada (login con cuenta hecho). */
     fun conectado(): Boolean = bearer != null
@@ -97,6 +104,62 @@ class OpenSubtitlesClient(
         return when (val r = http.fetch(request, token)) {
             is Outcome.Failure -> r
             is Outcome.Success -> analizarBusqueda(r.value)
+        }
+    }
+
+    /**
+     * T050 v2: busca subtitulos por moviehash de video (OSDB hash en
+     * hex de OpenSubtitlesHash) e idiomas. Mas preciso que la
+     * busqueda por nombre: identifica el archivo exacto.
+     */
+    fun buscarPorHash(
+        moviehash: String,
+        idiomas: List<String> = emptyList(),
+        token: CancellationToken? = null
+    ): Outcome<List<OpenSubtitlesResult>> {
+        if (!HEX16_RE.matches(moviehash)) {
+            return Outcome.failure(ErrorInfo(ErrorCode.INVALID_INPUT, "moviehash no valido"))
+        }
+        val cuenta = asegurarCuenta(token)
+        if (cuenta != null) return cuenta
+        val url = StringBuilder(config.baseUrl)
+            .append("/subtitles?moviehash=")
+            .append(moviehash.lowercase())
+        if (idiomas.isNotEmpty()) {
+            url.append("&languages=")
+            url.append(idiomas.joinToString(",") { codificar(it) })
+        }
+        val request = http.newRequest("GET", url.toString(), cabeceras())
+        return when (val r = http.fetch(request, token)) {
+            is Outcome.Failure -> r
+            is Outcome.Success -> analizarBusqueda(r.value)
+        }
+    }
+
+    /**
+     * T050 v2: prueba de la cuenta para el "Probar conexion" de
+     * T104: con usuario y clave fuerza el login AHORA; sin cuenta
+     * pide /languages al proveedor. El resultado NUNCA contiene
+     * credenciales.
+     */
+    fun probarConexion(token: CancellationToken? = null): Outcome<Unit> {
+        if (config.conCuenta) {
+            val cuenta = asegurarCuenta(token)
+            if (cuenta != null) return cuenta
+            return if (bearer != null) {
+                Outcome.success(Unit)
+            } else {
+                Outcome.failure(ErrorInfo(ErrorCode.PARSE, "sesion sin token"))
+            }
+        }
+        val url = StringBuilder(config.baseUrl).append("/languages")
+        val request = http.newRequest("GET", url.toString(), cabeceras())
+        return when (val r = http.fetch(request, token)) {
+            is Outcome.Failure -> r
+            is Outcome.Success -> {
+                val fallo = mapearEstado(r.value.status)
+                if (fallo != null) fallo else Outcome.success(Unit)
+            }
         }
     }
 
@@ -269,6 +332,9 @@ class OpenSubtitlesClient(
 
 /** Hexadecimal mayuscula para los escapes de query param. */
 private val HEX = "0123456789ABCDEF"
+
+/** T050 v2: moviehash OSDB valido, 16 digitos hex. */
+private val HEX16_RE = Regex("^[0-9a-fA-F]{16}$")
 
 /** JSON ilegal: el parser minimo no lo pudo leer. */
 private class JsonInvalido(mensaje: String) : Exception(mensaje)
