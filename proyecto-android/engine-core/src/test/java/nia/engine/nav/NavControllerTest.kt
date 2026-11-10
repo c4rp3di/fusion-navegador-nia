@@ -28,7 +28,7 @@ import nia.engine.url.Origin
  * orden de estados, la redireccion 302 relativa con cookies por
  * salto, la cadena 301 + 303 cross-host, la degradacion https
  * prohibida, el fallo DNS antes del commit, la cancelacion por
- * deadline, el stale por generacion, el commit de identidad, los
+ * deadline, la cancelacion por invalidacion de generacion (T011 v5: el token interno se cancela de verdad), el commit de identidad, los
  * subrecursos con mixed-content, las cookies de subrecurso por
  * contexto de sitio, la navegacion completa con scripts, el fallo
  * tras el commit, el back/forward con truncamiento y la mutacion
@@ -177,7 +177,7 @@ class NavControllerTest {
     }
 
     @Test
-    fun respuestaStaleAlInvalidarLaGeneracionDuranteElTransporte() {
+    fun respuestaCanceladaAlInvalidarLaGeneracionDuranteElTransporte() {
         val t = FakeTransport()
         val c = FakeClock()
         t.routes["http://a.dev/"] = resp(200, emptyMap(), "<html><body>x</body></html>")
@@ -186,8 +186,8 @@ class NavControllerTest {
         val out = controller.navigate("http://a.dev/")
         assertTrue(out is NavOutcome.Failed)
         val f = failed(out)
-        assertEquals(ErrorCode.STALE_HANDLE, f.code)
-        assertEquals("respuesta descartada: generacion anterior", f.message)
+        assertEquals(ErrorCode.CANCELLED, f.code)
+        assertEquals("operacion cancelada: Replaced(by=generacion)", f.message)
         assertEquals(0, controller.historyUrls().size)
     }
 
@@ -286,7 +286,7 @@ class NavControllerTest {
     }
 
     @Test
-    fun falloDespuesDelCommitEnSubrecursoStale() {
+    fun falloDespuesDelCommitEnSubrecursoCancelado() {
         val t = FakeTransport()
         val c = FakeClock()
         t.routes["https://a.dev/p"] = resp(200, emptyMap(), "<html><body><img src=\"/boom.png\"></body></html>")
@@ -297,8 +297,8 @@ class NavControllerTest {
         assertTrue(out is NavOutcome.Failed)
         val f = failed(out)
         assertEquals(NavState.LOADED, f.phase)
-        assertEquals(ErrorCode.STALE_HANDLE, f.code)
-        assertEquals("respuesta descartada: generacion anterior", f.message)
+        assertEquals(ErrorCode.CANCELLED, f.code)
+        assertEquals("operacion cancelada: Replaced(by=generacion)", f.message)
         assertTrue(f.page != null)
         assertEquals(listOf("https://a.dev/p"), controller.historyUrls())
         val fp = f.page ?: throw AssertionError("fallo tras el commit sin pagina")

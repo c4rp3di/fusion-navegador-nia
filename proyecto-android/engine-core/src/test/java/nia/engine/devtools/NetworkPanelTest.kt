@@ -120,8 +120,11 @@ class NetworkPanelTest {
         val t = FakeTransport()
         val manager = FetchManager(t)
         val panel = NetworkPanel(manager)
+        // T011 v5: invalidate cancela los tokens INTERNOS; el stale se
+        // conserva con un token EXTERNO que el manager no cancela.
+        val source = CancellationTokenSource()
         t.onFetch = { manager.invalidate() }
-        val o = panel.fetch(FetchRequest(1, "GET", "http://x/a", emptyMap(), null))
+        val o = panel.fetch(FetchRequest(1, "GET", "http://x/a", emptyMap(), null), source.token)
         assertTrue(o is Outcome.Failure)
         assertEquals(ErrorCode.STALE_HANDLE, (o as Outcome.Failure).error.code)
         assertEquals("stale_handle", panel.entries()[0].outcome)
