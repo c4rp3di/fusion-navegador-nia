@@ -45,6 +45,12 @@ import nia.engine.net.TransportFailure
  *   servidor responde 200, reinicia desde cero truncando el destino.
  *   Fuera de ese contrato devuelve false.
  *
+ * T046 v3 (R0334, RES-0135): limpiarTerminadas() retira del
+ * registro los items en estado terminal y devuelve SUS IDS en
+ * orden; los vivos (QUEUED/RUNNING) NUNCA se tocan (retirar una
+ * descarga en marcha es cancelar, no barrer) y los ids JAMAS se
+ * reutilizan.
+ *
  * Limitaciones v2: sin gestor de descargas persistente (T047 monta el
  * torrent sobre esta frontera), sin Range multiple y una cancelacion
  * sobre un estado terminal se ignora (devuelve false).
@@ -212,6 +218,24 @@ class DownloadEngine(
             scheduleNextLocked()
             return true
         }
+    }
+
+    /**
+     * T046 v3 (R0334, RES-0135): retira de la lista los items en
+     * estado terminal (COMPLETED/CANCELLED/FAILED) y devuelve SUS
+     * IDS en orden; los vivos (QUEUED/RUNNING) NUNCA se tocan:
+     * retirar una descarga en marcha es cancelar, no barrer. Sin
+     * listeners: el visor vuelve a listar y ya no los ve.
+     */
+    fun limpiarTerminadas(): List<Long> = synchronized(lock) {
+        val fuera = ArrayList<Long>()
+        for ((id, entry) in items) {
+            if (isTerminal(entry.state)) fuera.add(id)
+        }
+        for (id in fuera) {
+            items.remove(id)
+        }
+        fuera
     }
 
     /** Programa descargas mientras haya hueco (llamar con el lock). */

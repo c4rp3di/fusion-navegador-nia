@@ -21,6 +21,9 @@ import nia.engine.net.TransportFailure
  * maxRetries (TLS nunca se reintenta, la cancelacion gana), resume
  * con su contrato (FAILED + bytes + sink reabrible) y el
  * comportamiento v1 por defecto sin reintentos.
+ *
+ * T046 v3 (R0334, RES-0135): limpiarTerminadas retira las
+ * terminadas, NUNCA toca las vivas y no reutiliza ids.
  */
 class DownloadEngineTest {
 
@@ -674,6 +677,44 @@ class DownloadEngineTest {
         assertEquals(1, transport.calls)
         assertEquals(30, sink.bytes)
         assertTrue(sink.closed)
+    }
+
+    @Test
+    fun limpiarRetiraTerminadasYDejaVivas() {
+        val exec = CapturingExecutor()
+        val engine = DownloadEngine(FakeTransport(listOf(5)), exec, maxConcurrent = 1)
+        engine.enqueue("https://a.test/l1", FakeSink())
+        engine.enqueue("https://a.test/l2", FakeSink())
+        exec.runOne()
+        assertEquals(DownloadState.COMPLETED, engine.status(1)?.state)
+        assertEquals(DownloadState.QUEUED, engine.status(2)?.state)
+        assertEquals("1", engine.limpiarTerminadas().joinToString(","))
+        assertNull(engine.status(1))
+        assertEquals(DownloadState.QUEUED, engine.status(2)?.state)
+        exec.runOne()
+        assertEquals(DownloadState.COMPLETED, engine.status(2)?.state)
+    }
+
+    @Test
+    fun limpiarSinTerminalesDevuelveVaciaYNoTocaNada() {
+        val exec = CapturingExecutor()
+        val engine = DownloadEngine(FakeTransport(listOf(5)), exec, maxConcurrent = 1)
+        engine.enqueue("https://a.test/lq", FakeSink())
+        assertEquals("", engine.limpiarTerminadas().joinToString(","))
+        assertEquals(DownloadState.QUEUED, engine.status(1)?.state)
+        assertEquals(1, engine.list().size)
+    }
+
+    @Test
+    fun limpiarNoReutilizaIds() {
+        val engine = DownloadEngine(FakeTransport(listOf(5)), syncExecutor)
+        engine.enqueue("https://a.test/lu1", FakeSink())
+        engine.enqueue("https://a.test/lu2", FakeSink())
+        assertEquals("1,2", engine.limpiarTerminadas().joinToString(","))
+        assertEquals(0, engine.list().size)
+        val id = engine.enqueue("https://a.test/lu3", FakeSink())
+        assertEquals(3L, id)
+        assertEquals(DownloadState.COMPLETED, engine.status(id)?.state)
     }
 
     @Test
