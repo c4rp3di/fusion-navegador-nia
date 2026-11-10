@@ -24,6 +24,9 @@ import android.print.PrintManager
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.Surface
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -31,6 +34,7 @@ import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -63,6 +67,10 @@ import nia.engine.js.JsLimits
 import nia.engine.lectura.Lector
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
+import nia.engine.media.MediaEngine
+import nia.engine.media.MediaException
+import nia.engine.media.MediaSource
+import nia.engine.media.MediaState
 import nia.engine.modules.AprobacionPaquete
 import nia.engine.modules.ContextoModulos
 import nia.engine.modules.DiagModulos
@@ -395,6 +403,17 @@ class BrowserActivity : Activity() {
      *  sesion de app (sin siembra: uploaded siempre 0 y sin puerto de
      *  escucha). */
     private val poolTorrents = Executors.newFixedThreadPool(1)
+
+    /** T092 v1 (R0355, RES-0144): media del shell sobre el nucleo y el
+     *  backend REALES: MediaEngine del motor (T036, autoridad de la
+     *  posicion y la duracion) sobre PlatformMediaBackend
+     *  (MediaPlayer de plataforma, sin codecs caseros). */
+    private val backendMedia = PlatformMediaBackend(this)
+    private val media = MediaEngine(backendMedia, clock)
+    private var playerAbierto = false
+    private var volumenMedia = 1.0
+    private var pasoVelocidadMedia = 1
+    private val velocidadesMedia = doubleArrayOf(0.5, 1.0, 1.5, 2.0)
     private val torrents = TorrentEngine()
     private val peerIdTorrent = ByteArray(20).also { java.security.SecureRandom().nextBytes(it) }
     private var guardarTorrentPendiente: Pair<String, Int>? = null
@@ -573,14 +592,16 @@ class BrowserActivity : Activity() {
             )
         )
         // T093 v9 (R0340, RES-0138): secciones Media y Perfiles
-        // honestas: el motor de media (T036) aun no se integra en las
-        // paginas del navegador y el gestor de perfiles multiples
-        // requiere aceptacion especifica de aislamiento (T112).
+        // honestas: T092 v1 anade el player standalone (menu 37) sobre
+        // el backend REAL de plataforma; el motor de media (T036) sigue
+        // SIN integrarse en las paginas del navegador (puente
+        // HTMLMediaElement = TK-111-1 en v2) y el gestor de perfiles
+        // multiples requiere aceptacion especifica de aislamiento (T112).
         s.registrar(
             OpcionAjuste(
                 "media.autoplay", "Media",
                 "Reproduccion automatica",
-                "El MediaEngine del motor (T036) aun no se integra en las paginas del navegador; sin autoplay que regular",
+                "El MediaEngine del motor (T036) no se integra en las paginas del navegador (player standalone en el menu desde T092 v1); sin autoplay que regular",
                 TipoOpcion.BOOL, "true", disponible = false
             )
         )
@@ -1193,7 +1214,8 @@ class BrowserActivity : Activity() {
             "Permisos por sitio",
             "Workers / SW",
             "DevTools (paneles declarados)",
-            "Torrents (sesiones del motor)"
+            "Torrents (sesiones del motor)",
+            "Reproducir media (URL o archivo)"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -1239,6 +1261,7 @@ class BrowserActivity : Activity() {
                     33 -> mostrarWorkersSw()
                     34 -> abrirDevToolsModulos()
                     35 -> mostrarTorrents()
+                    36 -> reproducirMedia()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -3495,6 +3518,195 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** T092 v1 (R0355, RES-0144): player standalone sobre el backend
+     *  REAL de plataforma. Origen: URL http/https directa (SIN
+     *  descarga obligatoria) o archivo local por SAF (audio o video). */
+    private fun reproducirMedia() {
+        AlertDialog.Builder(this)
+            .setTitle("Reproducir media")
+            .setItems(arrayOf("URL http/https", "Archivo local (SAF)")) { _, cual ->
+                if (cual == 0) pedirUrlMedia() else elegirArchivoMedia()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** URL de media por texto: la reproduce EN DIRECTO, sin bajarla. */
+    private fun pedirUrlMedia() {
+        val campo = EditText(this)
+        campo.hint = "https://ejemplo.com/audio.mp3"
+        AlertDialog.Builder(this)
+            .setTitle("URL de media")
+            .setView(campo)
+            .setPositiveButton("Reproducir") { _, _ ->
+                val texto = campo.text.toString().trim()
+                if (!texto.startsWith("http://") && !texto.startsWith("https://")) {
+                    estado.text = "media: la url debe empezar por http:// o https://"
+                    return@setPositiveButton
+                }
+                abrirPlayer("url", texto)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Archivo local de audio o video por SAF. */
+    private fun elegirArchivoMedia() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("*/*")
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
+        startActivityForResult(intent, REQUEST_MEDIA)
+    }
+
+    /** Player con controles propios: el MediaEngine ES la autoridad
+     *  de la posicion (reloj integrado al rate actual) y la duracion
+     *  viene del onPrepared REAL del backend; NUNCA se inventa una
+     *  duracion ni se da por lista la fuente antes de tiempo. */
+    private fun abrirPlayer(origen: String, fuente: String) {
+        val contenedor = LinearLayout(this)
+        contenedor.orientation = LinearLayout.VERTICAL
+        val superficie = SurfaceView(this)
+        contenedor.addView(
+            superficie,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+        val relojTexto = TextView(this)
+        contenedor.addView(relojTexto)
+        val barra = SeekBar(this)
+        contenedor.addView(barra)
+        val botones = LinearLayout(this)
+        botones.orientation = LinearLayout.HORIZONTAL
+        val bPlay = Button(this)
+        bPlay.text = "Reproducir"
+        val bAtras = Button(this)
+        bAtras.text = "-10s"
+        val bAdelante = Button(this)
+        bAdelante.text = "+10s"
+        val bVolumen = Button(this)
+        bVolumen.text = "Volumen"
+        val bVel = Button(this)
+        bVel.text = "x1"
+        botones.addView(bPlay)
+        botones.addView(bAtras)
+        botones.addView(bAdelante)
+        botones.addView(bVolumen)
+        botones.addView(bVel)
+        contenedor.addView(botones)
+        bPlay.setOnClickListener {
+            media.playPause()
+            refrescarPlayer(bPlay, relojTexto, barra)
+        }
+        bAtras.setOnClickListener {
+            media.seekBy(-10000L)
+            refrescarPlayer(bPlay, relojTexto, barra)
+        }
+        bAdelante.setOnClickListener {
+            media.seekBy(10000L)
+            refrescarPlayer(bPlay, relojTexto, barra)
+        }
+        bVolumen.setOnClickListener {
+            volumenMedia = if (volumenMedia > 0.0) 0.0 else 1.0
+            media.setVolume(volumenMedia)
+            bVolumen.text = if (volumenMedia > 0.0) "Volumen" else "Silencio"
+        }
+        bVel.setOnClickListener {
+            pasoVelocidadMedia = (pasoVelocidadMedia + 1) % velocidadesMedia.size
+            val v = velocidadesMedia[pasoVelocidadMedia]
+            media.setRate(v)
+            bVel.text = "x" + v
+        }
+        barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(b: SeekBar?, progreso: Int, desdeUsuario: Boolean) {}
+            override fun onStartTrackingTouch(b: SeekBar?) {}
+            override fun onStopTrackingTouch(b: SeekBar?) {
+                media.seekTo(b?.progress?.toLong() ?: 0L)
+                refrescarPlayer(bPlay, relojTexto, barra)
+            }
+        })
+        superficie.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(h: SurfaceHolder) {
+                backendMedia.setSurface(h.surface)
+            }
+
+            override fun surfaceChanged(h: SurfaceHolder, formato: Int, ancho: Int, alto: Int) {}
+
+            override fun surfaceDestroyed(h: SurfaceHolder) {
+                backendMedia.setSurface(null)
+            }
+        })
+        val dialogo = AlertDialog.Builder(this)
+            .setTitle("Player (" + origen + ")")
+            .setView(contenedor)
+            .setNegativeButton("Cerrar", null)
+            .create()
+        dialogo.setOnDismissListener { cerrarPlayer() }
+        try {
+            val fuenteMedia = if (origen == "url") {
+                MediaSource.Remote(fuente)
+            } else {
+                MediaSource.Local(fuente)
+            }
+            media.load(fuenteMedia, autoplay = true)
+        } catch (e: MediaException) {
+            estado.text = "media: fuente invalida (" + e.message + ")"
+            return
+        }
+        estado.text = "media: preparando (" + origen + ")"
+        traza("media", "player abierto (" + origen + ")")
+        dialogo.show()
+        playerAbierto = true
+        refrescarPlayer(bPlay, relojTexto, barra)
+        relojTexto.postDelayed(object : Runnable {
+            override fun run() {
+                if (!playerAbierto) return
+                refrescarPlayer(bPlay, relojTexto, barra)
+                relojTexto.postDelayed(this, 300L)
+            }
+        }, 300L)
+    }
+
+    /** Refresco del player: etiqueta, reloj y barra desde el motor. */
+    private fun refrescarPlayer(bPlay: Button, relojTexto: TextView, barra: SeekBar) {
+        val est = media.state()
+        bPlay.text = if (est == MediaState.PLAYING) "Pausa" else "Reproducir"
+        val posSeg = media.position() / 1000
+        val durSeg = media.duration() / 1000
+        var etiqueta = nombreEstadoMedia(est)
+        if (est == MediaState.FAILED) {
+            val err = media.lastError()
+            if (err != null) etiqueta += ": " + err
+        }
+        relojTexto.text = formatoTiempo(posSeg) + " / " + formatoTiempo(durSeg) + " (" + etiqueta + ")"
+        if (durSeg > 0) {
+            barra.max = durSeg.toInt()
+            if (!barra.isPressed) barra.progress = posSeg.toInt().coerceAtMost(durSeg.toInt())
+        } else {
+            barra.max = 0
+            if (!barra.isPressed) barra.progress = 0
+        }
+    }
+
+    private fun formatoTiempo(seg: Long): String =
+        (seg / 60).toString() + ":" + (seg % 60).toString().padStart(2, '0')
+
+    private fun nombreEstadoMedia(est: MediaState): String = when (est) {
+        MediaState.IDLE -> "inactivo"
+        MediaState.PREPARING -> "preparando"
+        MediaState.READY -> "listo"
+        MediaState.PLAYING -> "reproduciendo"
+        MediaState.PAUSED -> "en pausa"
+        MediaState.ENDED -> "terminado"
+        MediaState.FAILED -> "fallo"
+    }
+
+    /** Cierre del player: corta el refresco y libera el backend REAL. */
+    private fun cerrarPlayer() {
+        playerAbierto = false
+        media.close()
+        traza("media", "player cerrado")
+    }
+
     /** Bytes del infohash hex (40 chars) del magnet. */
     private fun unhex(hex: String): ByteArray =
         ByteArray(hex.length / 2) { i ->
@@ -3753,6 +3965,14 @@ class BrowserActivity : Activity() {
                 estado.text = "no se pudo escribir el PDF"
                 traza("imprimir", "error escribiendo pdf: " + e.javaClass.simpleName)
             }
+        }
+        if (requestCode == REQUEST_MEDIA && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "media: sin documento"
+                return
+            }
+            abrirPlayer("archivo", uri.toString())
         }
         if (requestCode == REQUEST_TORRENT && resultCode == RESULT_OK) {
             val uri = data?.data
@@ -4387,5 +4607,6 @@ class BrowserActivity : Activity() {
         private const val REQUEST_GUARDAR_PDF = 50
         private const val REQUEST_TORRENT = 51
         private const val REQUEST_GUARDAR_TORRENT = 52
+        private const val REQUEST_MEDIA = 53
     }
 }
