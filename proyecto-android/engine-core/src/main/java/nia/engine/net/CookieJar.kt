@@ -100,7 +100,12 @@ class CookieJar(private val clock: WallClock) {
      */
     fun storeFromResponse(host: String, isSecureTransport: Boolean, setCookie: String?): Boolean {
         if (setCookie == null) return false
-        return splitSetCookie(setCookie).any { valor -> storeOne(host, isSecureTransport, valor) }
+        // OJO: any cortocircuitaria en la primera guardada y perderia el resto
+        var storedAny = false
+        for (valor in splitSetCookie(setCookie)) {
+            if (storeOne(host, isSecureTransport, valor)) storedAny = true
+        }
+        return storedAny
     }
 
     /** T026 v4: guarda UNA cookie ya partida; la logica 5.3 de siempre. */
