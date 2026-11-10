@@ -384,7 +384,7 @@ class BrowserActivity : Activity() {
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
-    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -515,6 +515,33 @@ class BrowserActivity : Activity() {
                 "Borrar preferencias de sitios",
                 "Borra zoom, texto y escritorio de todos los sitios con conteo",
                 TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
+            )
+        )
+        // T093 v8 (R0338, RES-0137): seccion Red - la busqueda al
+        // fallar el DNS es REAL (cablea el dialogo del manejaFallo);
+        // DNT y limite del cache son honestas: el motor aun no las trae.
+        s.registrar(
+            OpcionAjuste(
+                "red.busqueda-dns", "Red",
+                "Busqueda al fallar el DNS",
+                "Proponer buscar el texto en DuckDuckGo cuando un dominio implicito no resuelve; apagada va directa a la pagina de error",
+                TipoOpcion.BOOL, "true"
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "red.dnt", "Red",
+                "Do Not Track (DNT)",
+                "El motor aun no envia cabeceras DNT en sus peticiones; llega con el proximo hito de fetch",
+                TipoOpcion.BOOL, "false", disponible = false
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "red.cache-limite", "Red",
+                "Limite del cache HTTP",
+                "El cache vive con presupuesto LRU fijo del motor (T026 v3); ajustar su tamano llega con una version siguiente",
+                TipoOpcion.TEXTO, "fijo", disponible = false
             )
         )
         // T078 v1 (R0199, RES-0094): la seccion Gestos del motor; los
@@ -1031,6 +1058,7 @@ class BrowserActivity : Activity() {
     private fun manejaFallo(f: NavOutcome.Failed, dominioImplicito: Boolean, textoOriginal: String?) {
         traza("nav", "fallo " + f.code)
         if (dominioImplicito && textoOriginal != null &&
+            ajustes.valor("red.busqueda-dns") != "false" &&
             f.code == ErrorCode.NETWORK && f.message.contains("DNS")
         ) {
             val url = OmniboxInput.BASE_BUSQUEDA_DEFECTO + OmniboxInput.codificarQuery(textoOriginal)
