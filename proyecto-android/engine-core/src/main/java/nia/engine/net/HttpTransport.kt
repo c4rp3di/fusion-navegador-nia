@@ -1,5 +1,6 @@
 package nia.engine.net
 
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -26,14 +27,22 @@ import nia.contracts.CancellationToken
  *   cancelacion y mapea a CANCELLED descartando la respuesta.
  * - Timeouts de socket fijos (10s por defecto): el deadline SEMANTICO
  *   de la operacion es del manager; estos solo protegen el socket.
+ * - Tope de cuerpo (v6, R0307): la lectura del cuerpo esta ACOTADA a
+ *   maxBodyBytes (4 MiB por defecto); excederlo aborta la descarga
+ *   (disconnect en el finally) y el transporte informa TOO_LARGE.
  *
  * El transporte es sincrono y bloqueante: en Android se llama desde un
  * hilo de fondo (NetworkOnMainThreadException si no).
  */
 class HttpTransport(
     private val connectTimeoutMillis: Int = 10_000,
-    private val readTimeoutMillis: Int = 10_000
+    private val readTimeoutMillis: Int = 10_000,
+    private val maxBodyBytes: Long = 4_194_304L
 ) : FetchTransport {
+
+    init {
+        require(maxBodyBytes > 0) { "maxBodyBytes > 0" }
+    }
 
     override fun fetch(request: FetchRequest, token: CancellationToken): TransportResult {
         if (token.isCancelled) {
@@ -68,6 +77,8 @@ class HttpTransport(
                 TransportResult.Success(
                     FetchResponse(status, responseHeaders(connection), responseBody(connection, request.method, status), seguridadTls(connection))
                 )
+            } catch (_: CuerpoExcedido) {
+                TransportResult.Failure(TransportFailure.TOO_LARGE)
             } catch (_: SSLException) {
                 TransportResult.Failure(TransportFailure.TLS_INVALID)
             } catch (_: UnknownHostException) {
@@ -131,6 +142,10 @@ class HttpTransport(
     /**
      * Cuerpo de respuesta: errorStream para estados de error; vacio para
      * HEAD y 204 (leer el flujo en esos casos puede fallar en la JVM).
+     * T011 v6 (R0307): lectura ACOTADA a maxBodyBytes en trozos de 8 KiB;
+     * el cuerpo JAMAS se acumula sin tope en memoria. Exceder el tope
+     * lanza CuerpoExcedido: el finally del fetch desconecta la conexion
+     * y el transporte informa TOO_LARGE.
      */
     private fun responseBody(
         connection: HttpURLConnection,
@@ -139,6 +154,20 @@ class HttpTransport(
     ): ByteArray {
         if (method == "HEAD" || status == 204) return ByteArray(0)
         val stream = if (status in 200..399) connection.inputStream else connection.errorStream
-        return stream?.use { it.readBytes() } ?: ByteArray(0)
+        if (stream == null) return ByteArray(0)
+        stream.use { input ->
+            val buffer = ByteArray(8192)
+            val salida = ByteArrayOutputStream()
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                if (salida.size().toLong() + n > maxBodyBytes) throw CuerpoExcedido()
+                salida.write(buffer, 0, n)
+            }
+            return salida.toByteArray()
+        }
     }
+
+    /** Senal interna: el cuerpo excede maxBodyBytes; el fetch la mapea a TOO_LARGE. */
+    private class CuerpoExcedido : IOException()
 }

@@ -212,4 +212,27 @@ class HttpTransportTest {
             assertEquals(ErrorCode.CANCELLED, (resultado as Outcome.Failure).error.code)
         })
     }
+
+    @Test fun cuerpoQueExcedeElTopeVuelveTOO_LARGE() {
+        withServer({ exchange ->
+            responder(exchange, 200, "a".repeat(4096))
+        }, { url ->
+            val transport = HttpTransport(maxBodyBytes = 1024)
+            val request = FetchRequest(10, "GET", url, emptyMap(), null)
+            val kind = failure(transport.fetch(request, CancellationTokenSource().token))
+            assertEquals(TransportFailure.TOO_LARGE, kind)
+        })
+    }
+
+    @Test fun cuerpoDentroDelTopeEntregaCompleto() {
+        withServer({ exchange ->
+            responder(exchange, 200, "a".repeat(1024))
+        }, { url ->
+            val transport = HttpTransport(maxBodyBytes = 4096)
+            val request = FetchRequest(11, "GET", url, emptyMap(), null)
+            val response = success(transport.fetch(request, CancellationTokenSource().token))
+            assertEquals(1024, response.body.size)
+            assertEquals("aaaa", String(response.body.sliceArray(0..3), Charsets.UTF_8))
+        })
+    }
 }

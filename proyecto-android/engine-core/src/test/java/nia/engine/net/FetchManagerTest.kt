@@ -139,6 +139,17 @@ class FetchManagerTest {
         assertEquals(0, m.deliveredCount())
     }
 
+    @Test fun respuestaDemasiadoGrandeEsQUOTA() {
+        val t = FakeTransport()
+        val m = FetchManager(t)
+        t.hook = { _, _ -> TransportResult.Failure(TransportFailure.TOO_LARGE) }
+        val e = fallo(m.fetch(m.newRequest("GET", "https://example.com/grande")))
+        assertEquals(ErrorCode.QUOTA, e.code)
+        assertEquals("respuesta demasiado grande", e.safeMessage)
+        assertEquals(Retryability.RETRY_LATER, e.retryability)
+        assertEquals(0, m.deliveredCount())
+    }
+
     @Test fun cancelacionExplicitaDescartaRespuesta() {
         val clock = FakeClock(1000)
         val source = CancellationTokenSource(clock)

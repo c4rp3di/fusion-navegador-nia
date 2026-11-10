@@ -63,6 +63,11 @@ import nia.contracts.WallClock
  * transporte desconecta su conexion via token.onCancel. Los fetch con
  * token EXTERNO no se cancelan: solo quedan stale, quien pasa el token
  * es dueno de cancelarlo.
+ * - v6 (R0307, informe externo 3.2): tope de cuerpo. TransportFailure
+ *   gana TOO_LARGE: una respuesta mas grande que maxBodyBytes del
+ *   transporte aborta la descarga y se mapea a QUOTA con mensaje
+ *   seguro "respuesta demasiado grande"; la memoria JAMAS acumula un
+ *   cuerpo sin tope.
  */
 
 data class FetchRequest(
@@ -81,7 +86,7 @@ data class FetchResponse(
 )
 
 /** Fallos que reporta el transporte; el manager los mapea a ErrorCode. */
-enum class TransportFailure { TLS_INVALID, DNS, NETWORK }
+enum class TransportFailure { TLS_INVALID, DNS, NETWORK, TOO_LARGE }
 
 sealed class TransportResult {
     data class Success(val response: FetchResponse) : TransportResult()
@@ -235,6 +240,8 @@ class FetchManager(
                     Outcome.failure(ErrorInfo(ErrorCode.NETWORK, "fallo de red: DNS"))
                 TransportFailure.NETWORK ->
                     Outcome.failure(ErrorInfo(ErrorCode.NETWORK, "fallo de red"))
+                TransportFailure.TOO_LARGE ->
+                    Outcome.failure(ErrorInfo(ErrorCode.QUOTA, "respuesta demasiado grande"))
             }
         }
     }

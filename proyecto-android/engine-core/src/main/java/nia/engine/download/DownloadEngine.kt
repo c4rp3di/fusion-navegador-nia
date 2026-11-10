@@ -367,5 +367,6 @@ class DownloadEngine(
         TransportFailure.TLS_INVALID -> "TLS invalido: conexion rechazada"
         TransportFailure.DNS -> "fallo de red: DNS"
         TransportFailure.NETWORK -> "fallo de red"
+        TransportFailure.TOO_LARGE -> "respuesta demasiado grande"
     }
 }
