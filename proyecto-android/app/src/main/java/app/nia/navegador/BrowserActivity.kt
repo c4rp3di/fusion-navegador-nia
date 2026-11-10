@@ -384,7 +384,7 @@ class BrowserActivity : Activity() {
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
-    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -456,9 +456,8 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "apariencia.tema", "Apariencia",
                 "Tema de colores",
-                "Tema claro u oscuro (persistir el activo llega con T031 v2)",
-                TipoOpcion.ELECCION, "claro", elecciones = listOf("claro", "oscuro"),
-                disponible = false
+                "Claro, oscuro o seguir al sistema",
+                TipoOpcion.ELECCION, "auto", elecciones = listOf("auto", "claro", "oscuro")
             )
         )
         s.registrar(
@@ -526,7 +525,16 @@ class BrowserActivity : Activity() {
         s
     }
 
-    private val colores by lazy { NiaUi.colores(this, NiaTokens.Modo.AUTO) }
+    private val colores by lazy { NiaUi.colores(this, modoTema()) }
+
+    /** T093 v6 (R0332, RES-0134): modo de tema del ajuste REAL
+     *  apariencia.tema (auto/claro/oscuro); el defecto auto sigue
+     *  al sistema como siempre (T069, ADR-021). */
+    private fun modoTema(): NiaTokens.Modo = when (ajustes.valor("apariencia.tema") ?: "auto") {
+        "claro" -> NiaTokens.Modo.CLARO
+        "oscuro" -> NiaTokens.Modo.OSCURO
+        else -> NiaTokens.Modo.AUTO
+    }
 
     private lateinit var omnibox: EditText
     private lateinit var indicador: TextView
@@ -3679,6 +3687,9 @@ class BrowserActivity : Activity() {
                                 traza("ajustes", "cambiado " + op.id + " a " + nuevo)
                                 if (op.id == "limpieza.retencion") {
                                     aplicarRetencion()
+                                }
+                                if (op.id == "apariencia.tema") {
+                                    recreate()
                                 }
                             }
                         }
