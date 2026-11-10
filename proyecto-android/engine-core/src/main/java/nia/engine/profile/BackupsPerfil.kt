@@ -155,6 +155,40 @@ class BackupsPerfil(
         return if (f.delete()) Outcome.success(Unit) else fallo("no se pudo borrar")
     }
 
+    /**
+     * T112 v3 (R0394, RES-0157): importa una copia de un archivo
+     * externo (SAF): TODO-o-NADA (parsear) y reescritura CANONICA con
+     * version NUEVA (mayorVersion+1): el nombre del archivo externo
+     * JAMAS decide la version ni entra al registro. Atomica y con
+     * rotacion como crear; el tope de 2 MiB rechaza abuso y
+     * corrupcion sin llenar la memoria.
+     */
+    fun importar(contenido: String): Outcome<BackupInfo> {
+        if (contenido.isEmpty()) return fallo("copia vacia")
+        if (contenido.length > MAX_IMPORTAR) return fallo("copia demasiado grande")
+        val parse = parsear(contenido) ?: return fallo("copia no valida")
+        val areas = parse.second
+        val version = mayorVersion() + 1L
+        val texto = serializar(version, areas)
+        val tmp = File(dir, nombreDe(version) + ".tmp")
+        val destino = File(dir, nombreDe(version))
+        try {
+            dir.mkdirs()
+            tmp.writeText(texto)
+        } catch (noEscribible: Exception) {
+            tmp.delete()
+            return fallo("disco no escribible")
+        }
+        if (!tmp.renameTo(destino)) {
+            tmp.delete()
+            return fallo("no se pudo mover el backup")
+        }
+        rotar()
+        return Outcome.success(
+            BackupInfo(nombreDe(version), version, areas.keys.sorted(), texto.length.toLong())
+        )
+    }
+
     /** Info del archivo o null si no es un backup valido. */
     private fun leerInfo(f: File): BackupInfo? {
         val m = NOMBRE_RE.find(f.name) ?: return null
@@ -287,6 +321,9 @@ class BackupsPerfil(
 
         /** Areas: [a-z0-9-] de 1 a 24 (nombre de archivo seguro). */
         private val AREA_RE = Regex("^[a-z0-9-]{1,24}$")
+
+        /** Tope de caracteres de una copia importada (2 MiB). */
+        const val MAX_IMPORTAR = 2097152
 
         /** Nombre de backup: backup-<n>.tsv. */
         private val NOMBRE_RE = Regex("^backup-(\\d{1,9})\\.tsv$")

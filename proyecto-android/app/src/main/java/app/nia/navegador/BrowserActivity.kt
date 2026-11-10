@@ -123,6 +123,7 @@ import nia.engine.omnibox.Sugerencia
 import nia.engine.profile.BackupInfo
 import nia.engine.profile.BackupsPerfil
 import nia.engine.profile.FireLevel
+import nia.engine.profile.GestorPerfiles
 import nia.engine.profile.ProfileKind
 import nia.engine.settings.OpcionAjuste
 import nia.engine.settings.SettingsManager
@@ -337,11 +338,42 @@ class BrowserActivity : Activity() {
      *  empieza de cero: honesto, no se pierde nada que la purga no fuera
      *  a perder igual). El incognito vive SOLO en memoria (intacto). */
     private val perfilNormal: File by lazy {
-        val nuevo = File(filesDir, "perfil-navegador")
+        val nuevo = File(dirPerfil(), "perfil-navegador")
         val viejo = File(cacheDir, "perfil-navegador")
         if (!nuevo.exists() && viejo.exists()) viejo.renameTo(nuevo)
         nuevo
     }
+
+    /** T112 v3 (R0394, RES-0157): registro de perfiles nombrados del
+     *  motor (puro JVM, como BackupsPerfil): perfiles.tsv dentro del
+     *  directorio "perfiles"; el activo lo decide el shell. */
+    private val gestorPerfiles by lazy { GestorPerfiles(File(filesDir, "perfiles")) }
+
+    /** Directorio del perfil ACTIVO (T112 v3): la PRIMERA visita
+     *  migra el estado del perfil unico heredado a "principal" (una
+     *  sola via, como la migracion de cacheDir de T072/3.5: lo que
+     *  no migra empieza de cero, honesto); perfiles/<nombre> JAMAS
+     *  comparte archivos entre perfiles. */
+    private fun dirPerfil(): File {
+        val base = File(filesDir, "perfiles")
+        if (!base.isDirectory) {
+            base.mkdirs()
+            val destino = File(base, "principal")
+            destino.mkdirs()
+            for (legado in listOf(
+                "perfil-navegador", "marcadores.tsv", "historial-normal.tsv",
+                "ajustes.tsv", "sitios.tsv", "permisos.tsv", "modulos.tsv",
+                "listas-modulos", "sesion-pestanas.tsv", "subs-os-sesion.tsv",
+                "subs-os", "backups-perfil", "backups-staging"
+            )) {
+                val viejo = File(filesDir, legado)
+                if (viejo.exists()) viejo.renameTo(File(destino, legado))
+            }
+            if (!gestorPerfiles.existe("principal")) gestorPerfiles.crear("principal")
+        }
+        return File(base, perfilActivo())
+    }
+
 
     private val tabs by lazy {
         TabsManager(
@@ -365,7 +397,7 @@ class BrowserActivity : Activity() {
      * se ignora (importar NUNCA toca el estado vivo). */
     private val marcadores by lazy {
         val m = BookmarkManager()
-        val f = File(filesDir, "marcadores.tsv")
+        val f = File(dirPerfil(), "marcadores.tsv")
         if (f.exists()) {
             val r = m.importar(f.readText())
             if (r is Outcome.Failure) {
@@ -378,11 +410,11 @@ class BrowserActivity : Activity() {
     /** Historial global SOLO del perfil NORMAL (T074): el incognito
      * jamas se registra y la URL se guarda sin query (redaccion).
      * Persiste en filesDir; un archivo corrupto se ignora. */
-    private val historial by lazy { HistoryManager(clock, File(filesDir, "historial-normal.tsv")) }
+    private val historial by lazy { HistoryManager(clock, File(dirPerfil(), "historial-normal.tsv")) }
 
     /** T080 v1 (RES-0097): preferencias por sitio persistidas en
      *  sitios.tsv (clave = origen, NUNCA la URL completa). */
-    private val sitios by lazy { SitiosManager(File(filesDir, "sitios.tsv")) }
+    private val sitios by lazy { SitiosManager(File(dirPerfil(), "sitios.tsv")) }
 
     /** T112 v2 (R0379, RES-0152): backups del perfil NORMAL con el
      *  BackupsPerfil del motor (v1, verificado): SOLO areas de la
@@ -390,19 +422,19 @@ class BrowserActivity : Activity() {
      *  cookies, storage, IndexedDb y secretos JAMAS entran. */
     private val backupsPerfil by lazy {
         BackupsPerfil(
-            File(filesDir, "backups-perfil"),
+            File(dirPerfil(), "backups-perfil"),
             setOf("marcadores", "historial", "ajustes", "sitios")
         )
     }
 
     /** Staging de la restauracion (T112 v2): aplicar lo que hay
      *  aqui es SIEMPRE decision explicita del usuario. */
-    private val stagingCopias by lazy { File(filesDir, "backups-staging") }
+    private val stagingCopias by lazy { File(dirPerfil(), "backups-staging") }
 
     /** T089 v1 (RES-0109): broker de permisos por sitio del motor
      *  (permisos.tsv, solo decisiones permanentes): sin backend
      *  registrado NINGUNA API se anuncia habilitada. */
-    private val permisos by lazy { GestorPermisos(File(filesDir, "permisos.tsv")) }
+    private val permisos by lazy { GestorPermisos(File(dirPerfil(), "permisos.tsv")) }
 
     /** T102 v1 (R0236, RES-0110): visor de workers/SW del motor. Los
      * gestores reales existen (T034) pero la navegacion todavia no
@@ -434,7 +466,7 @@ class BrowserActivity : Activity() {
 
     private val gestorModulos: GestorModulos by lazy {
         GestorModulos(
-            registroModulos, runtimeModulos, File(filesDir, "modulos.tsv"), null,
+            registroModulos, runtimeModulos, File(dirPerfil(), "modulos.tsv"), null,
             tabs.perfil(ProfileKind.NORMAL)?.configModulos, diagModulos
         )
     }
@@ -443,7 +475,7 @@ class BrowserActivity : Activity() {
      *  (TSV en filesDir/listas-modulos con write-through best-effort);
      *  el modulo JAMAS descarga (E4): el host trae las listas con cuotas. */
     private val listasModulos by lazy {
-        ListasModulos(File(filesDir, "listas-modulos"))
+        ListasModulos(File(dirPerfil(), "listas-modulos"))
     }
 
     /** T052+T094/C9 (R0249/R0253, RES-0112/RES-0113): filtro de red del
@@ -509,8 +541,8 @@ class BrowserActivity : Activity() {
      * loguean ni exportan (politica de T104). */
     private var pistaSubs: SubtitleTrack? = null
     private var vistaSubs: TextView? = null
-    private val sesionSubsOs by lazy { OpenSubtitlesSesion(File(filesDir, "subs-os-sesion.tsv")) }
-    private val descargasSubsOs by lazy { File(filesDir, "subs-os") }
+    private val sesionSubsOs by lazy { OpenSubtitlesSesion(File(dirPerfil(), "subs-os-sesion.tsv")) }
+    private val descargasSubsOs by lazy { File(dirPerfil(), "subs-os") }
 
     /** T092 v2 (R0358, RES-0145): puente REAL de las paginas (TK-111-1). */
     private val puenteMediaPagina = PuenteMediaPagina()
@@ -533,7 +565,7 @@ class BrowserActivity : Activity() {
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
     private val ajustes by lazy {
-        val s = SettingsManager(File(filesDir, "ajustes.tsv"))
+        val s = SettingsManager(File(dirPerfil(), "ajustes.tsv"))
         s.registrar(
             OpcionAjuste(
                 "diagnostico.fifo", "Diagnostico",
@@ -699,7 +731,7 @@ class BrowserActivity : Activity() {
         // el backend REAL de plataforma; el motor de media (T036) sigue
         // SIN integrarse en las paginas del navegador (puente
         // HTMLMediaElement = TK-111-1 en v2) y el gestor de perfiles
-        // multiples requiere aceptacion especifica de aislamiento (T112).
+        // nombrados es REAL desde T112 v3 (crear, cambiar, borrar).
         s.registrar(
             OpcionAjuste(
                 "media.autoplay", "Media",
@@ -716,12 +748,16 @@ class BrowserActivity : Activity() {
                 TipoOpcion.BOOL, "false", disponible = false
             )
         )
+        // T112 v3 (R0394, RES-0157): el gestor de perfiles nombrados
+        // es REAL (la opcion declaraba "requiere aceptacion" desde
+        // T093 v9): crear, cambiar (persistir + reinicio del shell)
+        // y borrar con confirmacion explicita.
         s.registrar(
             OpcionAjuste(
                 "perfiles.gestor", "Perfiles",
                 "Gestor de perfiles",
-                "Multiples perfiles con aislamiento requieren aceptacion (T112)",
-                TipoOpcion.BOOL, "false", disponible = false
+                "Crea, cambia o borra perfiles nombrados (T112 v3)",
+                TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
             )
         )
         // T112 v2 (R0379, RES-0152): seccion Copias sobre el
@@ -741,6 +777,17 @@ class BrowserActivity : Activity() {
                 "copias.gestionar", "Copias",
                 "Copias guardadas",
                 "Lista las copias validas: restaurar o borrar",
+                TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
+            )
+        )
+        // T112 v3 (R0394, RES-0157): import de una copia desde un
+        // archivo del dispositivo (SAF): el motor valida TODO-o-NADA
+        // y reescribe canonico con version nueva.
+        s.registrar(
+            OpcionAjuste(
+                "copias.importar", "Copias",
+                "Importar copia",
+                "Importa una copia desde un archivo del dispositivo",
                 TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
             )
         )
@@ -2799,7 +2846,7 @@ class BrowserActivity : Activity() {
      *  http/https viajan; las about: no se guardan. Tope 40 lineas. */
     private fun leerSesionPestanas(): List<LineaSesion> {
         return try {
-            val f = File(filesDir, "sesion-pestanas.tsv")
+            val f = File(dirPerfil(), "sesion-pestanas.tsv")
             if (!f.exists()) {
                 emptyList()
             } else {
@@ -2836,8 +2883,8 @@ class BrowserActivity : Activity() {
      *  la sesion; no corrompe el archivo). */
     private fun guardarSesionPestanas() {
         try {
-            val f = File(filesDir, "sesion-pestanas.tsv")
-            val tmp = File(filesDir, "sesion-pestanas.tsv.tmp")
+            val f = File(dirPerfil(), "sesion-pestanas.tsv")
+            val tmp = File(dirPerfil(), "sesion-pestanas.tsv.tmp")
             val sb = StringBuilder()
             val idActiva = tabs.activa()
             for (t in tabs.tarjetas(ProfileKind.NORMAL)) {
@@ -3392,7 +3439,7 @@ class BrowserActivity : Activity() {
      * escritura JAMAS rompe el estado vivo (solo avisa). */
     private fun guardarMarcadores() {
         try {
-            File(filesDir, "marcadores.tsv").writeText(marcadores.exportar())
+            File(dirPerfil(), "marcadores.tsv").writeText(marcadores.exportar())
         } catch (e: Exception) {
             estado.text = "no se pudieron guardar los marcadores"
             traza("accesos", "escritura fallo")
@@ -4875,6 +4922,36 @@ class BrowserActivity : Activity() {
                 traza("marcadores", "importar html fallo al leer")
             }
         }
+        if (requestCode == REQUEST_IMPORT_COPIA && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "importar copia: sin documento"
+                traza("copias", "importar sin uri")
+                return
+            }
+            try {
+                val texto = leerDocumentoCopia(uri)
+                if (texto == null) {
+                    estado.text = "importar copia: demasiado grande o ilegible"
+                    traza("copias", "importar documento rechazado")
+                    return
+                }
+                when (val r = backupsPerfil.importar(texto)) {
+                    is Outcome.Success -> {
+                        estado.text = "copia importada v" + r.value.version + " (" +
+                            backupsPerfil.total() + "/" + BackupsPerfil.MAX_BACKUPS + ")"
+                        traza("copias", "importada v" + r.value.version)
+                    }
+                    is Outcome.Failure -> {
+                        estado.text = "no importada: " + r.error.safeMessage
+                        traza("copias", "importar fallo: " + r.error.safeMessage)
+                    }
+                }
+            } catch (ilegible: Exception) {
+                estado.text = "importar copia: no se pudo leer el documento"
+                traza("copias", "importar fallo al leer")
+            }
+        }
         if (requestCode == REQUEST_GUARDAR_PDF && resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri == null) {
@@ -5272,6 +5349,8 @@ class BrowserActivity : Activity() {
         }
         if (op.id == "copias.crear") {
             confirmarCrearCopia()
+        } else if (op.id == "copias.importar") {
+            lanzarImportarCopia()
         } else {
             gestionarCopias()
         }
@@ -5487,6 +5566,233 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** Seccion Perfiles (T112 v3, R0394, RES-0157): el gestor REAL
+     *  de perfiles nombrados sobre el GestorPerfiles del motor; la
+     *  opcion declaraba "requiere aceptacion" desde T093 v9 y esto
+     *  es la integracion. Como en Copias, la ELECCION es una accion
+     *  de un uso que JAMAS queda colgada fuera de su defecto. */
+    private fun elegirPerfiles(op: OpcionAjuste) {
+        AlertDialog.Builder(this)
+            .setTitle(op.titulo)
+            .setMessage(op.descripcion)
+            .setItems(op.elecciones.toTypedArray()) { _, cual ->
+                aplicarPerfiles(op, op.elecciones[cual])
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Ejecuta la accion de Perfiles (T112 v3); el defecto (nada) no
+     *  ejecuta nada, como en Limpieza y Copias. */
+    private fun aplicarPerfiles(op: OpcionAjuste, eleccion: String) {
+        if (eleccion == op.defecto) {
+            estado.text = op.titulo + " sin cambios"
+            traza("perfiles", "sin cambios " + op.id)
+            return
+        }
+        mostrarGestorPerfiles()
+    }
+
+    /** Menu del gestor de perfiles (T112 v3): crear, cambiar o
+     *  borrar; el incognito sigue siendo un modo, NO un perfil
+     *  nombrado (vive solo en memoria, T044/T090). */
+    private fun mostrarGestorPerfiles() {
+        AlertDialog.Builder(this)
+            .setTitle("Perfiles")
+            .setMessage("Perfil activo: " + perfilActivo())
+            .setItems(arrayOf("Crear perfil", "Cambiar de perfil", "Borrar perfil")) { _, cual ->
+                if (cual == 0) {
+                    pedirNombrePerfil()
+                } else if (cual == 1) {
+                    pedirCambiarPerfil()
+                } else {
+                    pedirBorrarPerfil()
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Pide el nombre del perfil nuevo (T112 v3): el mismo NOMBRE_RE
+     *  del motor; JAMAS se crea sin validar ni fuera de la cuota. */
+    private fun pedirNombrePerfil() {
+        val campo = EditText(this)
+        campo.hint = "Nombre ([a-z0-9-], 1 a 16)"
+        AlertDialog.Builder(this)
+            .setTitle("Crear perfil")
+            .setView(campo)
+            .setPositiveButton("Crear") { _, _ ->
+                val nombre = campo.text.toString().trim().lowercase()
+                if (!GestorPerfiles.NOMBRE_RE.matches(nombre)) {
+                    estado.text = "nombre de perfil no valido"
+                    traza("perfiles", "nombre no valido")
+                    return@setPositiveButton
+                }
+                val r = gestorPerfiles.crear(nombre)
+                if (r is Outcome.Success) {
+                    File(File(filesDir, "perfiles"), nombre).mkdirs()
+                    estado.text = "perfil " + nombre + " creado (cambia desde el gestor)"
+                    traza("perfiles", "creado " + nombre)
+                } else if (r is Outcome.Failure) {
+                    estado.text = "no creado: " + r.error.safeMessage
+                    traza("perfiles", "crear fallo: " + r.error.safeMessage)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Elige el perfil al que cambiar (T112 v3): todos los nombrados
+     *  menos el activo (cambiar al mismo no hace nada). */
+    private fun pedirCambiarPerfil() {
+        val otros = gestorPerfiles.listar().filter { it != perfilActivo() }
+        if (otros.isEmpty()) {
+            estado.text = "no hay otros perfiles"
+            traza("perfiles", "cambiar: sin candidatos")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Cambiar de perfil")
+            .setItems(otros.toTypedArray()) { _, cual -> confirmarCambioPerfil(otros[cual]) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Confirmacion explicita del cambio (T112 v3): el perfil actual
+     *  se guarda y el navegador SE REINICIA con el nuevo. */
+    private fun confirmarCambioPerfil(nombre: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Cambiar a " + nombre + "?")
+            .setMessage(
+                "El perfil " + perfilActivo() + " se guarda y el navegador se " +
+                    "reinicia con el perfil " + nombre + ". Cambiar?"
+            )
+            .setPositiveButton("Cambiar") { _, _ -> cambiarPerfil(nombre) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Cambia de perfil (T112 v3): persiste la sesion y el storage
+     *  del perfil actual (write-through de cada gestor + save del
+     *  perfil del motor), escribe el activo y REINICIA el shell: los
+     *  gestores son perezosos y se reconstruyen sobre el directorio
+     *  nuevo; JAMAS comparten estado entre perfiles. */
+    private fun cambiarPerfil(nombre: String) {
+        guardarSesionPestanas()
+        tabs.perfil(ProfileKind.NORMAL)?.save()
+        escribirPerfilActivo(nombre)
+        traza("perfiles", "cambio a " + nombre)
+        recreate()
+    }
+
+    /** Elige el perfil a borrar (T112 v3): el ACTIVO JAMAS entra (hay
+     *  que cambiar antes: borrar el activo dejaria el shell colgado). */
+    private fun pedirBorrarPerfil() {
+        val otros = gestorPerfiles.listar().filter { it != perfilActivo() }
+        if (otros.isEmpty()) {
+            estado.text = "no hay otros perfiles para borrar"
+            traza("perfiles", "borrar: sin candidatos")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Borrar perfil")
+            .setItems(otros.toTypedArray()) { _, cual -> confirmarBorradoPerfil(otros[cual]) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Confirmacion explicita del borrado (T112 v3): TODO el perfil
+     *  (marcadores, historial, ajustes, sitios, permisos, modulos,
+     *  storage y copias) muere del disco; JAMAS contenido en traza. */
+    private fun confirmarBorradoPerfil(nombre: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Borrar " + nombre + "?")
+            .setMessage(
+                "TODO el perfil " + nombre + " se borrara del disco: marcadores, " +
+                    "historial, ajustes, sitios, permisos, modulos, storage y copias. Borrar?"
+            )
+            .setPositiveButton("Borrar") { _, _ ->
+                val r = gestorPerfiles.borrar(nombre)
+                if (r is Outcome.Success) {
+                    File(File(filesDir, "perfiles"), nombre).deleteRecursively()
+                    estado.text = "perfil " + nombre + " borrado"
+                    traza("perfiles", "borrado " + nombre)
+                } else if (r is Outcome.Failure) {
+                    estado.text = "no borrado: " + r.error.safeMessage
+                    traza("perfiles", "borrar fallo: " + r.error.safeMessage)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Perfil activo (T112 v3): el nombre de perfil-activo.tsv
+     *  JAMAS se confia; sin archivo, corrupto o fuera del registro
+     *  el activo es "principal". */
+    private fun perfilActivo(): String {
+        val guardado = leerPerfilActivo()
+        if (guardado != null && gestorPerfiles.existe(guardado)) return guardado
+        return "principal"
+    }
+
+    private fun leerPerfilActivo(): String? {
+        return try {
+            val f = File(filesDir, "perfil-activo.tsv")
+            if (!f.isFile) return null
+            val linea = f.readText(Charsets.UTF_8).trim()
+            if (GestorPerfiles.NOMBRE_RE.matches(linea)) linea else null
+        } catch (ilegible: Exception) {
+            null
+        }
+    }
+
+    /** Escribe el perfil activo con escritura atomica (T112 v3); si
+     *  el rename falla se escribe directo (como la sesion de
+     *  pestanas). */
+    private fun escribirPerfilActivo(nombre: String) {
+        try {
+            val f = File(filesDir, "perfil-activo.tsv")
+            val tmp = File(filesDir, "perfil-activo.tsv.tmp")
+            tmp.writeText(nombre, Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(nombre, Charsets.UTF_8)
+                tmp.delete()
+            }
+        } catch (noEscribible: Exception) {
+            traza("perfiles", "no se pudo escribir el perfil activo")
+        }
+    }
+
+    /** Lanza el selector SAF de la copia a importar (T112 v3): el
+     *  contenido se lee con tope y JAMAS se registra. */
+    private fun lanzarImportarCopia() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.setType("*/*")
+        startActivityForResult(i, REQUEST_IMPORT_COPIA)
+    }
+
+    /** Lee el documento elegido por SAF con el tope del motor (T112
+     *  v3): null si es mas grande o ilegible; el contenido de la
+     *  copia JAMAS aparece en estado ni traza. */
+    private fun leerDocumentoCopia(uri: Uri): String? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { flujo ->
+                val datos = ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                while (true) {
+                    val n = flujo.read(buf)
+                    if (n < 0) break
+                    datos.write(buf, 0, n)
+                    if (datos.size() > BackupsPerfil.MAX_IMPORTAR) return null
+                }
+                String(datos.toByteArray(), Charsets.UTF_8)
+            }
+        } catch (ilegible: Exception) {
+            null
+        }
+    }
+
     /** Tipo de perfil de la pestana activa (normal si no hay). */
     private fun tipoActivo(): ProfileKind {
         val id = tabs.activa()
@@ -5669,6 +5975,8 @@ class BrowserActivity : Activity() {
                     elegirLimpieza(op)
                 } else if (op.seccion == "Copias") {
                     elegirCopias(op)
+                } else if (op.seccion == "Perfiles") {
+                    elegirPerfiles(op)
                 } else if (op.id == "contenido.sitios") {
                     aplicarBorradoSitios()
                 } else {
@@ -5805,5 +6113,6 @@ class BrowserActivity : Activity() {
         private const val REQUEST_GUARDAR_TORRENT = 52
         private const val REQUEST_MEDIA = 53
         private const val REQUEST_NOTIFICACIONES = 54
+        private const val REQUEST_IMPORT_COPIA = 55
     }
 }
