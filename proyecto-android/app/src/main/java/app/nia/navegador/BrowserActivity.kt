@@ -69,6 +69,7 @@ import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.media.MediaEngine
 import nia.engine.media.MediaException
+import nia.engine.media.MediaPuente
 import nia.engine.media.MediaSource
 import nia.engine.media.MediaState
 import nia.engine.modules.AprobacionPaquete
@@ -414,6 +415,9 @@ class BrowserActivity : Activity() {
     private var volumenMedia = 1.0
     private var pasoVelocidadMedia = 1
     private val velocidadesMedia = doubleArrayOf(0.5, 1.0, 1.5, 2.0)
+
+    /** T092 v2 (R0358, RES-0145): puente REAL de las paginas (TK-111-1). */
+    private val puenteMediaPagina = PuenteMediaPagina()
     private val torrents = TorrentEngine()
     private val peerIdTorrent = ByteArray(20).also { java.security.SecureRandom().nextBytes(it) }
     private var guardarTorrentPendiente: Pair<String, Int>? = null
@@ -1069,6 +1073,7 @@ class BrowserActivity : Activity() {
         }
         nc.invalidateGeneration()
         nc.cuotasScript = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
+        nc.puenteMedia = puenteMediaPagina
         resumenModulos = ""
         progreso.setFraccion(0.2f)
         traza("nav", "navegar " + hostDe(url))
@@ -1108,6 +1113,7 @@ class BrowserActivity : Activity() {
         }
         nc.invalidateGeneration()
         nc.cuotasScript = CuotasJs.temporal(reintentosCuotas, cuotasResueltas())
+        nc.puenteMedia = puenteMediaPagina
         resumenModulos = ""
         progreso.setFraccion(0.2f)
         traza("nav", "back/forward")
@@ -3698,6 +3704,49 @@ class BrowserActivity : Activity() {
         MediaState.PAUSED -> "en pausa"
         MediaState.ENDED -> "terminado"
         MediaState.FAILED -> "fallo"
+    }
+
+    /** T092 v2 (R0358, RES-0145): puente HTMLMediaElement REAL
+     *  (TK-111-1): los video/audio de las paginas hablan con el
+     *  MediaEngine del shell; play abre el player v1 SOBRE EL MISMO
+     *  backend REAL. Las ordenes que tocan vistas van al hilo de UI;
+     *  las consultas (posicion/duracion/estado) leen el nucleo desde
+     *  el hilo de los scripts. Exclusion v2: UN medio activo y sin
+     *  eventos asincronos hacia la pagina (v3). */
+    private inner class PuenteMediaPagina : MediaPuente {
+        override fun reproducir(url: String, esVideo: Boolean) {
+            runOnUiThread { abrirPlayer("pagina", url) }
+        }
+
+        override fun pausar() {
+            runOnUiThread {
+                if (media.state() == MediaState.PLAYING) media.pause()
+            }
+        }
+
+        override fun posicionMs(): Long =
+            if (playerAbierto) media.position() else 0L
+
+        override fun duracionMs(): Long =
+            if (playerAbierto) media.duration() else 0L
+
+        override fun enPausa(): Boolean = media.state() != MediaState.PLAYING
+
+        override fun volumen(): Double = volumenMedia
+
+        override fun fijarVolumen(v: Double) {
+            runOnUiThread { volumenMedia = media.setVolume(v) }
+        }
+
+        override fun velocidad(): Double = media.rate()
+
+        override fun fijarVelocidad(rate: Double) {
+            runOnUiThread { media.setRate(rate) }
+        }
+
+        override fun buscar(ms: Long) {
+            runOnUiThread { media.seekTo(ms) }
+        }
     }
 
     /** Cierre del player: corta el refresco y libera el backend REAL. */

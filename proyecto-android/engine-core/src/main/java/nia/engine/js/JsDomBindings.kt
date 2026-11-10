@@ -6,6 +6,7 @@ import nia.engine.dom.DomDocument
 import nia.engine.dom.DomException
 import nia.engine.dom.DomHandle
 import nia.engine.html.DomNode
+import nia.engine.media.MediaPuente
 
 /**
  * Bindings DOM + consola (T022 v1): puente entre el interprete ECMAScript
@@ -65,7 +66,7 @@ object JsDomBindings {
         genv.declare("console", console)
     }
 
-    private class Session(val doc: DomDocument) {
+    private class Session(val doc: DomDocument, val puenteMedia: MediaPuente?, val baseUrl: String) {
 
         val byNode = HashMap<Int, JsObj>()
         val handles = HashMap<JsObj, DomHandle>()
@@ -107,6 +108,33 @@ object JsDomBindings {
             } catch (e: DomException) {
                 emptyList()
             }
+        }
+
+        /** T092 v2: URL absoluta del src del medio (http/https o relativa
+         * al origen de la pagina); el resto devuelve null (honesto). */
+        private fun resolverMediaUrl(src: String?): String? {
+            val t = src?.trim() ?: return null
+            if (t.isEmpty()) return null
+            if (t.startsWith("http://") || t.startsWith("https://")) return t
+            if (t.startsWith("/") && baseUrl.isNotEmpty()) return baseUrl + t
+            return null
+        }
+
+        /** T092 v2: dispara un evento de media AL ELEMENTO (sin
+         * burbujeo), sincrono, con el patron del submit de formularios. */
+        private fun despacharEventoMedia(target: JsObj, tipo: String) {
+            val ev = JsRuntime.newObj()
+            ev.props["type"] = JsProp.Value(JsStr(tipo))
+            ev.props["bubbles"] = JsProp.Value(JsBool(false))
+            ev.props["cancelable"] = JsProp.Value(JsBool(false))
+            ev.props["defaultPrevented"] = JsProp.Value(JsBool(false))
+            ev.props["preventDefault"] = JsProp.Value(JsBuiltins.fn("preventDefault") { _, _ ->
+                JsUndefined
+            })
+            val dEntry = target.props["dispatchEvent"]
+            val dVal = (dEntry as? JsProp.Value)?.v
+            if (dVal == null) return
+            JsInterpreter.callFunction(dVal, target, listOf(ev))
         }
 
         fun findById(h: DomHandle, id: String): DomHandle? {
@@ -185,6 +213,16 @@ object JsDomBindings {
         private val idSet = parseAccessorFun("(function (v) { this.__idSet(v); })")
         private val clGet = parseAccessorFun("(function () { return this.__classNameGet(); })")
         private val clSet = parseAccessorFun("(function (v) { this.__classNameSet(v); })")
+
+        /** T092 v2 (R0358): accessors de media (TK-111-1), parseados una vez por sesion. */
+        private val paGet = parseAccessorFun("(function () { return this.__pausedGet(); })")
+        private val ctGet = parseAccessorFun("(function () { return this.__currentTimeGet(); })")
+        private val ctSet = parseAccessorFun("(function (v) { this.__currentTimeSet(v); })")
+        private val durGet = parseAccessorFun("(function () { return this.__durationGet(); })")
+        private val voGet = parseAccessorFun("(function () { return this.__volumeGet(); })")
+        private val voSet = parseAccessorFun("(function (v) { this.__volumeSet(v); })")
+        private val raGet = parseAccessorFun("(function () { return this.__rateGet(); })")
+        private val raSet = parseAccessorFun("(function (v) { this.__rateSet(v); })")
 
 
         private fun parseAccessorFun(src: String): JsFun {
@@ -642,6 +680,76 @@ object JsDomBindings {
                     JsInterpreter.callFunction(dVal, target, listOf(ev))
                 })
             }
+            // T092 v2 (R0358, RES-0145): puente HTMLMediaElement
+            // (TK-111-1): video/audio con play/pause/paused/currentTime/
+            // duration/volume/playbackRate contra el backend REAL del
+            // puente; play/pause/seeked se disparan AL ELEMENTO en el
+            // mismo script (sincronos, como submit). Sin puente la API no
+            // se expone (nada fingido). Exclusiones v2: ended/timeupdate/
+            // error asincronos (entorno persistente en v3), sin hijos
+            // <source>/<track>, UN medio activo a la vez.
+            if (tag == "video" || tag == "audio") {
+                val puente = puenteMedia
+                if (puente != null) {
+                    w.props["play"] = JsProp.Value(JsBuiltins.fn("play") { _, thiz ->
+                        val h = handleOf(thiz)
+                        if (h == null) {
+                            throw JsRuntime.throwNative("TypeError", "play exige un nodo del documento")
+                        }
+                        val src = try {
+                            doc.attributeOf(h, "src")
+                        } catch (e: DomException) {
+                            null
+                        }
+                        val url = resolverMediaUrl(src)
+                        if (url == null) return@fn JsBool(false)
+                        puente.reproducir(url, tag == "video")
+                        despacharEventoMedia(w, "play")
+                        JsBool(true)
+                    })
+                    w.props["pause"] = JsProp.Value(JsBuiltins.fn("pause") { _, _ ->
+                        puente.pausar()
+                        despacharEventoMedia(w, "pause")
+                        JsUndefined
+                    })
+                    w.props["__pausedGet"] = JsProp.Value(JsBuiltins.fn("paused-get") { _, _ ->
+                        JsBool(puente.enPausa())
+                    })
+                    w.props["__currentTimeGet"] = JsProp.Value(JsBuiltins.fn("currentTime-get") { _, _ ->
+                        JsNum(puente.posicionMs() / 1000.0)
+                    })
+                    w.props["__currentTimeSet"] = JsProp.Value(JsBuiltins.fn("currentTime-set") { args, _ ->
+                        val segundos = JsRuntime.strToNumber(JsRuntime.toStringJs(JsBuiltins.a0(args)))
+                        puente.buscar((segundos * 1000).toLong())
+                        JsUndefined
+                    })
+                    w.props["__durationGet"] = JsProp.Value(JsBuiltins.fn("duration-get") { _, _ ->
+                        JsNum(puente.duracionMs() / 1000.0)
+                    })
+                    w.props["__volumeGet"] = JsProp.Value(JsBuiltins.fn("volume-get") { _, _ ->
+                        JsNum(puente.volumen())
+                    })
+                    w.props["__volumeSet"] = JsProp.Value(JsBuiltins.fn("volume-set") { args, _ ->
+                        val v = JsRuntime.strToNumber(JsRuntime.toStringJs(JsBuiltins.a0(args)))
+                        puente.fijarVolumen(v)
+                        JsUndefined
+                    })
+                    w.props["__rateGet"] = JsProp.Value(JsBuiltins.fn("playbackRate-get") { _, _ ->
+                        JsNum(puente.velocidad())
+                    })
+                    w.props["__rateSet"] = JsProp.Value(JsBuiltins.fn("playbackRate-set") { args, _ ->
+                        val r = JsRuntime.strToNumber(JsRuntime.toStringJs(JsBuiltins.a0(args)))
+                        puente.fijarVelocidad(r)
+                        JsUndefined
+                    })
+                    w.props["paused"] = JsProp.Accessor(paGet, null)
+                    w.props["currentTime"] = JsProp.Accessor(ctGet, ctSet)
+                    w.props["duration"] = JsProp.Accessor(durGet, null)
+                    w.props["volume"] = JsProp.Accessor(voGet, voSet)
+                    w.props["playbackRate"] = JsProp.Accessor(raGet, raSet)
+                }
+            }
+
             // T022 v2 (RES-0071): reflejo de nodos. nodeType y nodeName son
             // constantes del nodo; tagName, id y className solo en Elements.
             if (selfNode != null) {
@@ -703,8 +811,13 @@ object JsDomBindings {
     }
 
     /** Instala el global document con los bindings sobre doc (T022). */
-    fun install(genv: Env, doc: DomDocument) {
-        val s = Session(doc)
+    fun install(genv: Env, doc: DomDocument): Unit = install(genv, doc, null, "")
+
+    /** T092 v2 (R0358, RES-0145): instalacion con puente HTMLMediaElement
+     * (TK-111-1): con puente, los video/audio de la pagina exponen su API
+     * contra el backend REAL del shell; sin puente, no se expone nada. */
+    fun install(genv: Env, doc: DomDocument, puenteMedia: MediaPuente?, baseUrl: String) {
+        val s = Session(doc, puenteMedia, baseUrl)
         val document = JsRuntime.newObj()
         document.props["getElementById"] = JsProp.Value(JsBuiltins.fn("getElementById") { args, _ ->
             val id = JsRuntime.toStringJs(JsBuiltins.a0(args))

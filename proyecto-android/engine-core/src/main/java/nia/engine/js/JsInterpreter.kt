@@ -1,6 +1,7 @@
 package nia.engine.js
 
 import nia.engine.dom.DomDocument
+import nia.engine.media.MediaPuente
 import java.util.concurrent.LinkedBlockingQueue
 
 /**
@@ -1779,13 +1780,17 @@ object JsInterpreter {
     fun evaluateWithDom(source: String, doc: DomDocument): JsEvalResult =
         evaluateWithDom(source, doc, JsLimits())
 
-    /** Evaluacion con bindings DOM y cuotas explicitas (T021). */
+    /** Evaluacion con bindings DOM y cuotas explicitas (T021). T092
+     * v2 (R0358): puente de media y URL base opcionales para el
+     * HTMLMediaElement de la pagina (TK-111-1). */
     fun evaluateWithDom(
         source: String,
         doc: DomDocument,
         limits: JsLimits,
         fetch: JsFetchApi? = null,
-        storage: JsStorageApi? = null
+        storage: JsStorageApi? = null,
+        puente: MediaPuente? = null,
+        baseUrl: String = ""
     ): JsEvalResult {
         val parse = JsParser.parse(source)
         val genv = Env(null, true)
@@ -1796,7 +1801,7 @@ object JsInterpreter {
         JsBuiltins.install(genv)
         installCallbackBuiltins(genv)
         JsDomBindings.installConsole(genv)
-        JsDomBindings.install(genv, doc)
+        JsDomBindings.install(genv, doc, puente, baseUrl)
         keepAliveRunners = false
         if (fetch != null) fetch.install(genv)
         if (storage != null) storage.install(genv)

@@ -9,6 +9,7 @@ import nia.engine.js.JsFetchApi
 import nia.engine.js.JsInterpreter
 import nia.engine.js.JsLimits
 import nia.engine.js.JsStorageApi
+import nia.engine.media.MediaPuente
 import nia.engine.net.FetchManager
 import nia.engine.net.FetchResponse
 import nia.engine.net.FetchTransport
@@ -152,6 +153,12 @@ class NavController(
      * motor (100M pasos y 10M allocs, T021). */
     var cuotasScript: JsLimits = JsLimits()
 
+    /** T092 v2 (R0358, RES-0145): puente HTMLMediaElement (TK-111-1)
+     * inyectable: el shell lo implementa sobre el backend REAL de
+     * plataforma; con null los video/audio de la pagina NO exponen API
+     * de media (honestidad: nada se finge). */
+    var puenteMedia: MediaPuente? = null
+
     /** Nueva generacion: las respuestas en vuelo quedan stale. */
     fun invalidateGeneration(): Long = manager.invalidate()
 
@@ -288,6 +295,8 @@ class NavController(
         val scripts = ArrayList<NavScript>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
         val fetchApi = JsFetchApi(transport, clock, null, filter, current)
+        val baseMedia = finalUrl.scheme + "://" + finalUrl.host +
+            (if (finalUrl.port != null) ":" + finalUrl.port else "")
         var inlineCount = 0
         for (item in items) {
             when (item) {
@@ -300,7 +309,7 @@ class NavController(
                 }
                 is LoadItem.InlineScript -> {
                     inlineCount += 1
-                    val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi)
+                    val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
                     scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
                 }
                 is LoadItem.ScriptSrc -> {
@@ -310,7 +319,7 @@ class NavController(
                         return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                     }
                     if (r is SideResult.Ok) {
-                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi)
+                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
                         scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
                     } else {
                         scripts.add(NavScript(ref, describe(r)))
