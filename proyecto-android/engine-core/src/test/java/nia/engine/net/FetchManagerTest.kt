@@ -188,13 +188,15 @@ class FetchManagerTest {
     }
 
     @Test fun respuestaStaleDescartada() {
+        val clock = FakeClock(1000)
+        val source = CancellationTokenSource(clock)
         val t = FakeTransport()
-        val m = FetchManager(t)
+        val m = FetchManager(t, clock)
         t.hook = { _, _ ->
             m.invalidate()
             okResp()
         }
-        val e = fallo(m.fetch(m.newRequest("GET", "https://a.example/")))
+        val e = fallo(m.fetch(m.newRequest("GET", "https://a.example/"), source.token))
         assertEquals(ErrorCode.STALE_HANDLE, e.code)
         assertEquals(0, m.deliveredCount())
     }
@@ -340,5 +342,42 @@ class FetchManagerTest {
         val same = RequestContext("https://sitio.com/v.mp4", "fetch", "https://sitio.com/pagina", false)
         val resp2 = valor(m.fetch(m.newRequest("GET", "https://sitio.com/v.mp4"), null, -1, same))
         assertTrue(!resp2.headers.containsKey("Access-Control-Allow-Origin"), "same-origin sin ACAO")
+    }
+
+    @Test fun invalidateCancelaElTokenInternoEnVuelo() {
+        val t = FakeTransport()
+        val m = FetchManager(t)
+        t.hook = { _, _ ->
+            m.invalidate()
+            okResp()
+        }
+        val e = fallo(m.fetch(m.newRequest("GET", "https://a.example/")))
+        assertEquals(ErrorCode.CANCELLED, e.code)
+        assertTrue(t.tokens[0].isCancelled)
+        assertEquals(0, m.operacionesActivas())
+    }
+
+    @Test fun operacionCompletadaSeRetiraDelRegistroActivo() {
+        val t = FakeTransport()
+        val m = FetchManager(t)
+        t.hook = { _, _ -> okResp() }
+        valor(m.fetch(m.newRequest("GET", "https://a.example/")))
+        assertEquals(0, m.operacionesActivas())
+        assertEquals(1, m.invalidate())
+    }
+
+    @Test fun invalidateNoCancelaElTokenExterno() {
+        val clock = FakeClock(1000)
+        val source = CancellationTokenSource(clock)
+        val t = FakeTransport()
+        val m = FetchManager(t, clock)
+        t.hook = { _, _ ->
+            m.invalidate()
+            okResp()
+        }
+        val e = fallo(m.fetch(m.newRequest("GET", "https://a.example/"), source.token))
+        assertTrue(!source.token.isCancelled)
+        assertEquals(ErrorCode.STALE_HANDLE, e.code)
+        assertEquals(0, m.operacionesActivas())
     }
 }

@@ -1,5 +1,7 @@
 package nia.engine.net
 
+import java.util.concurrent.ConcurrentHashMap
+import nia.contracts.CancelReason
 import nia.contracts.CancellationToken
 import nia.contracts.CancellationTokenSource
 import nia.contracts.ErrorCode
@@ -53,6 +55,14 @@ import nia.contracts.WallClock
  * CORS lo calcula el host (refleja el origen del iniciador solo en
  * cross-origin explicito) y el Range se honra con 206 parcial o
  * DENIED (rango invalido); la sustitucion NO cuenta en delivered.
+ *
+ * v5 (R0303, T011): invalidate() cancela de verdad. El manager registra
+ * las fuentes de cancelacion de las operaciones con token INTERNO y al
+ * invalidar las cancela con Replaced: la respuesta en vuelo muere como
+ * CANCELLED (la razon se comprueba ANTES que la generacion) y el
+ * transporte desconecta su conexion via token.onCancel. Los fetch con
+ * token EXTERNO no se cancelan: solo quedan stale, quien pasa el token
+ * es dueno de cancelarlo.
  */
 
 data class FetchRequest(
@@ -92,6 +102,7 @@ class FetchManager(
     private var generation = 0L
     private var nextId = 0L
     private var delivered = 0
+    private val activos = ConcurrentHashMap<Long, CancellationTokenSource>()
 
     /** Peticion nueva con id monotomico; el cuerpo y cabeceras llegan aparte. */
     fun newRequest(
@@ -104,11 +115,22 @@ class FetchManager(
         return FetchRequest(nextId, method, url, headers, body)
     }
 
-    /** Nueva generacion: las respuestas de generaciones anteriores son stale. */
+    /** Nueva generacion: las respuestas de generaciones anteriores son
+     * stale. T011 v5: ADEMAS cancela de verdad las operaciones en vuelo
+     * cuyo token creo el manager (los fetch de documento): el transporte
+     * desconecta via token.onCancel. Las operaciones con token EXTERNO
+     * no se cancelan aqui (solo quedan stale): quien pasa el token es
+     * dueno de cancelarlo. */
     fun invalidate(): Long {
         generation += 1
+        val enVuelo = ArrayList(activos.values)
+        activos.clear()
+        for (fuente in enVuelo) fuente.cancel(CancelReason.Replaced("generacion"))
         return generation
     }
+
+    /** T011 v5: operaciones con token interno en vuelo (test/diagnostico). */
+    fun operacionesActivas(): Int = activos.size
 
     fun deliveredCount(): Int = delivered
 
@@ -145,7 +167,15 @@ class FetchManager(
             }
         }
         val g = generation
-        val t = token ?: CancellationTokenSource(clock).token
+        val t: CancellationToken
+        val fuenteInterna: CancellationTokenSource?
+        if (token != null) {
+            t = token
+            fuenteInterna = null
+        } else {
+            fuenteInterna = CancellationTokenSource(clock)
+            t = fuenteInterna.token
+        }
         if (deadlineMillis > 0) {
             val r = t.checkDeadline(deadlineMillis)
             if (r != null) {
@@ -169,7 +199,12 @@ class FetchManager(
                 }
             }
         }
-        val result = transport.fetch(effective, t)
+        if (fuenteInterna != null) activos[request.id] = fuenteInterna
+        val result = try {
+            transport.fetch(effective, t)
+        } finally {
+            if (fuenteInterna != null) activos.remove(request.id)
+        }
         val cr = t.reason()
         if (cr != null) {
             return Outcome.failure(ErrorInfo(ErrorCode.CANCELLED, "operacion cancelada: " + cr))
