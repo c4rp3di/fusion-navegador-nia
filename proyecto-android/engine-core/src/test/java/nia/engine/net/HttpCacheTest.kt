@@ -164,6 +164,63 @@ class HttpCacheTest {
         )
     }
 
+    @Test fun cacheHeuristicaDiezPorCientoFresco() {
+        val clock = FakeClock(1000)
+        val cache = HttpCache(clock)
+        cache.store(
+            "https://a.example/",
+            FetchResponse(
+                200,
+                mapOf(
+                    "date" to "Mon, 02 Nov 2026 14:00:00 GMT",
+                    "last-modified" to "Mon, 02 Nov 2026 13:00:00 GMT"
+                ),
+                body("v")
+            )
+        )
+        assertTrue(cache.lookup("GET", "https://a.example/") is HttpCache.Lookup.Fresh)
+        clock.valor = 1000 + 360_000
+        assertTrue(cache.lookup("GET", "https://a.example/") is HttpCache.Lookup.Stale)
+    }
+
+    @Test fun cacheHeuristicaTope24Horas() {
+        val clock = FakeClock(1000)
+        val cache = HttpCache(clock)
+        cache.store(
+            "https://a.example/",
+            FetchResponse(
+                200,
+                mapOf(
+                    "date" to "Mon, 02 Nov 2026 14:00:00 GMT",
+                    "last-modified" to "Fri, 24 Jul 2026 14:00:00 GMT"
+                ),
+                body("v")
+            )
+        )
+        assertTrue(cache.lookup("GET", "https://a.example/") is HttpCache.Lookup.Fresh)
+        clock.valor = 1000 + 86_400_000
+        assertTrue(cache.lookup("GET", "https://a.example/") is HttpCache.Lookup.Stale)
+    }
+
+    @Test fun cacheMaxAgeMandaSobreHeuristica() {
+        val clock = FakeClock(1000)
+        val cache = HttpCache(clock)
+        cache.store(
+            "https://a.example/",
+            FetchResponse(
+                200,
+                mapOf(
+                    "cache-control" to "max-age=1",
+                    "last-modified" to "Fri, 24 Jul 2026 14:00:00 GMT"
+                ),
+                body("v")
+            )
+        )
+        assertTrue(cache.lookup("GET", "https://a.example/") is HttpCache.Lookup.Fresh)
+        clock.valor = 1000 + 2_000
+        assertTrue(cache.lookup("GET", "https://a.example/") is HttpCache.Lookup.Stale)
+    }
+
     @Test fun cacheNuloPorDefectoNoCachea() {
         val t = FakeTransport()
         val m = FetchManager(t)

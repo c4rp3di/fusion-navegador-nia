@@ -33,9 +33,10 @@ import nia.engine.url.UrlParser
  * no se almacena (como no-store). bytes() expone el consumo para
  * que los ajustes puedan mostrarlo.
  *
- * Limitaciones v2: solo GET, sin Vary, sin heuristica (sin
- * freshFor conocido la entrada nunca es fresca) y sin particiones
- * (T033).
+ * Limitaciones v2: solo GET, sin Vary y sin particiones
+ * (T033); v5 (R0324, RES-0132): frescura heuristica RFC 9111
+ * cuando no hay max-age ni Expires (10% de Date-Last-Modified,
+ * tope 24 h).
  */
 class HttpCache(
     private val clock: WallClock,
@@ -193,14 +194,21 @@ class HttpCache(
         return out
     }
 
-    /** max-age=N en millis; si no, Expires-Date; si no, 0 (sin heuristica). */
+    /** T026 v5 (R0324, RES-0132): max-age=N en millis; si no,
+     *  Expires-Date; si no, heuristica RFC 9111 con Last-Modified
+     *  (10% de Date-Last-Modified, Date ausente -> nowMillis, tope
+     *  24 h); si nada, 0. El orden MANDA: max-age, Expires y solo
+     *  entonces la heuristica. */
     private fun freshnessMillis(headers: Map<String, String>, nowMillis: Long, directives: Map<String, String>): Long {
         val maxAge = directives["max-age"]?.toLongOrNull()
         if (maxAge != null) return maxAge * 1000
         val expires = dateMillis(headers, "expires")
         val date = dateMillis(headers, "date")
         if (expires != null && date != null) return (expires - date).coerceAtLeast(0)
-        return 0
+        val lastModified = dateMillis(headers, "last-modified") ?: return 0
+        val base = (date ?: nowMillis) - lastModified
+        if (base <= 0) return 0
+        return (base / 10).coerceAtMost(86_400_000L)
     }
 
     /** Fecha de una cabecera en millis; ilegible -> null. */
