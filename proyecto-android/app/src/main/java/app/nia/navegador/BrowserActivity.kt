@@ -384,7 +384,7 @@ class BrowserActivity : Activity() {
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
-    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -447,9 +447,8 @@ class BrowserActivity : Activity() {
             OpcionAjuste(
                 "limpieza.descargas", "Limpieza",
                 "Limpiar descargas",
-                "NO disponible todavia: llega con el gestor de descargas del shell (T047/T085)",
-                TipoOpcion.ELECCION, "conservar", elecciones = listOf("conservar", "ejecutar"),
-                disponible = false
+                "Retira las terminadas de la cola con conteo",
+                TipoOpcion.ELECCION, "conservar", elecciones = listOf("conservar", "ejecutar")
             )
         )
         s.registrar(
@@ -3440,6 +3439,8 @@ class BrowserActivity : Activity() {
                 "Borrar TODO el estado del perfil " + nombre + " (cookies, cache, storage, IndexedDB y el archivo en disco) y vaciar sus reabiertas?"
             "limpieza.cache" ->
                 "Borrar solo el cache HTTP de los perfiles vivos (normal e incognito)? Las cookies y el historial viven"
+            "limpieza.descargas" ->
+                "Retirar de la cola las descargas terminadas (completadas, canceladas y fallidas)? Las vivas siguen"
             else -> return
         }
         AlertDialog.Builder(this)
@@ -3478,6 +3479,15 @@ class BrowserActivity : Activity() {
             val n = tabs.limpiarCache()
             estado.text = "cache borrado (" + n + " entradas)"
             traza("limpieza", "cache (" + n + ")")
+            return
+        }
+        if (op.id == "limpieza.descargas") {
+            val ids = descargas.limpiarTerminadas()
+            for (id in ids) {
+                urisDescargas.remove(id)
+            }
+            estado.text = "descargas retiradas (" + ids.size + ")"
+            traza("limpieza", "descargas (" + ids.size + ")")
             return
         }
         ejecutarFire(tipo, if (op.id == "limpieza.fire-sesion") FireLevel.SESION else FireLevel.TOTAL)
