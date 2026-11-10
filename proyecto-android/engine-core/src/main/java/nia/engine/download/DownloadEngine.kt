@@ -47,16 +47,26 @@ import nia.engine.net.TransportFailure
  *
  * T046 v3 (R0334, RES-0135): limpiarTerminadas() retira del
  * registro los items en estado terminal y devuelve SUS IDS en
- * orden; los vivos (QUEUED/RUNNING) NUNCA se tocan (retirar una
- * descarga en marcha es cancelar, no barrer) y los ids JAMAS se
+ * orden; los vivos (QUEUED/RUNNING/PAUSED) NUNCA se tocan (retirar
+ * una descarga en marcha es cancelar, no barrer) y los ids JAMAS se
  * reutilizan.
+ *
+ * T046 v4 (R0345, RES-0140): pausa REAL, no un fallo disfrazado.
+ * pausar(id) sobre un item vivo: QUEUED pasa a PAUSED sin correr
+ * (el sink queda intacto: nada se escribio) y RUNNING corta como
+ * la cancelacion pero termina PAUSED con el sink cerrado y los
+ * bytes intactos. resume(id) reanuda tambien PAUSED (con bytes
+ * sigue por Range desde el byte pausado con sink reabrible; sin
+ * bytes re-encola con el MISMO sink) y cancel(id) sobre PAUSED lo
+ * cancela de verdad. PAUSED NO es terminal: el barrido de v3
+ * JAMAS lo toca.
  *
  * Limitaciones v2: sin gestor de descargas persistente (T047 monta el
  * torrent sobre esta frontera), sin Range multiple y una cancelacion
  * sobre un estado terminal se ignora (devuelve false).
  */
 
-enum class DownloadState { QUEUED, RUNNING, COMPLETED, CANCELLED, FAILED }
+enum class DownloadState { QUEUED, RUNNING, PAUSED, COMPLETED, CANCELLED, FAILED }
 
 data class DownloadItem(
     val id: Long,
@@ -122,7 +132,8 @@ class DownloadEngine(
         var state: DownloadState,
         var bytes: Long,
         var total: Long,
-        var error: String?
+        var error: String?,
+        var pauseRequested: Boolean = false
     )
 
     private val lock = Object()
@@ -195,21 +206,67 @@ class DownloadEngine(
                 closeQuietly(entry)
                 notifyLocked(id, entry)
             }
+            if (entry.state == DownloadState.PAUSED) {
+                // T046 v4: una pausa se cancela de verdad (terminal).
+                entry.state = DownloadState.CANCELLED
+                entry.error = "cancelada"
+                closeQuietly(entry)
+                notifyLocked(id, entry)
+            }
             return true
         }
     }
 
     /**
-     * T046 v2: reanuda un item FAILED con bytes y sink reabrible;
-     * vuelve a QUEUED con token nuevo y sigue desde el byte que fallo.
+     * T046 v4 (R0345, RES-0140): pausa REAL de un item vivo, no un
+     * fallo disfrazado. QUEUED pasa a PAUSED sin correr (el sink
+     * queda intacto: nada se escribio); RUNNING corta como la
+     * cancelacion pero el worker lo termina PAUSED con el sink
+     * cerrado y los bytes intactos. Terminal o ya pausado devuelven
+     * false.
+     */
+    fun pausar(id: Long): Boolean {
+        synchronized(lock) {
+            val entry = items[id] ?: return false
+            if (isTerminal(entry.state)) return false
+            if (entry.state == DownloadState.PAUSED) return false
+            if (entry.state == DownloadState.QUEUED) {
+                entry.state = DownloadState.PAUSED
+                entry.error = "pausada"
+                notifyLocked(id, entry)
+                return true
+            }
+            entry.pauseRequested = true
+            entry.cts.cancel()
+            return true
+        }
+    }
+
+    /**
+     * T046 v2 + v4: reanuda un item FAILED o PAUSED con bytes y sink
+     * reabrible; vuelve a QUEUED con token nuevo y sigue desde el
+     * byte que fallo (o pauso) por Range. Una PAUSED sin bytes
+     * (pausada en cola) re-encola con el MISMO sink intacto.
      * Devuelve false fuera de ese contrato.
      */
     fun resume(id: Long): Boolean {
         synchronized(lock) {
             val entry = items[id] ?: return false
-            if (entry.state != DownloadState.FAILED) return false
+            val reanudable = entry.state == DownloadState.FAILED || entry.state == DownloadState.PAUSED
+            if (!reanudable) return false
+            if (entry.state == DownloadState.PAUSED && entry.bytes <= 0L) {
+                entry.pauseRequested = false
+                entry.cts = CancellationTokenSource(clock)
+                entry.state = DownloadState.QUEUED
+                entry.error = null
+                notifyLocked(id, entry)
+                queue.add(id)
+                scheduleNextLocked()
+                return true
+            }
             if (entry.bytes <= 0L) return false
             if (entry.sink !is ReopenableSink) return false
+            entry.pauseRequested = false
             entry.cts = CancellationTokenSource(clock)
             entry.state = DownloadState.QUEUED
             entry.error = null
@@ -223,7 +280,7 @@ class DownloadEngine(
     /**
      * T046 v3 (R0334, RES-0135): retira de la lista los items en
      * estado terminal (COMPLETED/CANCELLED/FAILED) y devuelve SUS
-     * IDS en orden; los vivos (QUEUED/RUNNING) NUNCA se tocan:
+     * IDS en orden; los vivos (QUEUED/RUNNING/PAUSED) NUNCA se tocan:
      * retirar una descarga en marcha es cancelar, no barrer. Sin
      * listeners: el visor vuelve a listar y ya no los ve.
      */
@@ -274,7 +331,7 @@ class DownloadEngine(
         while (!done) {
             val cancelReason = entry.cts.token.reason()
             if (cancelReason != null) {
-                finish(id, entry, DownloadState.CANCELLED, "cancelada: " + cancelReason)
+                finish(id, entry, estadoCancel(entry), if (entry.pauseRequested) "pausada" else "cancelada: " + cancelReason)
                 break
             }
             val startAt = synchronized(lock) { entry.bytes }
@@ -350,7 +407,7 @@ class DownloadEngine(
                         val cancelledReason = cancelled
                         when {
                             cancelledReason != null -> {
-                                finish(id, entry, DownloadState.CANCELLED, cancelledReason)
+                                finish(id, entry, estadoCancel(entry), if (entry.pauseRequested) "pausada" else cancelledReason)
                                 done = true
                             }
                             ioFailed -> {
@@ -375,6 +432,10 @@ class DownloadEngine(
             scheduleNextLocked()
         }
     }
+
+    /** T046 v4: un corte pedido por pausar termina PAUSED; el resto CANCELLED. */
+    private fun estadoCancel(entry: Entry): DownloadState =
+        if (entry.pauseRequested) DownloadState.PAUSED else DownloadState.CANCELLED
 
     /** Estado terminal + cierre del sink + aviso; irreversible. */
     private fun finish(id: Long, entry: Entry, state: DownloadState, error: String?) {

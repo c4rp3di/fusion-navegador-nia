@@ -24,6 +24,11 @@ import nia.engine.net.TransportFailure
  *
  * T046 v3 (R0334, RES-0135): limpiarTerminadas retira las
  * terminadas, NUNCA toca las vivas y no reutiliza ids.
+ *
+ * T046 v4 (R0345, RES-0140): pausa real - pausar de QUEUED no
+ * corre, pausar de RUNNING termina PAUSED con bytes y sink
+ * cerrado, resume sigue por Range desde el byte pausado y cancel
+ * sobre PAUSED cancela de verdad.
  */
 class DownloadEngineTest {
 
@@ -715,6 +720,94 @@ class DownloadEngineTest {
         val id = engine.enqueue("https://a.test/lu3", FakeSink())
         assertEquals(3L, id)
         assertEquals(DownloadState.COMPLETED, engine.status(id)?.state)
+    }
+
+    @Test
+    fun pausarRunningTerminaPausadaConBytesYSinkCerrado() {
+        lateinit var engine: DownloadEngine
+        val transport = FakeTransport(listOf(10, 10, 10))
+        transport.onOpen = {
+            val stream = transport.lastStream
+            if (stream != null) {
+                stream.onChunk = { i -> if (i == 1) engine.pausar(1) }
+            }
+        }
+        engine = DownloadEngine(transport, syncExecutor)
+        val sink = FakeSink()
+        engine.enqueue("https://a.test/p1", sink)
+        assertEquals(DownloadState.PAUSED, engine.status(1)?.state)
+        assertEquals("pausada", engine.status(1)?.lastError)
+        assertEquals(20, sink.bytes)
+        assertTrue(sink.closed)
+    }
+
+    @Test
+    fun pausarQueuedNoCorreYSobreviveAlBarridoYReanuda() {
+        val exec = CapturingExecutor()
+        val engine = DownloadEngine(FakeTransport(listOf(5)), exec, maxConcurrent = 1)
+        val sinkB = FakeSink()
+        engine.enqueue("https://a.test/p2a", FakeSink())
+        engine.enqueue("https://a.test/p2b", sinkB)
+        assertTrue(engine.pausar(2))
+        assertEquals(DownloadState.PAUSED, engine.status(2)?.state)
+        assertFalse(sinkB.closed)
+        exec.runOne()
+        assertEquals(DownloadState.COMPLETED, engine.status(1)?.state)
+        assertEquals(DownloadState.PAUSED, engine.status(2)?.state)
+        assertEquals(0, exec.tasks.size)
+        assertEquals("1", engine.limpiarTerminadas().joinToString(","))
+        assertEquals(DownloadState.PAUSED, engine.status(2)?.state)
+        assertTrue(engine.resume(2))
+        exec.runOne()
+        assertEquals(DownloadState.COMPLETED, engine.status(2)?.state)
+        assertEquals(5, sinkB.bytes)
+        assertTrue(sinkB.closed)
+    }
+
+    @Test
+    fun resumeDePausadaSiguePorRangeDesdeElByte() {
+        lateinit var engine: DownloadEngine
+        val startBytes = ArrayList<Long>()
+        val transport = object : DownloadTransport {
+            var calls = 0
+            override fun open(url: String, startByte: Long, token: nia.contracts.CancellationToken): DownloadOpen {
+                calls += 1
+                startBytes.add(startByte)
+                return if (calls == 1) {
+                    val stream = FakeStream(listOf(10, 10, 10))
+                    stream.onChunk = { i -> if (i == 1) engine.pausar(1) }
+                    DownloadOpen.Opened(stream, 30L, 0L)
+                } else {
+                    DownloadOpen.Opened(FakeStream(listOf(10)), 30L, 20L)
+                }
+            }
+        }
+        val taller = TallerDescargas()
+        engine = DownloadEngine(transport, syncExecutor)
+        val id = engine.enqueue("https://a.test/p3", FakeReopenSink(taller))
+        assertEquals(DownloadState.PAUSED, engine.status(id)?.state)
+        assertEquals(20L, engine.status(id)?.bytesDownloaded)
+        assertTrue(engine.resume(id))
+        assertEquals(DownloadState.COMPLETED, engine.status(id)?.state)
+        assertEquals(30L, engine.status(id)?.bytesDownloaded)
+        assertEquals("0,20", startBytes.joinToString(","))
+        assertEquals("20", taller.reopens.joinToString(","))
+        assertEquals(30, taller.bytes.sum())
+    }
+
+    @Test
+    fun cancelDePausadaLaCancelaDeVerdad() {
+        val exec = CapturingExecutor()
+        val engine = DownloadEngine(FakeTransport(listOf(5)), exec, maxConcurrent = 1)
+        val sinkB = FakeSink()
+        engine.enqueue("https://a.test/p4a", FakeSink())
+        engine.enqueue("https://a.test/p4b", sinkB)
+        assertTrue(engine.pausar(2))
+        assertEquals(DownloadState.PAUSED, engine.status(2)?.state)
+        assertTrue(engine.cancel(2))
+        assertEquals(DownloadState.CANCELLED, engine.status(2)?.state)
+        assertEquals("cancelada", engine.status(2)?.lastError)
+        assertTrue(sinkB.closed)
     }
 
     @Test

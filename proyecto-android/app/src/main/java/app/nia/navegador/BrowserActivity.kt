@@ -3105,12 +3105,13 @@ class BrowserActivity : Activity() {
         }
     }
 
-    /** T086 v1 (R0191, RES-0091): pantalla de descargas sobre la cola
-     * REAL del DownloadEngine verificado (T046): estados y bytes
-     * reales, cancelar con confirmacion ADR-019, reanudar solo
-     * fallidas con sink reabrible, abrir la completada con
-     * ACTION_VIEW y grant; la pausa NO existe en el motor (JAMAS un
-     * fallo disfrazado) y el historial vive en la sesion. */
+    /** T086 v1 (R0191, RES-0091) + v2 (R0347, RES-0141): pantalla de
+     * descargas sobre la cola REAL del DownloadEngine verificado
+     * (T046): estados y bytes reales, cancelar con confirmacion
+     * ADR-019, abrir la completada con ACTION_VIEW y grant y el
+     * historial en la sesion. v2: pausa REAL del motor v4 (pausar de
+     * QUEUED/RUNNING y reanudar de PAUSED/FAILED por Range); JAMAS un
+     * fallo disfrazado. */
     private fun mostrarDescargas() {
         val items = descargas.list()
         val lineas: Array<String> = if (items.isEmpty()) {
@@ -3130,7 +3131,8 @@ class BrowserActivity : Activity() {
                 }
                 val item = items[cual]
                 when (item.state) {
-                    DownloadState.QUEUED, DownloadState.RUNNING -> confirmarCancelarDescarga(item.id)
+                    DownloadState.QUEUED, DownloadState.RUNNING -> elegirAccionDescarga(item.id)
+                    DownloadState.PAUSED -> elegirAccionPausada(item.id)
                     DownloadState.FAILED -> reanudarDescarga(item.id)
                     DownloadState.COMPLETED -> abrirDescarga(item.id)
                     DownloadState.CANCELLED -> estado.text = "descarga #" + item.id + " cancelada (terminal)"
@@ -3142,12 +3144,12 @@ class BrowserActivity : Activity() {
             .show()
     }
 
-    /** Cancelar corta de verdad: la pausa NO existe en el motor y no
-     * se disfraza (cancelar es terminal y pide confirmacion). */
+    /** Cancelar corta de verdad: es terminal y pide confirmacion
+     * ADR-019 (la pausa REAL es Pausar, no un fallo disfrazado). */
     private fun confirmarCancelarDescarga(id: Long) {
         AlertDialog.Builder(this)
             .setTitle("Cancelar descarga")
-            .setMessage("Cancelar corta la descarga #" + id + " (no hay pausa en el motor).")
+            .setMessage("Cancelar corta la descarga #" + id + " para siempre (para pausar, Pausar).")
             .setPositiveButton("Si") { _, _ ->
                 val ok = descargas.cancel(id)
                 estado.text = if (ok) {
@@ -3161,12 +3163,50 @@ class BrowserActivity : Activity() {
             .show()
     }
 
-    /** Reanudar sigue el contrato REAL del motor: solo FAILED con
-     * bytes y sink reabrible (Range); el resto avisa honesto. */
+    /** T086 v2: accion sobre una descarga viva: pausar (REAL del
+     *  motor v4, con sus bytes) o cancelar (terminal con
+     *  confirmacion ADR-019). */
+    private fun elegirAccionDescarga(id: Long) {
+        AlertDialog.Builder(this)
+            .setTitle("Descarga #" + id)
+            .setItems(arrayOf("Pausar", "Cancelar")) { _, cual ->
+                if (cual == 0) pausarDescarga(id) else confirmarCancelarDescarga(id)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** T086 v2: pausar es REAL desde el motor v4: la descarga queda
+     *  PAUSED con sus bytes y reanuda por Range desde ese byte. */
+    private fun pausarDescarga(id: Long) {
+        val ok = descargas.pausar(id)
+        estado.text = if (ok) {
+            "descarga #" + id + " pausada"
+        } else {
+            "descarga #" + id + " ya termino o esta pausada"
+        }
+        traza("descargas", "pausar #" + id + " " + ok)
+    }
+
+    /** T086 v2: accion sobre una descarga pausada: reanudar (por
+     *  Range desde el byte pausado) o cancelar de verdad (terminal). */
+    private fun elegirAccionPausada(id: Long) {
+        AlertDialog.Builder(this)
+            .setTitle("Descarga pausada #" + id)
+            .setItems(arrayOf("Reanudar", "Cancelar")) { _, cual ->
+                if (cual == 0) reanudarDescarga(id) else confirmarCancelarDescarga(id)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Reanudar sigue el contrato REAL del motor: FAILED o PAUSED
+     * con bytes y sink reabrible (Range desde el byte que fallo o
+     * pauso); el resto avisa honesto. */
     private fun reanudarDescarga(id: Long) {
         val ok = descargas.resume(id)
         estado.text = if (ok) {
-            "descarga #" + id + " reanudada desde donde fallo"
+            "descarga #" + id + " reanudada (sigue por Range)"
         } else {
             "descarga #" + id + " no reanudable (sin bytes o destino no reabrible)"
         }
