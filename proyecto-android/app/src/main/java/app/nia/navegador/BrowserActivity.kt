@@ -12,7 +12,11 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.graphics.pdf.PdfDocument
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
@@ -268,6 +272,19 @@ import nia.engine.workers.VisorWorkers
  * session history restaurados, y la sesion vive solo si onStop llego
  * a correr (una muerte con la activity visible pierde la anterior).
  *
+ * T065 v1 (R0364, RES-0147): multimedia con audio focus REAL del
+ * sistema: pedirAudioFocus al abrir el player (AudioFocusRequest en
+ * API 26+, legacy debajo), LOSS pausa definitiva (sin auto-resume),
+ * LOSS_TRANSIENT pausa y reanuda al GAIN, CAN_DUCK baja a 0.2 y
+ * restaura su volumen previo, todo sobre el MediaEngine REAL. Ciclo
+ * de vida seguro: onDestroy libera player y focus (sin reproduccion
+ * ni focus huerfanos) y la pantalla apagada NO pausa el audio
+ * (SurfaceView desacoplada: el video muere, el audio sigue mientras
+ * el proceso viva). Exclusiones v1 honestas: sin foreground service,
+ * media session ni controles del sistema/notificacion (v2+): el
+ * proceso en background puede morir y el audio con el; sin
+ * re-request de focus por cada play (v2) y sin PiP (T109 v2).
+ *
  * Exclusiones v6: sin grupos ni previews pintadas, la sesion de
  * pestanas NORMALES ya se restaura tras proceso muerto (T109 v1; el
  * incognito JAMAS: vive solo en memoria), Fire solo del perfil del tipo
@@ -429,6 +446,15 @@ class BrowserActivity : Activity() {
     private var volumenMedia = 1.0
     private var pasoVelocidadMedia = 1
     private val velocidadesMedia = doubleArrayOf(0.5, 1.0, 1.5, 2.0)
+
+    /** T065 v1 (R0364, RES-0147): audio focus REAL del sistema; nada
+     *  de focus residente sin reproduccion (solo vive con el player). */
+    private val gestorAudio by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private var listenerFocus: AudioManager.OnAudioFocusChangeListener? = null
+    private var peticionFocus: AudioFocusRequest? = null
+    private var pausadoPorFocus = false
+    private var enDuck = false
+    private var volumenPreDuck = 1.0
 
     /** T092 v2 (R0358, RES-0145): puente REAL de las paginas (TK-111-1). */
     private val puenteMediaPagina = PuenteMediaPagina()
@@ -3781,6 +3807,7 @@ class BrowserActivity : Activity() {
             .setNegativeButton("Cerrar", null)
             .create()
         dialogo.setOnDismissListener { cerrarPlayer() }
+        pedirAudioFocus()
         try {
             val fuenteMedia = if (origen == "url") {
                 MediaSource.Remote(fuente)
@@ -3887,7 +3914,107 @@ class BrowserActivity : Activity() {
     private fun cerrarPlayer() {
         playerAbierto = false
         media.close()
+        soltarAudioFocus()
         traza("media", "player cerrado")
+    }
+
+    /** T065 v1 (R0364, RES-0147): pide el audio focus REAL del sistema
+     *  (USAGE_MEDIA en API 26+ con AudioFocusRequest; STREAM_MUSIC
+     *  legacy debajo) al abrir el player. Si el sistema lo niega se
+     *  avisa honesto y la reproduccion sigue (el SO decide el
+     *  mezclado): JAMAS se finge el focus. */
+    private fun pedirAudioFocus() {
+        val listener = AudioManager.OnAudioFocusChangeListener { cambio ->
+            manejarCambioFocus(cambio)
+        }
+        listenerFocus = listener
+        val res: Int
+        if (Build.VERSION.SDK_INT >= 26) {
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .build()
+                )
+                .setOnAudioFocusChangeListener(listener)
+                .build()
+            peticionFocus = req
+            res = gestorAudio.requestAudioFocus(req)
+        } else {
+            res = gestorAudio.requestAudioFocus(
+                listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN
+            )
+        }
+        if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            traza("media", "audio focus concedido")
+        } else {
+            estado.text = "media: sin audio focus (el sistema decide el mezclado)"
+            traza("media", "audio focus denegado")
+        }
+    }
+
+    /** Suelta el audio focus si se pidio y resetea la pausa/duck por
+     *  focus: SIN focus residente sin reproduccion (R0137). */
+    private fun soltarAudioFocus() {
+        val listener = listenerFocus
+        if (listener != null) {
+            val req = peticionFocus
+            if (Build.VERSION.SDK_INT >= 26 && req != null) {
+                gestorAudio.abandonAudioFocusRequest(req)
+            } else {
+                gestorAudio.abandonAudioFocus(listener)
+            }
+        }
+        listenerFocus = null
+        peticionFocus = null
+        pausadoPorFocus = false
+        enDuck = false
+    }
+
+    /** Politica de focus (T065 v1): LOSS pausa definitiva (sin
+     *  auto-resume), TRANSIENT pausa y reanuda al GAIN, CAN_DUCK baja
+     *  a 0.2 y restaura su volumen previo; todo sobre el MediaEngine
+     *  REAL (estado y volumen del motor). */
+    private fun manejarCambioFocus(cambio: Int) {
+        when (cambio) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                pausadoPorFocus = false
+                if (media.state() == MediaState.PLAYING) {
+                    media.pause()
+                    estado.text = "media: pausada (audio focus perdido)"
+                    traza("media", "audio focus perdido: pausa definitiva")
+                }
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                if (media.state() == MediaState.PLAYING) {
+                    pausadoPorFocus = true
+                    media.pause()
+                    estado.text = "media: pausada (audio focus transitorio)"
+                    traza("media", "audio focus transitorio: pausa")
+                }
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                if (!enDuck && media.state() == MediaState.PLAYING) {
+                    enDuck = true
+                    volumenPreDuck = volumenMedia
+                    media.setVolume(0.2)
+                    traza("media", "audio focus duck: volumen 0.2")
+                }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (enDuck) {
+                    enDuck = false
+                    volumenMedia = media.setVolume(volumenPreDuck)
+                    traza("media", "audio focus ganado: volumen restaurado")
+                } else if (pausadoPorFocus && media.state() == MediaState.PAUSED) {
+                    pausadoPorFocus = false
+                    media.play()
+                    estado.text = "media: reanudada (audio focus ganado)"
+                    traza("media", "audio focus ganado: reanudada")
+                }
+            }
+        }
     }
 
     /** Bytes del infohash hex (40 chars) del magnet. */
@@ -4075,6 +4202,15 @@ class BrowserActivity : Activity() {
     override fun onStop() {
         guardarSesionPestanas()
         super.onStop()
+    }
+
+    /** T065 v1 (R0364, RES-0147): ciclo de vida seguro: al destruir la
+     *  activity el player y el audio focus se liberan (JAMAS queda
+     *  reproduccion huerfana ni focus colgado). */
+    override fun onDestroy() {
+        if (playerAbierto) cerrarPlayer()
+        soltarAudioFocus()
+        super.onDestroy()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
