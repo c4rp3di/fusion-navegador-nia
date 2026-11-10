@@ -493,6 +493,32 @@ class BrowserActivity : Activity() {
                 TipoOpcion.ENTERO, "10000000", 100000L, 100000000L
             )
         )
+        // T093 v5 (R0329, RES-0133): seccion Contenido; los defectos
+        // globales SOLO mandan donde el sitio NO tiene preferencia.
+        s.registrar(
+            OpcionAjuste(
+                "contenido.texto", "Contenido",
+                "Texto por defecto",
+                "Escala base (75 a 150 %) cuando el sitio no tiene preferencia",
+                TipoOpcion.ENTERO, "100", 75L, 150L
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "contenido.escritorio", "Contenido",
+                "Escritorio por defecto",
+                "Viewport 720 px cuando el sitio no tiene preferencia",
+                TipoOpcion.BOOL, "false"
+            )
+        )
+        s.registrar(
+            OpcionAjuste(
+                "contenido.sitios", "Contenido",
+                "Borrar preferencias de sitios",
+                "Borra zoom, texto y escritorio de todos los sitios con conteo",
+                TipoOpcion.ELECCION, "nada", elecciones = listOf("nada", "ejecutar")
+            )
+        )
         // T078 v1 (R0199, RES-0094): la seccion Gestos del motor; los
         // ids, los rangos y los defectos viven en AjustesGestos.
         AjustesGestos.registrar(s)
@@ -1298,13 +1324,38 @@ class BrowserActivity : Activity() {
 
     /** T080 v1: aplica al motor las preferencias del sitio (viewport
      *  de base, zoom y escala de texto para el CSS); SIN origen
-     *  aplica los defectos. La recarga conserva las preferencias. */
+     *  aplica los defectos. La recarga conserva las preferencias.
+     *  T093 v5 (R0329, RES-0133): sin preferencia por sitio el
+     *  defecto viene de Contenido (texto y escritorio globales);
+     *  la preferencia del sitio SIGUE mandando. */
     private fun aplicarSitio(url: String) {
         val clave = claveSitio(url)
-        val pref = if (clave == null) PrefSitio() else sitios.obtener(clave)
-        textoSitio = pref.texto
-        pagina.fijarBaseViewport(AjustesSitio.viewportBase(pref.escritorio))
-        pagina.fijarZoom(pref.zoom)
+        val pref = if (clave == null) null else sitios.obtener(clave)
+        val efectiva = if (pref != null && pref != PrefSitio()) pref
+            else PrefSitio(texto = textoBaseGlobal(), escritorio = escritorioBaseGlobal())
+        textoSitio = efectiva.texto
+        pagina.fijarBaseViewport(AjustesSitio.viewportBase(efectiva.escritorio))
+        pagina.fijarZoom(efectiva.zoom)
+    }
+
+    /** T093 v5: escala de texto por defecto de Contenido, clampada
+     *  al rango honesto del sitio. */
+    private fun textoBaseGlobal(): Double =
+        AjustesSitio.limitarTexto((ajustes.valor("contenido.texto")?.toIntOrNull() ?: 100) / 100.0)
+
+    /** T093 v5: modo escritorio por defecto de Contenido. */
+    private fun escritorioBaseGlobal(): Boolean =
+        (ajustes.valor("contenido.escritorio") ?: "false") == "true"
+
+    /** T093 v5: accion de un uso que borra TODAS las preferencias
+     *  por sitio con conteo; los sitios vuelven a los defectos de
+     *  Contenido al recargar. */
+    private fun aplicarBorradoSitios() {
+        val n = sitios.borrarTodo()
+        ajustes.asignar("contenido.sitios", "nada")
+        recargar()
+        estado.text = "preferencias de " + n + " sitios borradas"
+        traza("ajustes", "borradas " + n + " preferencias por sitio")
     }
 
     /** T080 v1: persiste el zoom actual como preferencia del sitio. */
@@ -3608,6 +3659,7 @@ class BrowserActivity : Activity() {
                     estado.text = op.titulo + " = " + ajustes.valor(op.id)
                     traza("ajustes", "cambiado " + op.id + " a " + nuevo)
                     if (op.id.startsWith("gestos.")) aplicarGestos()
+                    if (op.id.startsWith("contenido.")) recargar()
                 }
             }
             TipoOpcion.ENTERO -> pedirAjuste(op, "entre " + op.minimo + " y " + op.maximo)
@@ -3615,6 +3667,8 @@ class BrowserActivity : Activity() {
             TipoOpcion.ELECCION -> {
                 if (op.seccion == "Limpieza" && op.id != "limpieza.retencion") {
                     elegirLimpieza(op)
+                } else if (op.id == "contenido.sitios") {
+                    aplicarBorradoSitios()
                 } else {
                     AlertDialog.Builder(this)
                         .setTitle(op.titulo)
@@ -3650,6 +3704,7 @@ class BrowserActivity : Activity() {
                     estado.text = op.titulo + " = " + ajustes.valor(op.id)
                     traza("ajustes", "cambiado " + op.id + " a " + nuevo)
                     if (op.id.startsWith("gestos.")) aplicarGestos()
+                    if (op.id.startsWith("contenido.")) recargar()
                 } else {
                     estado.text = "valor invalido para " + op.titulo
                     traza("ajustes", "valor invalido para " + op.id)
