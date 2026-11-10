@@ -168,4 +168,31 @@ class CookieJarTest {
         val jar = jarWith(Triple("a.example", true, "s=1; Path=/; SameSite=Strict"))
         assertEquals("s=1", jar.cookieHeader("a.example", "/", true))
     }
+
+    @Test fun setCookieMultiplesEnUnaCabecera() {
+        val jar = jarWith(Triple("a.example", true, "sid=abc; Path=/, ses=2; Path=/"))
+        assertEquals(2, jar.count())
+        assertEquals("sid=abc; ses=2", jar.cookieHeader("a.example", "/", true))
+    }
+
+    @Test fun setCookieMultipleConExpiresConComa() {
+        val jar = jarWith(Triple("a.example", true, "t=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/"))
+        assertEquals(1, jar.count())
+        val c = jar.all()[0]
+        if (c.expiresAtMillis == null) throw AssertionError("Expires con coma debia parsear")
+        assertEquals("t=1", jar.cookieHeader("a.example", "/", true))
+    }
+
+    @Test fun setCookieMultipleDescartaInvalidasYGuardaLasBuenas() {
+        val jar = jarWith(Triple("a.example", true, "invalida, buena=1; Path=/"))
+        assertEquals(1, jar.count())
+        assertEquals("buena=1", jar.cookieHeader("a.example", "/", true))
+    }
+
+    @Test fun setCookieMultiplesDevuelveTrueSiAlgunaSeGuarda() {
+        val clock = FakeClock(1000000)
+        val jar = CookieJar(clock)
+        assertTrue(jar.storeFromResponse("a.example", true, "invalida, buena=1; Path=/"))
+        assertFalse(jar.storeFromResponse("a.example", true, "invalida, tambien invalida"))
+    }
 }

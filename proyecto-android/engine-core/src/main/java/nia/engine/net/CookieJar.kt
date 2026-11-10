@@ -27,11 +27,16 @@ enum class SiteContext { SAME_SITE, TOP_LEVEL_CROSS_SITE, EMBEDDED_CROSS_SITE }
  *   https, caducadas fuera, orden por longitud de ruta (la mas larga
  *   primero) y luego por momento de creacion.
  *
+ * v4 (R0314, RES-0128): Set-Cookie multiples. El transporte une las
+ * cabeceras repetidas con coma; storeFromResponse parte el valor por
+ * comas SOLO donde empieza otra cookie (token= tras la coma), de modo
+ * que los Expires con coma en la fecha quedan intactos (cookie-octet de
+ * RFC 6265 excluye la coma: el corte es seguro), y guarda las cookies
+ * validas descartando en silencio las invalidas.
+ *
  * Limitaciones v1: SameSite se almacena pero no se aplica (exige contexto
  * de navegacion y sitio top-level, con el cableado del broker); sin
- * particiones (T033); una sola cookie por cabecera Set-Cookie (el
- * transporte une las repetidas con coma, y partir por comas romperia
- * los Expires: el que llama entrega una cookie por cabecera).
+ * particiones (T033).
  *
  * v2 (R0060, RES-0035): SameSite aplicado. La sobrecarga de
  * cookieHeader con SiteContext filtra con sameSiteAllowed (strict
@@ -86,14 +91,22 @@ class CookieJar(private val clock: WallClock) {
     }
 
     /**
-     * Almacena la cookie de una respuesta hacia [host]. El que llama
-     * entrega UNA cabecera Set-Cookie por llamada. Devuelve false si la
-     * cookie es invalida, el dominio no matchea o Secure va sin https.
+     * Almacena las cookies de una respuesta hacia [host]. El valor puede
+     * llevar VARIAS cookies unidas por coma (el transporte une las
+     * cabeceras Set-Cookie repetidas): se parte por comas solo donde
+     * empieza otra cookie y cada una se guarda o descarta en silencio.
+     * Devuelve true si ALGUNA se guardo; false si todas son invalidas,
+     * el dominio no matchea o Secure va sin https.
      */
     fun storeFromResponse(host: String, isSecureTransport: Boolean, setCookie: String?): Boolean {
         if (setCookie == null) return false
+        return splitSetCookie(setCookie).any { valor -> storeOne(host, isSecureTransport, valor) }
+    }
+
+    /** T026 v4: guarda UNA cookie ya partida; la logica 5.3 de siempre. */
+    private fun storeOne(host: String, isSecureTransport: Boolean, valor: String): Boolean {
         val now = clock.nowMillis()
-        val parsed = parseSetCookie(setCookie, now) ?: return false
+        val parsed = parseSetCookie(valor, now) ?: return false
         val cookie: Cookie
         if (parsed.domain.isEmpty()) {
             cookie = parsed.copy(domain = host.lowercase(), hostOnly = true)
@@ -164,6 +177,31 @@ class CookieJar(private val clock: WallClock) {
 
         private val IPV4 = Regex("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
         private val RFC1123 = DateTimeFormatter.RFC_1123_DATE_TIME
+
+        /** T026 v4 (R0314, RES-0128): parte un valor Set-Cookie (posiblemente
+         *  varias cookies unidas por coma) SOLO donde tras la coma empieza
+         *  otra cookie (token=); los Expires con coma en la fecha quedan
+         *  intactos porque la fecha no empieza por token=. */
+        private val TOKEN_IGUAL = Regex("^[A-Za-z0-9!#$%&'*+\\-.^_`|~]+=")
+
+        fun splitSetCookie(joined: String): List<String> {
+            val out = mutableListOf<String>()
+            val b = StringBuilder()
+            var i = 0
+            while (i < joined.length) {
+                val c = joined[i]
+                if (c == ',' && TOKEN_IGUAL.containsMatchIn(joined.drop(i + 1).trim())) {
+                    out.add(b.toString().trim())
+                    b.clear()
+                } else {
+                    b.append(c)
+                }
+                i++
+            }
+            val last = b.toString().trim()
+            if (last.isNotEmpty()) out.add(last)
+            return out
+        }
 
         /** RFC 6265 5.2: cookie invalida -> null (se descarta en silencio). */
         fun parseSetCookie(value: String, nowMillis: Long): Cookie? {
