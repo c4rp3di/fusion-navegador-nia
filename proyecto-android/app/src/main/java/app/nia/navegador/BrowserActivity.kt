@@ -1,5 +1,6 @@
 package app.nia.navegador
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
@@ -7,6 +8,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -3932,6 +3934,8 @@ class BrowserActivity : Activity() {
         traza("media", "player abierto (" + origen + ")")
         dialogo.show()
         playerAbierto = true
+        // T065 v2 (R0385, RES-0154): servicio foreground + MediaSession.
+        arrancarServicioMedia()
         refrescarPlayer(bPlay, relojTexto, barra)
         relojTexto.postDelayed(object : Runnable {
             override fun run() {
@@ -3962,6 +3966,8 @@ class BrowserActivity : Activity() {
             barra.max = 0
             if (!barra.isPressed) barra.progress = 0
         }
+        // T065 v2: estado del sistema desde el refresco del player.
+        ServicioMedia.estado(est == MediaState.PLAYING, media.position(), media.duration())
     }
 
     private fun formatoTiempo(seg: Long): String =
@@ -4031,11 +4037,60 @@ class BrowserActivity : Activity() {
         media.close()
         soltarAudioFocus()
         pestanaMedia = null
+        // T065 v2: el servicio muere con el player (R0137).
+        pararServicioMedia()
         // T104 v1: la pista efimera muere con el player; las
         // descargadas persistentes siguen en el almacen privado.
         pistaSubs = null
         vistaSubs = null
         traza("media", "player cerrado")
+    }
+
+    /** T065 v2 (R0385, RES-0154): arranca el servicio foreground
+     *  de media con MediaSession y controles del sistema; el
+     *  manejador vive en el companion (mismo proceso, SIN IPC) y
+     *  muere con el player. El permiso de notificaciones se pide en
+     *  33+; sin el, la notificacion no se ve pero el servicio y los
+     *  controles siguen. */
+    private fun arrancarServicioMedia() {
+        ServicioMedia.manejador = { orden, ms -> manejarOrdenMedia(orden, ms) }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_NOTIFICACIONES
+            )
+        }
+        startService(Intent(this, ServicioMedia::class.java))
+        traza("media", "servicio media arrancado")
+    }
+
+    /** T065 v2: sin player NO hay servicio (R0137) y el manejador
+     *  se suelta ANTES de parar para no atender ordenes tardias. */
+    private fun pararServicioMedia() {
+        ServicioMedia.manejador = null
+        stopService(Intent(this, ServicioMedia::class.java))
+        traza("media", "servicio media parado")
+    }
+
+    /** T065 v2: orden del MediaSession o de la notificacion; al
+     *  reanudar se vuelve a pedir el audio focus (v1 no lo hacia
+     *  por play) y stop cierra el player COMPLETO. */
+    private fun manejarOrdenMedia(orden: String, ms: Long) {
+        runOnUiThread {
+            if (!playerAbierto) return@runOnUiThread
+            when (orden) {
+                "play" -> {
+                    pedirAudioFocus()
+                    media.play()
+                }
+                "pause" -> media.pause()
+                "stop" -> cerrarPlayer()
+                "seek" -> media.seekTo(ms)
+            }
+        }
     }
 
     /** T104 v1: pinta el cue activo de la pista en el overlay del
@@ -4597,6 +4652,21 @@ class BrowserActivity : Activity() {
         if (playerAbierto) cerrarPlayer()
         soltarAudioFocus()
         super.onDestroy()
+    }
+
+    /** T065 v2 (R0385, RES-0154): permiso de notificaciones (33+);
+     *  denegado NO rompe nada: la media sigue y solo la notificacion
+     *  queda sin ver (honesto, sin insistir). */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permisos: Array<out String>,
+        resultados: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permisos, resultados)
+        if (requestCode != REQUEST_NOTIFICACIONES) return
+        val ok = resultados.isNotEmpty() &&
+            resultados[0] == PackageManager.PERMISSION_GRANTED
+        traza("media", if (ok) "notificaciones permitidas" else "notificaciones denegadas")
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -5571,5 +5641,6 @@ class BrowserActivity : Activity() {
         private const val REQUEST_TORRENT = 51
         private const val REQUEST_GUARDAR_TORRENT = 52
         private const val REQUEST_MEDIA = 53
+        private const val REQUEST_NOTIFICACIONES = 54
     }
 }

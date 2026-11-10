@@ -3,6 +3,14 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- T065 v2 (R0385, RES-0154): servicio foreground de media con
+         MediaSession y controles del sistema; SIN servicio
+         residente sin reproduccion: el shell lo arranca al abrir el
+         player y lo para al cerrarlo (R0137). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- T084 v2 (R0319, RES-0129): decision del usuario (R0318: abrir
          pero avisar claro). Sin esto, Android (targetSdk 34) tumba el
          socket http en silencio: el motor acepta http pero el SO lo
@@ -41,6 +49,14 @@
                 <data android:scheme="https" />
             </intent-filter>
         </activity>
+
+        <!-- T065 v2 (R0385, RES-0154): servicio de media foreground
+             (mediaPlayback) con MediaSession y notificacion con
+             controles; el shell lo para al cerrar el player. -->
+        <service
+            android:name=".ServicioMedia"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <activity
             android:name=".MainActivity"
