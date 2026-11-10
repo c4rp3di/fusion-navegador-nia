@@ -100,6 +100,21 @@ import nia.engine.tabs.TabCrear
 import nia.engine.tabs.TabTarjeta
 import nia.engine.tabs.TabsManager
 import nia.engine.themes.NiaTokens
+import nia.engine.torrent.AnnounceEvent
+import nia.engine.torrent.MagnetParser
+import nia.engine.torrent.PeerMetadataClient
+import nia.engine.torrent.PeerPoolSource
+import nia.engine.torrent.PumpResult
+import nia.engine.torrent.TorrentEngine
+import nia.engine.torrent.TorrentFormatException
+import nia.engine.torrent.TorrentMeta
+import nia.engine.torrent.TorrentParser
+import nia.engine.torrent.TorrentSession
+import nia.engine.torrent.TorrentState
+import nia.engine.torrent.TrackerAnnounceRequest
+import nia.engine.torrent.TrackerClient
+import nia.engine.torrent.TrackerPeer
+import nia.engine.torrent.torrentDesdeInfo
 import app.nia.navegador.ui.NiaProgressBar
 import app.nia.navegador.ui.NiaUi
 import nia.engine.seleccion.FragmentoUrl
@@ -373,6 +388,16 @@ class BrowserActivity : Activity() {
      * notificaciones quedan para el smoke en dispositivo. */
     private val poolDescargas = Executors.newFixedThreadPool(2)
     private val descargas = DownloadEngine(PlatformDownloadTransport(), poolDescargas, maxConcurrent = 2, maxRetries = 1)
+
+    /** T103 v1 (R0349, RES-0142): gestor de sesiones torrent del shell
+     *  sobre el motor T047 verificado; pool de UN hilo (cuota CPU/red
+     *  honesta de v1: UNA bajada a la vez) y peer id aleatorio por
+     *  sesion de app (sin siembra: uploaded siempre 0 y sin puerto de
+     *  escucha). */
+    private val poolTorrents = Executors.newFixedThreadPool(1)
+    private val torrents = TorrentEngine()
+    private val peerIdTorrent = ByteArray(20).also { java.security.SecureRandom().nextBytes(it) }
+    private var guardarTorrentPendiente: Pair<String, Int>? = null
 
     /** T072 (R0323, RES-0131): pool acotado para las navegaciones del
      *  shell (resto del hallazgo 3.1 del informe externo: un Thread
@@ -1167,7 +1192,8 @@ class BrowserActivity : Activity() {
             "Imprimir / PDF",
             "Permisos por sitio",
             "Workers / SW",
-            "DevTools (paneles declarados)"
+            "DevTools (paneles declarados)",
+            "Torrents (sesiones del motor)"
         )
         AlertDialog.Builder(this)
             .setTitle("Menu")
@@ -1212,6 +1238,7 @@ class BrowserActivity : Activity() {
                     32 -> mostrarPermisos()
                     33 -> mostrarWorkersSw()
                     34 -> abrirDevToolsModulos()
+                    35 -> mostrarTorrents()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -3105,6 +3132,376 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** T103 v1 (R0349, RES-0142): pantalla de torrents del shell sobre
+     * el motor T047 verificado con transportes REALES de plataforma
+     * (PlatformTrackerTransport y PlatformPeerTransport en
+     * PlatformTorrent.kt), NUNCA demos enlatadas: anadir .torrent por
+     * SAF con seleccion de archivos ANTES de transferir o magnet real
+     * (announce + metadatos ut_metadata de peers reales), progreso por
+     * piezas verificadas SHA-1, Pausar/Reanudar/Cancelar con
+     * confirmacion ADR-019, borrado de la sesion y guardado explicito
+     * a SAF del archivo elegido desde las piezas completas. Cuota
+     * CPU/red honesta: UNA bajada a la vez (pool de 1) y sin siembra
+     * (solo descarga); las piezas viven en memoria (v1 sin escritura
+     * automatica a disco) y el progreso es global por sesion. */
+    private fun mostrarTorrents() {
+        val sesiones = torrents.list()
+        val lineas: Array<String> = if (sesiones.isEmpty()) {
+            arrayOf("(sin torrents todavia)")
+        } else {
+            sesiones.map { s ->
+                val p = s.progress()
+                s.meta.name + " " + s.state.name.lowercase() + " " +
+                    p.completedPieces + "/" + p.totalPieces + " piezas " +
+                    p.downloadedBytes + " B"
+            }.toTypedArray()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Torrents")
+            .setItems(lineas) { _, cual ->
+                if (sesiones.isEmpty()) {
+                    return@setItems
+                }
+                val s = sesiones[cual]
+                when (s.state) {
+                    TorrentState.QUEUED, TorrentState.RUNNING ->
+                        elegirAccionTorrent(s.meta.infoHashHex, s.meta.name)
+                    TorrentState.PAUSED -> elegirAccionPausadaTorrent(s.meta.infoHashHex)
+                    TorrentState.DONE -> elegirArchivoGuardar(s.meta.infoHashHex)
+                    TorrentState.CANCELLED -> confirmarBorrarTorrent(s.meta.infoHashHex)
+                }
+            }
+            .setNeutralButton("Anadir") { _, _ -> elegirOrigenTorrent() }
+            .setPositiveButton("Actualizar") { _, _ -> mostrarTorrents() }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Accion sobre un torrent vivo: Pausar (REAL del motor, no un
+     *  fallo disfrazado), Reintentar (relanza la bajada, util cuando
+     *  se quedo sin peers) o Cancelar (terminal, ADR-019). */
+    private fun elegirAccionTorrent(hash: String, nombre: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Torrent: " + nombre)
+            .setItems(arrayOf("Pausar", "Reintentar", "Cancelar")) { _, cual ->
+                when (cual) {
+                    0 -> {
+                        torrents.find(hash)?.pause()
+                        estado.text = "torrent pausado"
+                        traza("torrents", "pausar " + hash.take(8))
+                        mostrarTorrents()
+                    }
+                    1 -> relanzarTorrent(hash)
+                    2 -> confirmarCancelarTorrent(hash)
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Accion sobre un torrent pausado: Reanudar (relanza la bajada
+     *  con announce started), Cancelar o Borrar de la lista. */
+    private fun elegirAccionPausadaTorrent(hash: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Torrent pausado")
+            .setItems(arrayOf("Reanudar", "Cancelar", "Borrar")) { _, cual ->
+                when (cual) {
+                    0 -> relanzarTorrent(hash)
+                    1 -> confirmarCancelarTorrent(hash)
+                    2 -> confirmarBorrarTorrent(hash)
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Reanudar/Reintentar: resume la sesion y relanza la bajada en
+     *  el pool de UN hilo (la cuota de v1). */
+    private fun relanzarTorrent(hash: String) {
+        val s = torrents.find(hash)
+        if (s == null) {
+            estado.text = "torrent no esta en la lista"
+            return
+        }
+        s.resume()
+        estado.text = "torrent reanudado"
+        traza("torrents", "reanudar " + hash.take(8))
+        poolTorrents.execute { bajarTorrent(s) }
+        mostrarTorrents()
+    }
+
+    /** Cancelar es terminal y pide confirmacion ADR-019; el announce
+     *  stopped lo manda la propia bajada al ver CANCELLED. */
+    private fun confirmarCancelarTorrent(hash: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Cancelar torrent")
+            .setMessage("Cancelar corta la descarga para siempre (para pausar, Pausar).")
+            .setPositiveButton("Si") { _, _ ->
+                val s = torrents.find(hash)
+                val viva = s != null && s.state != TorrentState.DONE &&
+                    s.state != TorrentState.CANCELLED
+                s?.cancel()
+                estado.text = "torrent cancelado"
+                traza("torrents", "cancelar " + hash.take(8) + " " + viva)
+                mostrarTorrents()
+            }
+            .setNegativeButton("No", null)
+            .show()
+    }
+
+    /** Borrar retira la sesion del gestor (con sus piezas en memoria);
+     *  lo ya guardado a SAF sigue en su sitio. */
+    private fun confirmarBorrarTorrent(hash: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Borrar torrent")
+            .setMessage("Borrar retira la sesion y sus piezas en memoria (lo guardado a SAF sigue).")
+            .setPositiveButton("Si") { _, _ ->
+                val ok = torrents.delete(hash)
+                estado.text = if (ok) "torrent borrado de la lista" else "torrent no estaba"
+                traza("torrents", "borrar " + hash.take(8) + " " + ok)
+                mostrarTorrents()
+            }
+            .setNegativeButton("No", null)
+            .show()
+    }
+
+    /** Guardar a SAF UN archivo de los elegidos, ensamblando desde las
+     *  piezas completas verificadas de la sesion (solo en DONE). */
+    private fun elegirArchivoGuardar(hash: String) {
+        val s = torrents.find(hash) ?: return
+        val indices = s.meta.files.indices.filter { s.isFileNeeded(it) }
+        val nombres = indices.map { s.meta.files[it].path }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Guardar archivo del torrent")
+            .setItems(nombres) { _, cual ->
+                guardarTorrentPendiente = Pair(hash, indices[cual])
+                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+                intent.addCategory(Intent.CATEGORY_OPENABLE)
+                intent.setType("application/octet-stream")
+                intent.putExtra(Intent.EXTRA_TITLE, nombres[cual].split('/').last())
+                startActivityForResult(intent, REQUEST_GUARDAR_TORRENT)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Origen del torrent nuevo: archivo .torrent por SAF o enlace
+     *  magnet pegado como texto. */
+    private fun elegirOrigenTorrent() {
+        AlertDialog.Builder(this)
+            .setTitle("Anadir torrent")
+            .setItems(arrayOf("Archivo .torrent (SAF)", "Enlace magnet (texto)")) { _, cual ->
+                if (cual == 0) anadirArchivoTorrent() else anadirMagnet()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Abrir un .torrent real del almacenamiento (SAF). */
+    private fun anadirArchivoTorrent() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("application/x-bittorrent")
+        startActivityForResult(intent, REQUEST_TORRENT)
+    }
+
+    /** Pedir el magnet por texto: los metadatos NO estan en el
+     *  enlace, se traen de peers reales (BEP-9) en segundo plano. */
+    private fun anadirMagnet() {
+        val campo = EditText(this)
+        campo.hint = "magnet:?xt=urn:btih:..."
+        AlertDialog.Builder(this)
+            .setTitle("Anadir magnet")
+            .setView(campo)
+            .setPositiveButton("Anadir") { _, _ ->
+                val texto = campo.text.toString().trim()
+                poolTorrents.execute { crearDesdeMagnet(texto) }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Magnet REAL en segundo plano: announce a los trackers del
+     *  enlace, metadatos ut_metadata de los peers (BEP-9) y torrent
+     *  montado desde el info dict; sin trackers o sin peers con
+     *  metadatos avisa honesto (v1 sin DHT). */
+    private fun crearDesdeMagnet(uri: String) {
+        try {
+            val info = MagnetParser.parse(uri)
+            if (info.trackers.isEmpty()) {
+                avisarTorrent("magnet sin trackers (v1 sin DHT)")
+                return
+            }
+            val hashBytes = unhex(info.infoHashHex)
+            val cliente = TrackerClient(PlatformTrackerTransport())
+            var peers: List<TrackerPeer> = emptyList()
+            for (t in info.trackers) {
+                try {
+                    peers = cliente.announce(
+                        t,
+                        TrackerAnnounceRequest(hashBytes, peerIdTorrent, 0, 0L, 0L, 0L, AnnounceEvent.NONE)
+                    ).peers
+                    break
+                } catch (e: Exception) {
+                }
+            }
+            if (peers.isEmpty()) {
+                avisarTorrent("magnet sin peers para los metadatos")
+                return
+            }
+            val clienteMeta = PeerMetadataClient(PlatformPeerTransport(), hashBytes, peerIdTorrent)
+            var infoDict: ByteArray? = null
+            for (p in peers) {
+                infoDict = clienteMeta.fetchMetadata(p)
+                if (infoDict != null) break
+            }
+            if (infoDict == null) {
+                avisarTorrent("magnet sin metadatos (ningun peer con ut_metadata)")
+                return
+            }
+            val torrent = torrentDesdeInfo(info.trackers[0], infoDict)
+            runOnUiThread { pedirSeleccionTorrent(torrent) }
+        } catch (e: TorrentFormatException) {
+            avisarTorrent("magnet invalido: " + e.message)
+        }
+    }
+
+    /** Seleccion de archivos ANTES de transferir (cuota disco de v1:
+     *  solo lo elegido se baja y vive en memoria); un solo archivo no
+     *  pregunta. */
+    private fun pedirSeleccionTorrent(meta: TorrentMeta) {
+        if (meta.files.size == 1) {
+            arrancarTorrent(meta, meta.files.indices.toSet())
+            return
+        }
+        val nombres = meta.files.map { it.path + " (" + it.length + " B)" }.toTypedArray()
+        val marcas = BooleanArray(meta.files.size) { true }
+        AlertDialog.Builder(this)
+            .setTitle("Elegir archivos de " + meta.name)
+            .setMultiChoiceItems(nombres, marcas) { _, i, ok -> marcas[i] = ok }
+            .setPositiveButton("Descargar") { _, _ ->
+                val sel = meta.files.indices.filter { marcas[it] }.toSet()
+                if (sel.isEmpty()) {
+                    estado.text = "torrent sin archivos elegidos (nada)"
+                    return@setPositiveButton
+                }
+                arrancarTorrent(meta, sel)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Crear la sesion en el gestor y lanzar la bajada en el pool de
+     *  UN hilo (cuota CPU/red de v1). */
+    private fun arrancarTorrent(meta: TorrentMeta, seleccion: Set<Int>) {
+        if (torrents.find(meta.infoHashHex) != null) {
+            estado.text = "torrent ya esta en la lista"
+            return
+        }
+        val session = torrents.add(meta, seleccion)
+        estado.text = "torrent en cola: " + meta.name
+        traza("torrents", "sesion " + meta.infoHashHex.take(8) + " " + meta.name)
+        poolTorrents.execute { bajarTorrent(session) }
+    }
+
+    /** La bajada REAL en el pool: announce started a los trackers HTTP
+     *  del torrent, piezas desde los peers (PeerPoolSource) con la
+     *  verificacion SHA-1 del motor, re-announce al quedarse sin
+     *  piezas (hasta 3 intentos con espera) y parada honesta si
+     *  ningun peer tiene datos o los datos no verifican (5 piezas
+     *  rechazadas); pausa, cancelacion y final mandan su evento al
+     *  tracker (stopped/completed). */
+    private fun bajarTorrent(session: TorrentSession) {
+        val meta = session.meta
+        if (meta.trackers.isEmpty()) {
+            avisarTorrent("torrent sin trackers (v1 sin DHT)")
+            return
+        }
+        val cliente = TrackerClient(PlatformTrackerTransport())
+        val peers = ArrayList<TrackerPeer>()
+        val left = meta.files.indices
+            .filter { session.isFileNeeded(it) }
+            .sumOf { meta.files[it].length }
+        fun pedir(evento: AnnounceEvent): Boolean {
+            for (t in meta.trackers) {
+                try {
+                    val respuesta = cliente.announce(
+                        t,
+                        TrackerAnnounceRequest(meta.infoHash, peerIdTorrent, 0, 0L, 0L, left, evento)
+                    )
+                    peers.clear()
+                    peers.addAll(respuesta.peers)
+                    return true
+                } catch (e: Exception) {
+                }
+            }
+            return false
+        }
+        session.start()
+        if (!pedir(AnnounceEvent.STARTED)) {
+            avisarTorrent("torrent sin trackers alcanzables")
+            return
+        }
+        val fuente = PeerPoolSource(peers, PlatformPeerTransport(), meta.infoHash, peerIdTorrent, meta.pieceCount())
+        var sinPiezas = 0
+        var rechazadas = 0
+        while (true) {
+            when (session.pump(fuente)) {
+                PumpResult.COMPLETED -> {
+                    rechazadas = 0
+                    sinPiezas = 0
+                }
+                PumpResult.UNAVAILABLE -> {
+                    sinPiezas += 1
+                    if (sinPiezas >= 3) {
+                        avisarTorrent("torrent sin peers con piezas (Reintentar)")
+                        return
+                    }
+                    Thread.sleep(4000L)
+                    pedir(AnnounceEvent.NONE)
+                }
+                PumpResult.REJECTED -> {
+                    rechazadas += 1
+                    if (rechazadas >= 5) {
+                        avisarTorrent("torrent con piezas corruptas de todos los peers")
+                        return
+                    }
+                }
+                PumpResult.DONE -> {
+                    pedir(AnnounceEvent.COMPLETED)
+                    avisarTorrent("torrent completado: " + meta.name)
+                    return
+                }
+                PumpResult.PAUSED -> {
+                    pedir(AnnounceEvent.STOPPED)
+                    avisarTorrent("torrent pausado")
+                    return
+                }
+                PumpResult.CANCELLED -> {
+                    pedir(AnnounceEvent.STOPPED)
+                    avisarTorrent("torrent cancelado")
+                    return
+                }
+            }
+        }
+    }
+
+    /** Aviso de la bajada desde el hilo del pool: SIEMPRE al hilo de
+     *  UI (estado + traza), nunca red desde el hilo de UI. */
+    private fun avisarTorrent(mensaje: String) {
+        runOnUiThread {
+            estado.text = mensaje
+            traza("torrents", mensaje)
+        }
+    }
+
+    /** Bytes del infohash hex (40 chars) del magnet. */
+    private fun unhex(hex: String): ByteArray =
+        ByteArray(hex.length / 2) { i ->
+            ((Character.digit(hex[i * 2], 16) shl 4) or
+                Character.digit(hex[i * 2 + 1], 16)).toByte()
+        }
+
     /** T086 v1 (R0191, RES-0091) + v2 (R0347, RES-0141): pantalla de
      * descargas sobre la cola REAL del DownloadEngine verificado
      * (T046): estados y bytes reales, cancelar con confirmacion
@@ -3355,6 +3752,68 @@ class BrowserActivity : Activity() {
             } catch (e: Exception) {
                 estado.text = "no se pudo escribir el PDF"
                 traza("imprimir", "error escribiendo pdf: " + e.javaClass.simpleName)
+            }
+        }
+        if (requestCode == REQUEST_TORRENT && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri == null) {
+                estado.text = "torrent: sin documento"
+                return
+            }
+            try {
+                val entrada = contentResolver.openInputStream(uri)
+                if (entrada == null) {
+                    estado.text = "torrent: no se pudo leer el documento"
+                    return
+                }
+                val meta = entrada.use { TorrentParser.parse(it.readBytes()) }
+                pedirSeleccionTorrent(meta)
+            } catch (e: Exception) {
+                estado.text = "torrent: archivo invalido (" + (e.message ?: e.javaClass.simpleName) + ")"
+                traza("torrents", "parse fallo: " + e.javaClass.simpleName)
+            }
+        }
+        if (requestCode == REQUEST_GUARDAR_TORRENT && resultCode == RESULT_OK) {
+            val uri = data?.data
+            val pend = guardarTorrentPendiente
+            guardarTorrentPendiente = null
+            if (uri == null || pend == null) {
+                estado.text = "guardar torrent: sin destino"
+                return
+            }
+            val s = torrents.find(pend.first)
+            if (s == null) {
+                estado.text = "guardar torrent: sesion desaparecida"
+                return
+            }
+            try {
+                val meta = s.meta
+                val archivo = meta.files[pend.second]
+                val salida = contentResolver.openOutputStream(uri, "wt")
+                if (salida == null) {
+                    estado.text = "guardar torrent: no se pudo abrir el destino"
+                    return
+                }
+                salida.use { out ->
+                    var offset = meta.fileOffset(pend.second)
+                    val fin = offset + archivo.length
+                    while (offset < fin) {
+                        val p = (offset / meta.pieceLength).toInt()
+                        val data = s.pieceData(p)
+                        if (data == null) {
+                            throw IllegalStateException("pieza " + p + " no disponible")
+                        }
+                        val dentro = (offset % meta.pieceLength).toInt()
+                        val tomar = minOf(data.size - dentro, (fin - offset).toInt())
+                        out.write(data, dentro, tomar)
+                        offset += tomar
+                    }
+                }
+                estado.text = "archivo del torrent guardado (" + archivo.length + " B)"
+                traza("torrents", "guardado " + archivo.path + " " + archivo.length + " B")
+            } catch (e: Exception) {
+                estado.text = "guardar torrent: fallo al escribir"
+                traza("torrents", "guardar fallo: " + e.javaClass.simpleName)
             }
         }
         if (requestCode == REQUEST_INSTALAR_NIAMOD && resultCode == RESULT_OK) {
@@ -3926,5 +4385,7 @@ class BrowserActivity : Activity() {
         private const val REQUEST_EXPORT_MARCADORES = 48
         private const val REQUEST_INSTALAR_NIAMOD = 49
         private const val REQUEST_GUARDAR_PDF = 50
+        private const val REQUEST_TORRENT = 51
+        private const val REQUEST_GUARDAR_TORRENT = 52
     }
 }
