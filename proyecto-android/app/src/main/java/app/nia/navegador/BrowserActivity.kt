@@ -249,9 +249,23 @@ class BrowserActivity : Activity() {
         override fun nowMillis(): Long = System.currentTimeMillis()
     }
 
+    /** T072/3.5 (R0322, RES-0130): el perfil normal vive en filesDir
+     *  (hallazgo 3.5 del informe externo: Android puede PURGAR cacheDir
+     *  y el perfil persistido moriria con el; TODO lo demas ya estaba en
+     *  filesDir). Si queda un perfil viejo en cacheDir y filesDir no tiene
+     *  ninguno, se MIGRA con rename (una sola via; si el rename falla, se
+     *  empieza de cero: honesto, no se pierde nada que la purga no fuera
+     *  a perder igual). El incognito vive SOLO en memoria (intacto). */
+    private val perfilNormal: File by lazy {
+        val nuevo = File(filesDir, "perfil-navegador")
+        val viejo = File(cacheDir, "perfil-navegador")
+        if (!nuevo.exists() && viejo.exists()) viejo.renameTo(nuevo)
+        nuevo
+    }
+
     private val tabs by lazy {
         TabsManager(
-            clock, HttpTransport(), File(cacheDir, "perfil-navegador"),
+            clock, HttpTransport(), perfilNormal,
             filtroDePerfil = { perfil, tabId ->
                 PluginNetFilter(
                     runtimeModulos, registroModulos, perfil.configModulos,
