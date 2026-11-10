@@ -172,4 +172,44 @@ class HttpCacheTest {
         valor(m.fetch(m.newRequest("GET", "https://a.example/")))
         assertEquals(2, t.requests.size)
     }
+
+    @Test fun cachePresupuestoDesalojaLaMenosReciente() {
+        val cache = HttpCache(FakeClock(1000), maxEntries = 2)
+        cache.store("https://a.example/a", FetchResponse(200, mapOf("cache-control" to "max-age=60"), body("aa")))
+        cache.store("https://a.example/b", FetchResponse(200, mapOf("cache-control" to "max-age=60"), body("bb")))
+        assertTrue(cache.lookup("GET", "https://a.example/a") is HttpCache.Lookup.Fresh)
+        cache.store("https://a.example/c", FetchResponse(200, mapOf("cache-control" to "max-age=60"), body("cc")))
+        assertEquals(2, cache.count())
+        if (cache.entryFor("https://a.example/b") != null) throw AssertionError("la LRU b debia desalojarse")
+        assertTrue(cache.lookup("GET", "https://a.example/a") is HttpCache.Lookup.Fresh)
+        assertTrue(cache.lookup("GET", "https://a.example/c") is HttpCache.Lookup.Fresh)
+    }
+
+    @Test fun cacheCuerpoQueNoCabeNoSeAlmacena() {
+        val cache = HttpCache(FakeClock(1000), maxBodyBytes = 1024)
+        val stored = cache.store("https://a.example/", FetchResponse(200, mapOf("cache-control" to "max-age=60"), ByteArray(2048)))
+        if (stored != null) throw AssertionError("cuerpo mayor que el presupuesto se almaceno")
+        assertEquals(0, cache.count())
+        assertEquals(0L, cache.bytes())
+    }
+
+    @Test fun cachePresupuestoDeBytesDesalojaPorTamano() {
+        val cache = HttpCache(FakeClock(1000), maxBodyBytes = 3000)
+        cache.store("https://a.example/a", FetchResponse(200, mapOf("cache-control" to "max-age=60"), ByteArray(2048)))
+        cache.store("https://a.example/b", FetchResponse(200, mapOf("cache-control" to "max-age=60"), ByteArray(2048)))
+        assertEquals(1, cache.count())
+        if (cache.entryFor("https://a.example/a") != null) throw AssertionError("la mas vieja debia desalojarse por bytes")
+        assertTrue(cache.lookup("GET", "https://a.example/b") is HttpCache.Lookup.Fresh)
+        assertEquals(2048L, cache.bytes())
+    }
+
+    @Test fun cacheBytesEsTransparenteYclearResetea() {
+        val cache = HttpCache(FakeClock(1000))
+        cache.store("https://a.example/a", FetchResponse(200, mapOf("cache-control" to "max-age=60"), body("0123456789")))
+        cache.store("https://a.example/b", FetchResponse(200, mapOf("cache-control" to "max-age=60"), ByteArray(20)))
+        assertEquals(30L, cache.bytes())
+        assertEquals(2, cache.clear())
+        assertEquals(0L, cache.bytes())
+    }
+
 }

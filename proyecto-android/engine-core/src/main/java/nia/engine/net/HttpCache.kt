@@ -26,11 +26,26 @@ import nia.engine.url.UrlParser
  * - serveRevalidated: un 304 revive la entrada guardada (merge de
  *   cabeceras nuevas sobre las guardadas) y sirve el cuerpo guardado.
  *
+ * T026 v3 (R0311, RES-0127): presupuesto LRU. El cache JAMAS crece
+ * sin tope: maxEntries (256 por defecto) y maxBodyBytes (8 MiB de
+ * cuerpos en total) desalojan la entrada menos usada recientemente
+ * (access-order); un cuerpo que no cabe ni solo en el presupuesto
+ * no se almacena (como no-store). bytes() expone el consumo para
+ * que los ajustes puedan mostrarlo.
+ *
  * Limitaciones v2: solo GET, sin Vary, sin heuristica (sin
  * freshFor conocido la entrada nunca es fresca) y sin particiones
  * (T033).
  */
-class HttpCache(private val clock: WallClock) {
+class HttpCache(
+    private val clock: WallClock,
+    private val maxEntries: Int = 256,
+    private val maxBodyBytes: Long = 8_388_608L
+) {
+    init {
+        require(maxEntries > 0) { "maxEntries debe ser positivo" }
+        require(maxBodyBytes > 0) { "maxBodyBytes debe ser positivo" }
+    }
 
     data class Entry(
         val url: String,
@@ -48,7 +63,11 @@ class HttpCache(private val clock: WallClock) {
         data class Stale(val entry: Entry) : Lookup()
     }
 
-    private val entries = LinkedHashMap<String, Entry>()
+    private val entries = LinkedHashMap<String, Entry>(16, 0.75f, true)
+    private var totalBytes: Long = 0
+
+    /** T026 v3 (R0311): presupuesto consumido por los cuerpos guardados. */
+    fun bytes(): Long = totalBytes
 
     fun count(): Int = entries.size
 
@@ -58,6 +77,7 @@ class HttpCache(private val clock: WallClock) {
     fun clear(): Int {
         val removed = entries.size
         entries.clear()
+        totalBytes = 0
         return removed
     }
 
@@ -71,7 +91,7 @@ class HttpCache(private val clock: WallClock) {
      *  origenes quedan intactos. */
     fun borrarDe(scheme: String, host: String, port: Int): Int {
         val victimas = entries.filter { esDeOrigen(it.value.url, scheme, host, port) }.keys.toList()
-        for (k in victimas) entries.remove(k)
+        for (k in victimas) totalBytes -= entries.remove(k)!!.body.size.toLong()
         return victimas.size
     }
 
@@ -91,6 +111,7 @@ class HttpCache(private val clock: WallClock) {
         if (response.status != 200) return null
         val cc = directives(response.headers)
         if (cc["no-store"] != null) return null
+        if (response.body.size.toLong() > maxBodyBytes) return null
         val now = clock.nowMillis()
         val entry = Entry(
             url,
@@ -101,7 +122,10 @@ class HttpCache(private val clock: WallClock) {
             freshnessMillis(response.headers, now, cc),
             cc["no-cache"] != null || cc["must-revalidate"] != null
         )
+        entries[url]?.let { totalBytes -= it.body.size.toLong() }
         entries[url] = entry
+        totalBytes += entry.body.size.toLong()
+        evictToBudget()
         return entry
     }
 
@@ -142,6 +166,16 @@ class HttpCache(private val clock: WallClock) {
         )
         entries[url] = updated
         return FetchResponse(updated.status, updated.headers, updated.body)
+    }
+
+    /** T026 v3 (R0311, RES-0127): desaloja la LRU (access-order)
+     *  hasta caber en el presupuesto de entradas y de bytes. */
+    private fun evictToBudget() {
+        while (entries.isNotEmpty() && (entries.size > maxEntries || totalBytes > maxBodyBytes)) {
+            val eldest = entries.entries.iterator().next()
+            totalBytes -= eldest.value.body.size.toLong()
+            entries.remove(eldest.key)
+        }
     }
 
     /** cache-control en minusculas: directiva -> valor (vacio si no hay). */
