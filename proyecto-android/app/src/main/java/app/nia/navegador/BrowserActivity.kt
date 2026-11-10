@@ -384,7 +384,7 @@ class BrowserActivity : Activity() {
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
-    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9): armazon del SettingsManager
+    /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
      * estado de no disponible (JAMAS se falsifica). */
@@ -459,12 +459,15 @@ class BrowserActivity : Activity() {
                 TipoOpcion.ELECCION, "auto", elecciones = listOf("auto", "claro", "oscuro")
             )
         )
+        // T093 v10 (R0343, RES-0139): buscador del omnibox REAL sobre la
+        // base inyectable del OmniboxInput (ADR-022 intacto: las reglas de
+        // resolucion NO cambian, solo la base de busqueda elegida).
         s.registrar(
             OpcionAjuste(
                 "buscador.predeterminado", "Busqueda",
                 "Buscador del omnibox",
-                "Hoy DuckDuckGo por ADR-022 (elegir llega con T054/T094)",
-                TipoOpcion.TEXTO, "duckduckgo", disponible = false
+                "Motor de la busqueda del omnibox y del fallback de DNS (duckduckgo o wikipedia)",
+                TipoOpcion.ELECCION, "duckduckgo", elecciones = listOf("duckduckgo", "wikipedia")
             )
         )
         s.registrar(
@@ -589,6 +592,16 @@ class BrowserActivity : Activity() {
         "oscuro" -> NiaTokens.Modo.OSCURO
         else -> NiaTokens.Modo.AUTO
     }
+
+    /** T093 v10 (R0343, RES-0139): base de busqueda REAL del ajuste
+     *  buscador.predeterminado; el defecto sigue siendo DuckDuckGo HTML
+     *  sin JS (ADR-022) y la resolucion del omnibox NO cambia. */
+    private fun baseBusqueda(): String =
+        if (ajustes.valor("buscador.predeterminado") == "wikipedia") {
+            "https://es.wikipedia.org/w/index.php?search="
+        } else {
+            OmniboxInput.BASE_BUSQUEDA_DEFECTO
+        }
 
     private lateinit var omnibox: EditText
     private lateinit var indicador: TextView
@@ -978,7 +991,7 @@ class BrowserActivity : Activity() {
 
     private fun resolverYnavegar() {
         val texto = omnibox.text.toString()
-        when (val r = OmniboxInput.resolver(texto)) {
+        when (val r = OmniboxInput.resolver(texto, baseBusqueda())) {
             is OmniboxInput.Resolucion.Vacio -> estado.text = "omnibox vacio"
             is OmniboxInput.Resolucion.EsquemaNoSoportado ->
                 estado.text = "esquema no soportado: " + r.esquema
@@ -1089,10 +1102,10 @@ class BrowserActivity : Activity() {
             ajustes.valor("red.busqueda-dns") != "false" &&
             f.code == ErrorCode.NETWORK && f.message.contains("DNS")
         ) {
-            val url = OmniboxInput.BASE_BUSQUEDA_DEFECTO + OmniboxInput.codificarQuery(textoOriginal)
+            val url = baseBusqueda() + OmniboxInput.codificarQuery(textoOriginal)
             AlertDialog.Builder(this)
                 .setTitle("Dominio no encontrado")
-                .setMessage("La navegacion fallo de DNS. Buscar el texto en DuckDuckGo?")
+                .setMessage("La navegacion fallo de DNS. Buscar el texto en el buscador?")
                 .setPositiveButton("Buscar") { _, _ ->
                     omnibox.setText(url)
                     navegar(url, false, null)
@@ -2893,7 +2906,7 @@ class BrowserActivity : Activity() {
             estado.text = "externo sin texto para abrir"
             return
         }
-        when (val r = OmniboxInput.resolver(texto)) {
+        when (val r = OmniboxInput.resolver(texto, baseBusqueda())) {
             is OmniboxInput.Resolucion.Navegar ->
                 confirmarExterno("Abrir enlace externo?", r.url, r.dominioImplicito, texto)
             is OmniboxInput.Resolucion.Buscar ->
@@ -2967,7 +2980,7 @@ class BrowserActivity : Activity() {
                     estado.text = "acceso sin titulo o sin url"
                     return@setPositiveButton
                 }
-                when (val r = OmniboxInput.resolver(texto)) {
+                when (val r = OmniboxInput.resolver(texto, baseBusqueda())) {
                     is OmniboxInput.Resolucion.Navegar -> fijarAcceso(titulo, r.url)
                     is OmniboxInput.Resolucion.Buscar -> fijarAcceso(titulo, r.url)
                     is OmniboxInput.Resolucion.EsquemaNoSoportado ->
@@ -3190,7 +3203,7 @@ class BrowserActivity : Activity() {
             .setView(campo)
             .setPositiveButton("Elegir destino") { _, _ ->
                 val texto = campo.text.toString().trim()
-                when (val r = OmniboxInput.resolver(texto)) {
+                when (val r = OmniboxInput.resolver(texto, baseBusqueda())) {
                     is OmniboxInput.Resolucion.Navegar -> pedirDestinoSaf(r.url)
                     is OmniboxInput.Resolucion.Buscar -> pedirDestinoSaf(r.url)
                     is OmniboxInput.Resolucion.EsquemaNoSoportado ->
