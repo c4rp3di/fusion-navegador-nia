@@ -29,6 +29,7 @@ import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
+import android.provider.OpenableColumns
 import android.util.Log
 import android.util.Rational
 import android.view.Gravity
@@ -48,6 +49,7 @@ import android.widget.TextView
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.concurrent.Executors
 import nia.contracts.ContractsVersion
 import nia.contracts.ErrorCode
@@ -83,6 +85,7 @@ import nia.engine.media.MediaSource
 import nia.engine.media.MediaState
 import nia.engine.media.OpenSubtitlesClient
 import nia.engine.media.OpenSubtitlesConfig
+import nia.engine.media.OpenSubtitlesHash
 import nia.engine.media.OpenSubtitlesResult
 import nia.engine.media.OpenSubtitlesSesion
 import nia.engine.media.SubtitleFormatException
@@ -497,6 +500,8 @@ class BrowserActivity : Activity() {
      *  (null si el player es standalone): cerrar la pestana o el Fire
      *  TOTAL de su tipo paran la reproduccion (politica de T109). */
     private var pestanaMedia: Long? = null
+    // T104 v2: uri SAF del archivo local del player (para el hash).
+    private var uriMediaLocal: String? = null
 
     /** T104 v1 (R0376, RES-0151): pista de subs viva (efimera),
      * overlay del player, sesion de OpenSubtitles y descargadas
@@ -3814,6 +3819,8 @@ class BrowserActivity : Activity() {
         // T109 v2 (R0366, RES-0148): el standalone NO esta atado a
         // pestana; "pagina" la fija el puente antes de llegar aqui.
         if (origen != "pagina") pestanaMedia = null
+        // T104 v2: la busqueda por hash necesita el archivo local.
+        uriMediaLocal = if (origen == "archivo") fuente else null
         val contenedor = LinearLayout(this)
         contenedor.orientation = LinearLayout.VERTICAL
         val superficie = SurfaceView(this)
@@ -4046,6 +4053,7 @@ class BrowserActivity : Activity() {
         // descargadas persistentes siguen en el almacen privado.
         pistaSubs = null
         vistaSubs = null
+        uriMediaLocal = null
         traza("media", "player cerrado")
     }
 
@@ -4119,6 +4127,7 @@ class BrowserActivity : Activity() {
         }
         val opciones = arrayOf(
             "Buscar pista",
+            "Buscar por hash del archivo",
             "Descargadas (" + contarDescargasSubsOs() + ")",
             "Probar conexion",
             "Olvidar cuenta"
@@ -4128,9 +4137,10 @@ class BrowserActivity : Activity() {
             .setItems(opciones) { _, cual ->
                 when (cual) {
                     0 -> pedirBusquedaSubsOs()
-                    1 -> pedirDescargadasSubsOs()
-                    2 -> probarSubsOs()
-                    3 -> {
+                    1 -> pedirBusquedaHashSubsOs()
+                    2 -> pedirDescargadasSubsOs()
+                    3 -> probarSubsOs()
+                    4 -> {
                         sesionSubsOs.borrar()
                         estado.text = "subs os: cuenta olvidada"
                     }
@@ -4256,6 +4266,105 @@ class BrowserActivity : Activity() {
     }
 
     /** Resultados: elegir uno lo descarga a pista. */
+    /** T104 v2 (R0391, RES-0156): busca la pista EXACTA del
+     *  archivo local en reproduccion por moviehash OSDB (mas
+     *  preciso que por nombre); solo con archivo local y player
+     *  abierto, honesto en caso contrario. */
+    private fun pedirBusquedaHashSubsOs() {
+        if (!playerAbierto || uriMediaLocal == null) {
+            estado.text = "subs os: hash solo con archivo local"
+            return
+        }
+        val cajaIdiomas = EditText(this)
+        cajaIdiomas.hint = "Idiomas (es,en)"
+        AlertDialog.Builder(this)
+            .setTitle("Buscar por hash del archivo")
+            .setView(cajaIdiomas)
+            .setPositiveButton("Buscar") { _, _ ->
+                val idiomas = cajaIdiomas.text.toString().split(',')
+                    .map { it.trim().lowercase() }
+                    .filter { it.isNotEmpty() }
+                estado.text = "subs os: hash del archivo..."
+                poolNavegacion.execute {
+                    val guardada = sesionSubsOs.cargar()
+                    if (guardada == null) {
+                        runOnUiThread {
+                            estado.text = "subs os: sin cuenta guardada"
+                        }
+                        return@execute
+                    }
+                    val hash = hashArchivoLocal()
+                    if (hash == null) {
+                        runOnUiThread {
+                            estado.text = "subs os: archivo ilegible o corto para hash"
+                        }
+                        return@execute
+                    }
+                    val cliente = OpenSubtitlesClient(guardada.config, fetchSubsOs(), guardada.bearer)
+                    val r = cliente.buscarPorHash(hash, idiomas)
+                    runOnUiThread {
+                        if (r is Outcome.Failure) {
+                            estado.text = "subs os: " + r.error.safeMessage
+                            return@runOnUiThread
+                        }
+                        val hits = (r as? Outcome.Success)?.value ?: return@runOnUiThread
+                        if (hits.isEmpty()) {
+                            estado.text = "subs os: sin resultados por hash"
+                            return@runOnUiThread
+                        }
+                        pedirResultadoSubsOs(hits)
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** T104 v2 (R0391, RES-0156): moviehash OSDB del archivo local
+     *  del player: 64 KiB del principio y del final via SAF (el
+     *  motor NO toca Android); null si es ilegible o corto (honesto,
+     *  JAMAS un hash inventado). */
+    private fun hashArchivoLocal(): String? {
+        val uri = uriMediaLocal ?: return null
+        return try {
+            val uriObj = Uri.parse(uri)
+            var tamano = -1L
+            contentResolver.query(uriObj, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                if (idx >= 0 && c.moveToFirst()) tamano = c.getLong(idx)
+            }
+            if (tamano < 65536L) return null
+            val primer = ByteArray(65536)
+            val ultimo = ByteArray(65536)
+            val flujo = contentResolver.openInputStream(uriObj) ?: return null
+            flujo.use {
+                if (!leerCompleto(flujo, primer)) return null
+                var porSaltar = tamano - 131072L
+                while (porSaltar > 0) {
+                    val s = flujo.skip(porSaltar)
+                    if (s <= 0) return null
+                    porSaltar -= s
+                }
+                if (!leerCompleto(flujo, ultimo)) return null
+            }
+            OpenSubtitlesHash.hashDeFlujo(tamano, primer, ultimo)
+        } catch (ilegible: Exception) {
+            null
+        }
+    }
+
+    /** T104 v2: lectura completa de un buffer (read puede volver
+     *  corto; el hash NO admite chunks a medias). */
+    private fun leerCompleto(flujo: InputStream, buf: ByteArray): Boolean {
+        var leido = 0
+        while (leido < buf.size) {
+            val n = flujo.read(buf, leido, buf.size - leido)
+            if (n < 0) return false
+            leido += n
+        }
+        return true
+    }
+
     private fun pedirResultadoSubsOs(hits: List<OpenSubtitlesResult>) {
         val nombres = ArrayList<String>()
         for (h in hits) nombres.add(h.nombre + " (" + h.idioma + ")")

@@ -30,9 +30,11 @@ object OpenSubtitlesHash {
         try {
             RandomAccessFile(archivo, "r").use { raf ->
                 val buf = ByteArray(CHUNK.toInt())
-                h += sumar(raf, buf)
+                raf.readFully(buf)
+                h += sumar(buf)
                 raf.seek(tamano - CHUNK)
-                h += sumar(raf, buf)
+                raf.readFully(buf)
+                h += sumar(buf)
             }
         } catch (ilegible: Exception) {
             return null
@@ -40,9 +42,19 @@ object OpenSubtitlesHash {
         return String.format("%016x", h)
     }
 
+    /** T104 v2 (R0391, RES-0156): hash OSDB desde los chunks YA
+     *  leidos por el host (SAF da un flujo, no un File); el MISMO
+     *  algoritmo de hashDe, JAMAS duplicado en el shell. Null si el
+     *  tamano o los chunks son demasiado cortos. */
+    fun hashDeFlujo(tamano: Long, primer: ByteArray, ultimo: ByteArray): String? {
+        if (tamano < CHUNK) return null
+        if (primer.size < CHUNK.toInt() || ultimo.size < CHUNK.toInt()) return null
+        val h = tamano + sumar(primer) + sumar(ultimo)
+        return String.format("%016x", h)
+    }
+
     /** Suma los 8192 enteros little-endian del chunk leido. */
-    private fun sumar(raf: RandomAccessFile, buf: ByteArray): Long {
-        raf.readFully(buf)
+    private fun sumar(buf: ByteArray): Long {
         var suma = 0L
         var i = 0
         while (i + 8 <= buf.size) {
