@@ -76,6 +76,13 @@ import nia.engine.media.MediaException
 import nia.engine.media.MediaPuente
 import nia.engine.media.MediaSource
 import nia.engine.media.MediaState
+import nia.engine.media.OpenSubtitlesClient
+import nia.engine.media.OpenSubtitlesConfig
+import nia.engine.media.OpenSubtitlesResult
+import nia.engine.media.OpenSubtitlesSesion
+import nia.engine.media.SubtitleFormatException
+import nia.engine.media.SubtitleParser
+import nia.engine.media.SubtitleTrack
 import nia.engine.modules.AprobacionPaquete
 import nia.engine.modules.ContextoModulos
 import nia.engine.modules.DiagModulos
@@ -97,6 +104,7 @@ import nia.engine.print.DocumentoPaginado
 import nia.engine.print.Impresor
 import nia.engine.print.Orientacion
 import nia.engine.print.PaginaImpresa
+import nia.engine.net.FetchManager
 import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
 import nia.engine.net.PanelIdentidad
@@ -467,6 +475,15 @@ class BrowserActivity : Activity() {
      *  (null si el player es standalone): cerrar la pestana o el Fire
      *  TOTAL de su tipo paran la reproduccion (politica de T109). */
     private var pestanaMedia: Long? = null
+
+    /** T104 v1 (R0376, RES-0151): pista de subs viva (efimera),
+     * overlay del player, sesion de OpenSubtitles y descargadas
+     * persistentes en el almacen privado. Los secretos JAMAS se
+     * loguean ni exportan (politica de T104). */
+    private var pistaSubs: SubtitleTrack? = null
+    private var vistaSubs: TextView? = null
+    private val sesionSubsOs by lazy { OpenSubtitlesSesion(File(filesDir, "subs-os-sesion.tsv")) }
+    private val descargasSubsOs by lazy { File(filesDir, "subs-os") }
 
     /** T092 v2 (R0358, RES-0145): puente REAL de las paginas (TK-111-1). */
     private val puenteMediaPagina = PuenteMediaPagina()
@@ -3775,12 +3792,29 @@ class BrowserActivity : Activity() {
         bVolumen.text = "Volumen"
         val bVel = Button(this)
         bVel.text = "x1"
+        // T104 v1: botones de subtitulos del player.
+        val bSubsOs = Button(this)
+        bSubsOs.text = "Subs OS"
+        val bSubsMenos = Button(this)
+        bSubsMenos.text = "Subs -0.5s"
+        val bSubsMas = Button(this)
+        bSubsMas.text = "Subs +0.5s"
+        val bSubsFuera = Button(this)
+        bSubsFuera.text = "Sin subs"
         botones.addView(bPlay)
         botones.addView(bAtras)
         botones.addView(bAdelante)
         botones.addView(bVolumen)
         botones.addView(bVel)
+        botones.addView(bSubsOs)
+        botones.addView(bSubsMenos)
+        botones.addView(bSubsMas)
+        botones.addView(bSubsFuera)
         contenedor.addView(botones)
+        // T104 v1: overlay de subs del player (cue activo).
+        val subsTexto = TextView(this)
+        contenedor.addView(subsTexto)
+        vistaSubs = subsTexto
         bPlay.setOnClickListener {
             media.playPause()
             refrescarPlayer(bPlay, relojTexto, barra)
@@ -3803,6 +3837,19 @@ class BrowserActivity : Activity() {
             val v = velocidadesMedia[pasoVelocidadMedia]
             media.setRate(v)
             bVel.text = "x" + v
+        }
+        bSubsOs.setOnClickListener { pedirSubsOs() }
+        bSubsMenos.setOnClickListener {
+            pistaSubs?.shift(-500L)
+            pintarSubs()
+        }
+        bSubsMas.setOnClickListener {
+            pistaSubs?.shift(500L)
+            pintarSubs()
+        }
+        bSubsFuera.setOnClickListener {
+            pistaSubs = null
+            pintarSubs()
         }
         barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(b: SeekBar?, progreso: Int, desdeUsuario: Boolean) {}
@@ -3850,6 +3897,7 @@ class BrowserActivity : Activity() {
             override fun run() {
                 if (!playerAbierto) return
                 refrescarPlayer(bPlay, relojTexto, barra)
+                pintarSubs()
                 relojTexto.postDelayed(this, 300L)
             }
         }, 300L)
@@ -3943,8 +3991,273 @@ class BrowserActivity : Activity() {
         media.close()
         soltarAudioFocus()
         pestanaMedia = null
+        // T104 v1: la pista efimera muere con el player; las
+        // descargadas persistentes siguen en el almacen privado.
+        pistaSubs = null
+        vistaSubs = null
         traza("media", "player cerrado")
     }
+
+    /** T104 v1: pinta el cue activo de la pista en el overlay del
+     *  player, sincronizado con la posicion del nucleo (el tick de
+     *  300 ms repinta tras el seek). */
+    private fun pintarSubs() {
+        val vista = vistaSubs ?: return
+        val pista = pistaSubs
+        vista.text = pista?.textAt(media.position()) ?: ""
+    }
+
+    /** T104 v1 (R0376, RES-0151): dialogo Subs OS del player: cuenta
+     *  (apiKey obligatoria, usuario y clave opcionales), Probar
+     *  conexion, busqueda con seleccion de idioma, resultados,
+     *  descarga a pista y descargadas persistentes con borrado. Los
+     *  secretos viven SOLO en el almacen privado (OpenSubtitlesSesion)
+     *  y JAMAS salen en traza, export ni DevTools. */
+    private fun pedirSubsOs() {
+        if (!playerAbierto) return
+        if (sesionSubsOs.cargar() == null) {
+            pedirCuentaSubsOs()
+            return
+        }
+        val opciones = arrayOf(
+            "Buscar pista",
+            "Descargadas (" + contarDescargasSubsOs() + ")",
+            "Probar conexion",
+            "Olvidar cuenta"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Subs OS")
+            .setItems(opciones) { _, cual ->
+                when (cual) {
+                    0 -> pedirBusquedaSubsOs()
+                    1 -> pedirDescargadasSubsOs()
+                    2 -> probarSubsOs()
+                    3 -> {
+                        sesionSubsOs.borrar()
+                        estado.text = "subs os: cuenta olvidada"
+                    }
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Cuenta del proveedor: apiKey obligatoria, usuario y clave
+     *  opcionales. Guarda via OpenSubtitlesSesion (politica de
+     *  secretos) y prueba la conexion; el resultado NUNCA contiene
+     *  credenciales. */
+    private fun pedirCuentaSubsOs() {
+        val cajaApi = EditText(this)
+        cajaApi.hint = "API key (obligatoria)"
+        val cajaUsuario = EditText(this)
+        cajaUsuario.hint = "Usuario (opcional)"
+        val cajaClave = EditText(this)
+        cajaClave.hint = "Clave (opcional)"
+        val caja = LinearLayout(this)
+        caja.orientation = LinearLayout.VERTICAL
+        caja.addView(cajaApi)
+        caja.addView(cajaUsuario)
+        caja.addView(cajaClave)
+        AlertDialog.Builder(this)
+            .setTitle("Cuenta OpenSubtitles")
+            .setView(caja)
+            .setPositiveButton("Guardar y probar") { _, _ ->
+                val api = cajaApi.text.toString().trim()
+                if (api.isEmpty()) {
+                    estado.text = "subs os: falta la API key"
+                    return@setPositiveButton
+                }
+                val usuario = cajaUsuario.text.toString().trim()
+                val clave = cajaClave.text.toString()
+                val config = try {
+                    OpenSubtitlesConfig(api, usuario.ifEmpty { null }, clave.ifEmpty { null })
+                } catch (invalida: IllegalArgumentException) {
+                    estado.text = "subs os: API key no valida"
+                    return@setPositiveButton
+                }
+                sesionSubsOs.guardar(config, null)
+                probarSubsOs()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Probar conexion en el hilo de fondo (la red JAMAS en el de
+     *  UI): fallos auth/cuota/offline honestos y SIN credenciales. */
+    private fun probarSubsOs() {
+        val guardada = sesionSubsOs.cargar()
+        if (guardada == null) {
+            estado.text = "subs os: sin cuenta guardada"
+            return
+        }
+        estado.text = "subs os: probando conexion..."
+        poolNavegacion.execute {
+            val cliente = OpenSubtitlesClient(guardada.config, fetchSubsOs(), guardada.bearer)
+            val r = cliente.probarConexion()
+            runOnUiThread {
+                if (r is Outcome.Success) {
+                    estado.text = "subs os: conexion OK"
+                } else if (r is Outcome.Failure) {
+                    estado.text = "subs os: " + r.error.safeMessage
+                }
+            }
+        }
+    }
+
+    /** Busqueda con seleccion de idioma (consulta + idiomas). */
+    private fun pedirBusquedaSubsOs() {
+        val cajaConsulta = EditText(this)
+        cajaConsulta.hint = "Buscar subtitulos de..."
+        val cajaIdiomas = EditText(this)
+        cajaIdiomas.hint = "Idiomas (es,en)"
+        val caja = LinearLayout(this)
+        caja.orientation = LinearLayout.VERTICAL
+        caja.addView(cajaConsulta)
+        caja.addView(cajaIdiomas)
+        AlertDialog.Builder(this)
+            .setTitle("Buscar subtitulos")
+            .setView(caja)
+            .setPositiveButton("Buscar") { _, _ ->
+                val consulta = cajaConsulta.text.toString().trim()
+                if (consulta.isEmpty()) {
+                    estado.text = "subs os: consulta vacia"
+                    return@setPositiveButton
+                }
+                buscarSubsOs(consulta, cajaIdiomas.text.toString())
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Busca en el hilo de fondo y ofrece los resultados. */
+    private fun buscarSubsOs(consulta: String, idiomasCrudo: String) {
+        val guardada = sesionSubsOs.cargar()
+        if (guardada == null) {
+            estado.text = "subs os: sin cuenta guardada"
+            return
+        }
+        val idiomas = idiomasCrudo.split(',').map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        estado.text = "subs os: buscando..."
+        poolNavegacion.execute {
+            val cliente = OpenSubtitlesClient(guardada.config, fetchSubsOs(), guardada.bearer)
+            val r = cliente.buscar(consulta, idiomas)
+            runOnUiThread {
+                if (r is Outcome.Failure) {
+                    estado.text = "subs os: " + r.error.safeMessage
+                    return@runOnUiThread
+                }
+                val hits = (r as? Outcome.Success)?.value ?: return@runOnUiThread
+                if (hits.isEmpty()) {
+                    estado.text = "subs os: sin resultados"
+                    return@runOnUiThread
+                }
+                pedirResultadoSubsOs(hits)
+            }
+        }
+    }
+
+    /** Resultados: elegir uno lo descarga a pista. */
+    private fun pedirResultadoSubsOs(hits: List<OpenSubtitlesResult>) {
+        val nombres = ArrayList<String>()
+        for (h in hits) nombres.add(h.nombre + " (" + h.idioma + ")")
+        AlertDialog.Builder(this)
+            .setTitle("Resultados (" + hits.size + ")")
+            .setItems(nombres.toTypedArray()) { _, cual ->
+                descargarSubsOs(hits[cual])
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Descarga en el hilo de fondo, guarda PERSISTENTE en el
+     *  almacen privado y enchufa la pista al player. */
+    private fun descargarSubsOs(hit: OpenSubtitlesResult) {
+        val guardada = sesionSubsOs.cargar()
+        if (guardada == null) {
+            estado.text = "subs os: sin cuenta guardada"
+            return
+        }
+        estado.text = "subs os: descargando..."
+        poolNavegacion.execute {
+            val cliente = OpenSubtitlesClient(guardada.config, fetchSubsOs(), guardada.bearer)
+            val r = cliente.descargar(hit.fileId)
+            runOnUiThread {
+                if (r is Outcome.Failure) {
+                    estado.text = "subs os: " + r.error.safeMessage
+                    return@runOnUiThread
+                }
+                val pista = (r as? Outcome.Success)?.value ?: return@runOnUiThread
+                guardarDescargaSubsOs(hit, pista.contenido)
+                enchufarSubsOs(hit.nombre + " (" + hit.idioma + ")", pista.contenido)
+            }
+        }
+    }
+
+    /** Descarga persistente best-effort: si el disco falla, la pista
+     *  efimera del player sigue viva (honesto). */
+    private fun guardarDescargaSubsOs(hit: OpenSubtitlesResult, contenido: String) {
+        try {
+            descargasSubsOs.mkdirs()
+            File(descargasSubsOs, hit.fileId.toString() + "-" + hit.idioma + ".txt")
+                .writeText(contenido)
+        } catch (noEscribible: Exception) {
+            traza("media", "subs os: descarga no persistida")
+        }
+    }
+
+    private fun contarDescargasSubsOs(): Int =
+        descargasSubsOs.listFiles()?.size ?: 0
+
+    /** Descargadas persistentes: elegir carga la pista; Borrar todas
+     *  las OLVIDA del disco (T104: con borrado). */
+    private fun pedirDescargadasSubsOs() {
+        val archivos = descargasSubsOs.listFiles()?.sortedBy { it.name } ?: emptyList()
+        if (archivos.isEmpty()) {
+            estado.text = "subs os: sin descargadas"
+            return
+        }
+        val nombres = ArrayList<String>()
+        for (a in archivos) nombres.add(a.name.removeSuffix(".txt"))
+        AlertDialog.Builder(this)
+            .setTitle("Descargadas")
+            .setItems(nombres.toTypedArray()) { _, cual ->
+                val texto = try {
+                    archivos[cual].readText()
+                } catch (ilegible: Exception) {
+                    null
+                }
+                if (texto == null) {
+                    estado.text = "subs os: descargada ilegible"
+                } else {
+                    enchufarSubsOs(nombres[cual], texto)
+                }
+            }
+            .setNeutralButton("Borrar todas") { _, _ ->
+                for (a in archivos) a.delete()
+                estado.text = "subs os: descargadas borradas"
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Enchufa la pista al player: parse todo-o-nada, desfase con
+     *  Subs -0.5s/+0.5s y sync con la posicion del nucleo. */
+    private fun enchufarSubsOs(nombre: String, contenido: String) {
+        val pista = try {
+            SubtitleTrack(SubtitleParser.parse(contenido))
+        } catch (ilegal: SubtitleFormatException) {
+            estado.text = "subs os: archivo de subtitulos ilegible"
+            return
+        }
+        pistaSubs = pista
+        pintarSubs()
+        estado.text = "subs os: pista activa (" + nombre + ")"
+        traza("media", "subs os activa")
+    }
+
+    /** Cliente OS sobre el transporte REAL del dispositivo. */
+    private fun fetchSubsOs(): FetchManager = FetchManager(HttpTransport())
 
     /** T109 v2 (R0366, RES-0148): tipo de la pestana que origino la
      *  media in-page; null si el player es standalone o sin pestana. */
