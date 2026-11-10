@@ -254,9 +254,23 @@ import nia.engine.workers.VisorWorkers
  * extraidos (solo se junta texto); volver con Recargar (exclusion
  * honesta: refetch, scroll no preservado).
  *
- * Exclusiones v6: sin grupos ni previews pintadas, sin persistencia
- * de la sesion de pestanas (el incognito JAMAS se restaura tras un
- * proceso muerto: vive solo en memoria), Fire solo del perfil del tipo
+ * T109 v1 (R0361, RES-0146): restauracion tras proceso muerto. La
+ * sesion de pestanas NORMALES (orden, activa, URL y titulo; JAMAS
+ * previews, cookies ni datos de formularios) se guarda best-effort en
+ * onStop en sesion-pestanas.tsv (escritura atomica tmp+rename; un
+ * corrupto se descarta ENTERO y arranca about:nia) y se restaura en
+ * onCreate: la activa recarga su URL real al arrancar (sin autoplay:
+ * el motor solo reproduce con play explicito) y el resto recarga al
+ * cambiar de pestana. El incognito JAMAS se persiste ni restaura.
+ * Exclusiones v1 honestas: sin PiP, multiwindow/split, audio
+ * focus/rutas/auriculares/notificacion/media session ni reproduccion
+ * background (todo eso es T065), sin scroll, posicion de media ni
+ * session history restaurados, y la sesion vive solo si onStop llego
+ * a correr (una muerte con la activity visible pierde la anterior).
+ *
+ * Exclusiones v6: sin grupos ni previews pintadas, la sesion de
+ * pestanas NORMALES ya se restaura tras proceso muerto (T109 v1; el
+ * incognito JAMAS: vive solo en memoria), Fire solo del perfil del tipo
  * activo (absorbido por Ajustes Limpieza en v2; sin gestor
  * multi-perfil, T054/T093),
  * panel de identidad solo de la ultima pagina cargada, sin tema
@@ -702,7 +716,9 @@ class BrowserActivity : Activity() {
         )
         raiz.setBackgroundColor(NiaUi.color(colores.bg))
 
-        tabs.crear(ProfileKind.NORMAL, "about:nia", "Nueva pestana", null)
+        // T109 v1 (R0361, RES-0146): restaura la sesion NORMAL si
+        // existe; sin sesion (o corrupta) arranca una unica about:nia.
+        restaurarSesion()
 
         val espacio = NiaUi.dp(this, NiaTokens.ESPACIADO[3])
 
@@ -956,6 +972,18 @@ class BrowserActivity : Activity() {
         traza("shell", "arranque R0191 con " + tabs.contar() + " pestana(s)")
         aplicarRetencion()
         pintarStrip()
+        // T109 v1 (R0361, RES-0146): la activa restaurada recarga su URL
+        // REAL al arrancar (sin autoplay: el motor solo reproduce con
+        // play explicito); un intent externo pendiente pide confirmacion
+        // encima y manda al aceptar.
+        val idRestaurada = tabs.activa()
+        val urlRestaurada = idRestaurada?.let { tabs.tarjeta(it)?.url }
+        if (urlRestaurada != null && (urlRestaurada.startsWith("http://") || urlRestaurada.startsWith("https://"))) {
+            estado.text = "sesion restaurada: recargando"
+            navegar(urlRestaurada, false, null)
+        } else if (tabs.contar() > 1) {
+            estado.text = "sesion restaurada"
+        }
         manejarIntentExterno(intent)
     }
 
@@ -2657,6 +2685,103 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** T109 v1 (R0361, RES-0146): linea de sesion persistida: marca de
+     *  activa, URL y titulo. JAMAS cookies, previews ni formularios. */
+    private data class LineaSesion(val activa: Boolean, val url: String, val titulo: String)
+
+    /** Lee sesion-pestanas.tsv (todo-o-nada: una sola linea corrupta
+     *  descarta el archivo ENTERO y arranca about:nia). Solo URLs
+     *  http/https viajan; las about: no se guardan. Tope 40 lineas. */
+    private fun leerSesionPestanas(): List<LineaSesion> {
+        return try {
+            val f = File(filesDir, "sesion-pestanas.tsv")
+            if (!f.exists()) {
+                emptyList()
+            } else {
+                val out = ArrayList<LineaSesion>()
+                var n = 0
+                for (cruda in f.readText(Charsets.UTF_8).split('\n')) {
+                    val linea = cruda.trimEnd('\r')
+                    if (linea.isEmpty()) continue
+                    n += 1
+                    if (n > 40) return emptyList()
+                    val partes = linea.split('\t')
+                    if (partes.size != 3) return emptyList()
+                    val marca = partes[0]
+                    val url = partes[1]
+                    val marcaValida = marca == "0" || marca == "1"
+                    if (!marcaValida ||
+                        (!url.startsWith("http://") && !url.startsWith("https://"))
+                    ) {
+                        return emptyList()
+                    }
+                    out.add(LineaSesion(marca == "1", url, partes[2]))
+                }
+                out
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Guarda la sesion NORMAL (orden, activa, URL y titulo) en
+     *  sesion-pestanas.tsv con escritura atomica (tmp+rename; si el
+     *  rename falla se escribe directo). El incognito JAMAS entra y
+     *  una URL con tab o salto JAMAS viaja (esa pestana se pierde de
+     *  la sesion; no corrompe el archivo). */
+    private fun guardarSesionPestanas() {
+        try {
+            val f = File(filesDir, "sesion-pestanas.tsv")
+            val tmp = File(filesDir, "sesion-pestanas.tsv.tmp")
+            val sb = StringBuilder()
+            val idActiva = tabs.activa()
+            for (t in tabs.tarjetas(ProfileKind.NORMAL)) {
+                val url = t.url
+                if (!(url.startsWith("http://") || url.startsWith("https://"))) continue
+                if (url.contains('\t') || url.contains('\n') || url.contains('\r')) continue
+                val titulo = t.title.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+                sb.append(if (t.id == idActiva) "1" else "0")
+                    .append('\t').append(url)
+                    .append('\t').append(titulo)
+                    .append('\n')
+            }
+            tmp.writeText(sb.toString(), Charsets.UTF_8)
+            if (!tmp.renameTo(f)) {
+                f.writeText(sb.toString(), Charsets.UTF_8)
+                tmp.delete()
+            }
+        } catch (e: Exception) {
+            traza("tabs", "no se pudo guardar la sesion de pestanas")
+        }
+    }
+
+    /** T109 v1: crea las pestanas de la sesion restaurada respetando
+     *  orden y activa (crear NO navega: solo la activa recarga al
+     *  arrancar y el resto al cambiar); sin sesion arranca about:nia. */
+    private fun restaurarSesion() {
+        val lineas = leerSesionPestanas()
+        if (lineas.isEmpty()) {
+            tabs.crear(ProfileKind.NORMAL, "about:nia", "Nueva pestana", null)
+            return
+        }
+        var ultima: Long? = null
+        var activa: Long? = null
+        for (l in lineas) {
+            val r = tabs.crear(ProfileKind.NORMAL, l.url, l.titulo, null)
+            if (r is TabCrear.Ok) {
+                ultima = r.id
+                if (l.activa) activa = r.id
+            } else {
+                break
+            }
+        }
+        val id = activa ?: ultima
+        if (id != null) {
+            tabs.activar(id)
+            traza("tabs", "sesion restaurada con " + tabs.contar() + " pestana(s)")
+        }
+    }
+
     private fun cambiarPestana(id: Long) {
         if (!tabs.activar(id)) {
             return
@@ -2666,6 +2791,15 @@ class BrowserActivity : Activity() {
         val nc = tabs.nav(id)
         val page = nc?.currentPage()
         if (page == null) {
+            // T109 v1 (R0361, RES-0146): pestana restaurada sin pagina
+            // viva: recarga la URL de su tarjeta (el motor no navega ni
+            // reproduce solo; sin autoplay inesperado).
+            val urlTarjeta = tabs.tarjeta(id)?.url
+            if (urlTarjeta != null && (urlTarjeta.startsWith("http://") || urlTarjeta.startsWith("https://"))) {
+                estado.text = "pestana restaurada: recargando"
+                navegar(urlTarjeta, false, null)
+                return
+            }
             omnibox.setText("")
             pintar(paginaNueva())
             estado.text = "pestana activa sin pagina"
@@ -3933,6 +4067,14 @@ class BrowserActivity : Activity() {
     override fun onPause() {
         PluginNetFilter.guardarContadoresSiPendientes()
         super.onPause()
+    }
+
+    /** T109 v1 (R0361, RES-0146): la sesion de pestanas NORMALES se
+     *  guarda al dejar de ser visible (best-effort en onStop: una
+     *  muerte ANTES de onStop deja la sesion anterior, JAMAS inventa). */
+    override fun onStop() {
+        guardarSesionPestanas()
+        super.onStop()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
