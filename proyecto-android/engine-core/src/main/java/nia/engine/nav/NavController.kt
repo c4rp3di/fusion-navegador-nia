@@ -89,8 +89,9 @@ import nia.engine.url.UrlParser
  * T071 v2 / X02 frame tree minimo (R0416, RES-0165): los iframes con
  * src del documento se cargan en LOADED como subframes de 1 nivel:
  * resolveUrl contra la base efectiva, fetchSide tipo "document" con
- * mixed-content y cookies EMBEDDED reales, subdocumento parseado SIN
- * scripts ni subframes anidados. NavPage.subframes expone cada uno
+ * mixed-content y cookies EMBEDDED reales, subdocumento parseado (sus
+ * scripts ejecutan desde v2d; sin subframes anidados). NavPage.subframes
+ * expone cada uno
  * (src crudo, url resuelta, origin --null/opaco con sandbox sin
  * allow-same-origin--, flags sandbox medidos, estado y subdocumento).
  *
@@ -98,6 +99,12 @@ import nia.engine.url.UrlParser
  * vacio) tambien entran al frame tree como about:blank SINTETICO:
  * subframe loaded con url "about:blank", origin null (opaco, NO hereda
  * el del padre) y subdocumento vacio, SIN fetch de red.
+ *
+ * T071 v2d / TK-071-1 (R0426, RES-0168): los scripts del subdocumento
+ * corren en LOADED con las cuotas del nav, fetch con la url del subframe
+ * como initiator y storage particionado (top-site del documento, origin
+ * del subframe); sandbox sin allow-scripts los BLOQUEA; subframe opaco
+ * corre SIN storage.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -114,8 +121,10 @@ data class NavScript(val ref: String, val output: String)
  * Subframe de 1 nivel (T071 v2, X02): src crudo del iframe, url resuelta
  * (null si no resuelve), origin del subframe (null/opaco cuando el
  * sandbox esta presente sin allow-same-origin), flags sandbox medidas,
- * estado (loaded, blocked-mixed-content, failed:CODE, unresolved) y el
- * subdocumento parseado (null si no cargo).
+ * estado (loaded, blocked-mixed-content, failed:CODE, unresolved), el
+ * subdocumento parseado (null si no cargo) y, desde T071 v2d
+ * (R0426, RES-0168), los scripts ejecutados DENTRO (inline:N o src:url
+ * con su salida; vacio si el sandbox lo prohibe o no cargo).
  */
 data class NavSubframe(
     val src: String,
@@ -123,7 +132,8 @@ data class NavSubframe(
     val origin: Origin?,
     val sandbox: List<String>,
     val estado: String,
-    val document: DomDocument?
+    val document: DomDocument?,
+    val scripts: List<NavScript> = emptyList()
 )
 
 /**
@@ -379,10 +389,52 @@ class NavController(
                             if (r is SideResult.Ok) {
                                 val opaco = item.sandbox.isNotEmpty() && "allow-same-origin" !in item.sandbox
                                 val subOrigin = if (opaco) null else subframeOrigin(full)
+                                val subDoc = DomDocument.parse(r.source)
+                                val subScripts = ArrayList<NavScript>()
+                                if (item.sandbox.isEmpty() || "allow-scripts" in item.sandbox) {
+                                    val subUrl = try {
+                                        UrlParser.parse(full)
+                                    } catch (e: UrlParseException) {
+                                        null
+                                    }
+                                    if (subUrl != null) {
+                                        val subFetchApi = JsFetchApi(transport, clock, null, filter, full)
+                                        val subTuple = subOrigin as? Origin.Tuple
+                                        val subStorageApi = if (subTuple == null) null else JsStorageApi(profile.storage, profile.idb, site, subTuple)
+                                        val subBaseMedia = subUrl.scheme + "://" + subUrl.host +
+                                            (if (subUrl.port != null) ":" + subUrl.port else "")
+                                        val subItems = ArrayList<LoadItem>()
+                                        walkLoadItems(subDoc.nodeOf(subDoc.rootHandle()), subUrl, subItems)
+                                        var subInline = 0
+                                        for (sub in subItems) {
+                                            when (sub) {
+                                                is LoadItem.InlineScript -> {
+                                                    subInline += 1
+                                                    val result = JsInterpreter.evaluateWithDom(sub.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                                                    subScripts.add(NavScript("inline:" + subInline, JsInterpreter.dumpResult(result)))
+                                                }
+                                                is LoadItem.ScriptSrc -> {
+                                                    val ref = "src:" + sub.url
+                                                    val sr = fetchSide(sub.url, subUrl, site, "script", current)
+                                                    if (sr is SideResult.NavFailure) {
+                                                        return NavOutcome.Failed(NavState.LOADED, sr.code, sr.message, committed)
+                                                    }
+                                                    if (sr is SideResult.Ok) {
+                                                        val result = JsInterpreter.evaluateWithDom(sr.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                                                        subScripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                                                    } else {
+                                                        subScripts.add(NavScript(ref, describe(sr)))
+                                                    }
+                                                }
+                                                else -> {}
+                                            }
+                                        }
+                                    }
+                                }
                                 subframes.add(
                                     NavSubframe(
                                         item.src, full, subOrigin, item.sandbox, "loaded",
-                                        DomDocument.parse(r.source)
+                                        subDoc, subScripts
                                     )
                                 )
                             } else {
