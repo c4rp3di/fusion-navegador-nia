@@ -6,9 +6,12 @@ import nia.contracts.WallClock
 import nia.engine.dom.DomDocument
 import nia.engine.html.DomNode
 import nia.engine.js.JsFetchApi
+import nia.engine.js.JsHistoryApi
+import nia.engine.js.JsHistoryHost
 import nia.engine.js.JsInterpreter
 import nia.engine.js.JsLimits
 import nia.engine.js.JsStorageApi
+import nia.engine.js.JsValue
 import nia.engine.media.MediaPuente
 import nia.engine.net.FetchManager
 import nia.engine.net.FetchResponse
@@ -126,6 +129,14 @@ import nia.engine.url.UrlParser
  * ejecutan al cargar como los classic; type=module inline tambien
  * defiere. Los module corren SIN resolucion de import/export
  * (exclusion): si fallan, la salida lo muestra.
+ *
+ * T111 v4 / TK-111-3 (R0436, RES-0172): pushState/replaceState: el
+ * global history de la pagina escribe la historia de la pestana con
+ * entradas SPA same-origin (estado JS y documento vivos); back y
+ * forward a una entrada SPA sirven el documento ACTUAL sin fetch
+ * cuando es el documento que la creo; si no, re-navegan por red.
+ * SIN popstate/hashchange, sin history.back/forward/go desde JS y
+ * sin history en el subframe (exclusiones v1, en JsHistoryApi).
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -219,7 +230,7 @@ class NavController(
     private val filter: RequestFilter? = null
 ) {
     private val manager = FetchManager(transport, clock, profile.cache, filter)
-    private val history = ArrayList<String>()
+    private val history = ArrayList<EntradaHistoria>()
     private var index = -1
     private var page: NavPage? = null
     private var lastState: NavState? = null
@@ -242,31 +253,55 @@ class NavController(
     fun navigate(url: String, deadlineMillis: Long = -1): NavOutcome =
         navigateInternal(url, deadlineMillis, true)
 
-    /** Re-navega a la entrada anterior; null si no hay entrada previa. */
+    /** Re-navega a la entrada anterior; null si no hay entrada previa.
+     * T111 v4 (TK-111-3): a una entrada SPA del documento actual se le
+     * sirve ese documento sin fetch ni re-navegacion. */
     fun back(): NavOutcome? {
         if (index <= 0) return null
         val saved = index
         index -= 1
-        val out = navigateInternal(history[index], -1, false)
+        servirSpa(history[index])?.let { return it }
+        val out = navigateInternal(destinoDe(history[index]), -1, false)
         if (out is NavOutcome.Failed && out.page == null) index = saved
         return out
     }
 
-    /** Re-navega a la entrada siguiente; null si no hay entrada futura. */
+    /** Re-navega a la entrada siguiente; null si no hay entrada futura.
+     * T111 v4: entrada SPA del documento actual sin fetch, como back. */
     fun forward(): NavOutcome? {
         if (index < 0 || index >= history.size - 1) return null
         val saved = index
         index += 1
-        val out = navigateInternal(history[index], -1, false)
+        servirSpa(history[index])?.let { return it }
+        val out = navigateInternal(destinoDe(history[index]), -1, false)
         if (out is NavOutcome.Failed && out.page == null) index = saved
         return out
     }
+
+    /**
+     * T111 v4 / TK-111-3 (R0436, RES-0172): si la entrada es SPA y su
+     * documento es el ACTUAL, se sirve ese documento sin fetch ni
+     * re-navegacion (la URL de la pagina pasa a ser la de la entrada);
+     * null cuando hay que re-navegar por red.
+     */
+    private fun servirSpa(e: EntradaHistoria): NavOutcome? {
+        val p = page ?: return null
+        val d = e.doc ?: return null
+        if (!e.spa || d !== p.document) return null
+        val nueva = p.copy(url = e.url)
+        page = nueva
+        return NavOutcome.Loaded(nueva)
+    }
+
+    /** URL de re-navegacion de una entrada: el fragmento no viaja. */
+    private fun destinoDe(e: EntradaHistoria): String =
+        if (e.spa) e.url.substringBefore('#') else e.url
 
     fun canGoBack(): Boolean = index > 0
 
     fun canGoForward(): Boolean = index >= 0 && index < history.size - 1
 
-    fun historyUrls(): List<String> = ArrayList(history)
+    fun historyUrls(): List<String> = history.map { it.url }
 
     fun currentPage(): NavPage? = page
 
@@ -358,7 +393,7 @@ class NavController(
         events.add(NavEvent(NavState.COMMITTED, current))
         if (push) {
             while (history.size > index + 1) history.removeAt(history.size - 1)
-            history.add(current)
+            history.add(EntradaHistoria(current))
             index = history.size - 1
         }
         val committed = NavPage(
@@ -375,6 +410,34 @@ class NavController(
         val subframes = ArrayList<NavSubframe>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
         val fetchApi = JsFetchApi(transport, clock, null, filter, current)
+        val historyApi = JsHistoryApi(object : JsHistoryHost {
+            override fun spaPush(raw: String, state: JsValue?): String? {
+                val resuelta = resolveUrl(finalUrl, raw) ?: return null
+                val origenSpa = try {
+                    Origin.of(UrlParser.parse(resuelta))
+                } catch (e: UrlParseException) {
+                    return null
+                }
+                if (origenSpa != origin) return null
+                while (history.size > index + 1) history.removeAt(history.size - 1)
+                history.add(EntradaHistoria(resuelta, true, state, document))
+                index = history.size - 1
+                return resuelta
+            }
+            override fun spaReplace(raw: String, state: JsValue?): String? {
+                val resuelta = resolveUrl(finalUrl, raw) ?: return null
+                val origenSpa = try {
+                    Origin.of(UrlParser.parse(resuelta))
+                } catch (e: UrlParseException) {
+                    return null
+                }
+                if (origenSpa != origin || index < 0) return null
+                history[index] = EntradaHistoria(resuelta, true, state, document)
+                return resuelta
+            }
+            override fun historyLength(): Int = history.size
+            override fun historyState(): JsValue? = history.getOrNull(index)?.state
+        }, current)
         val baseMedia = finalUrl.scheme + "://" + finalUrl.host +
             (if (finalUrl.port != null) ":" + finalUrl.port else "")
         var inlineCount = 0
@@ -403,7 +466,7 @@ class NavController(
                         if (!cspPermite(csp, "script-src", null, origin, true)) {
                             scripts.add(NavScript("inline:" + inlineCount, "blocked-csp"))
                         } else {
-                            val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                            val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
                             scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
                         }
                     }
@@ -421,7 +484,7 @@ class NavController(
                                 return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                             }
                             if (r is SideResult.Ok) {
-                                val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                                val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
                                 scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
                             } else {
                                 scripts.add(NavScript(ref, describe(r)))
@@ -454,7 +517,7 @@ class NavController(
                         return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                     }
                     if (r is SideResult.Ok) {
-                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
                         scripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
                     } else {
                         scripts.add(NavScript(d.ref, describe(r)))
@@ -464,13 +527,14 @@ class NavController(
                 if (!cspPermite(csp, "script-src", null, origin, true)) {
                     scripts.add(NavScript(d.ref, "blocked-csp"))
                 } else {
-                    val result = JsInterpreter.evaluateWithDom(d.source!!, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                    val result = JsInterpreter.evaluateWithDom(d.source!!, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
                     scripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
                 }
             }
         }
         events.add(NavEvent(NavState.LOADED, current))
         val loaded = committed.copy(
+            url = historyApi.urlActual(),
             subresources = subresources,
             scripts = scripts,
             events = ArrayList(events),
@@ -479,6 +543,19 @@ class NavController(
         page = loaded
         return NavOutcome.Loaded(loaded)
     }
+
+    /**
+     * T111 v4 / TK-111-3 (R0436, RES-0172): entrada de la historia de la
+     * pestana: url final, flag spa (escrita por pushState/replaceState
+     * same-origin), estado JS entregado y el documento que la creo
+     * (null en las entradas de navegacion normal, que re-navegan).
+     */
+    private class EntradaHistoria(
+        val url: String,
+        val spa: Boolean = false,
+        val state: JsValue? = null,
+        val doc: DomDocument? = null
+    )
 
     /**
      * T111 v3 / TK-111-2 (R0434, RES-0171): script defer encolado durante

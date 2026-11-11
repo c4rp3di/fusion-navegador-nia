@@ -1782,7 +1782,9 @@ object JsInterpreter {
 
     /** Evaluacion con bindings DOM y cuotas explicitas (T021). T092
      * v2 (R0358): puente de media y URL base opcionales para el
-     * HTMLMediaElement de la pagina (TK-111-1). */
+     * HTMLMediaElement de la pagina (TK-111-1). T111 v4 (R0436):
+     * history opcional para que los scripts de la pagina escriban la
+     * historia de la pestana (TK-111-3). */
     fun evaluateWithDom(
         source: String,
         doc: DomDocument,
@@ -1790,7 +1792,8 @@ object JsInterpreter {
         fetch: JsFetchApi? = null,
         storage: JsStorageApi? = null,
         puente: MediaPuente? = null,
-        baseUrl: String = ""
+        baseUrl: String = "",
+        history: JsHistoryApi? = null
     ): JsEvalResult {
         val parse = JsParser.parse(source)
         val genv = Env(null, true)
@@ -1802,6 +1805,7 @@ object JsInterpreter {
         installCallbackBuiltins(genv)
         JsDomBindings.installConsole(genv)
         JsDomBindings.install(genv, doc, puente, baseUrl)
+        if (history != null) history.install(genv)
         keepAliveRunners = false
         if (fetch != null) fetch.install(genv)
         if (storage != null) storage.install(genv)
