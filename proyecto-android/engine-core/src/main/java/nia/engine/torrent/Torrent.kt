@@ -310,6 +310,39 @@ class TorrentSession(
         if (completed.size == neededPieces.size) state = TorrentState.DONE
         return PumpResult.COMPLETED
     }
+
+    /**
+     * T105 v1 (R0398, RES-0158): tira de UNA pieza concreta de las
+     * necesarias (prioridad de streaming: el host decide que pieza
+     * importa AHORA, por reproduccion o seek) con la MISMA
+     * verificacion SHA-1 y los mismos estados que pump; una pieza
+     * ajena a la seleccion es REJECTED sin tocar red ni memoria.
+     */
+    fun pumpAt(source: PieceSource, pieceIndex: Int): PumpResult {
+        when (state) {
+            TorrentState.PAUSED -> return PumpResult.PAUSED
+            TorrentState.CANCELLED -> return PumpResult.CANCELLED
+            TorrentState.DONE -> return PumpResult.DONE
+            else -> {}
+        }
+        if (completed.size == neededPieces.size) {
+            state = TorrentState.DONE
+            return PumpResult.DONE
+        }
+        if (pieceIndex !in neededPieces) return PumpResult.REJECTED
+        if (pieceIndex in completed) return PumpResult.COMPLETED
+        val largo = minOf(meta.pieceLength, meta.totalLength - pieceIndex * meta.pieceLength).toInt()
+        val data = source.piece(pieceIndex, largo) ?: return PumpResult.UNAVAILABLE
+        if (data.size != largo) return PumpResult.REJECTED
+        if (!MessageDigest.isEqual(sha1(data), meta.pieceHashes[pieceIndex])) {
+            return PumpResult.REJECTED
+        }
+        completed.add(pieceIndex)
+        pieceBytes[pieceIndex] = data
+        descargado += largo
+        if (completed.size == neededPieces.size) state = TorrentState.DONE
+        return PumpResult.COMPLETED
+    }
 }
 
 /**

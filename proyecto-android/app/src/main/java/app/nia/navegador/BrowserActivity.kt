@@ -51,6 +51,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import nia.contracts.ContractsVersion
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
@@ -143,6 +144,7 @@ import nia.engine.torrent.TorrentMeta
 import nia.engine.torrent.TorrentParser
 import nia.engine.torrent.TorrentSession
 import nia.engine.torrent.TorrentState
+import nia.engine.torrent.TorrentStream
 import nia.engine.torrent.TrackerAnnounceRequest
 import nia.engine.torrent.TrackerClient
 import nia.engine.torrent.TrackerPeer
@@ -549,6 +551,23 @@ class BrowserActivity : Activity() {
     private val torrents = TorrentEngine()
     private val peerIdTorrent = ByteArray(20).also { java.security.SecureRandom().nextBytes(it) }
     private var guardarTorrentPendiente: Pair<String, Int>? = null
+    /** T105 v1 (R0398, RES-0158): streaming de UN archivo del torrent
+     *  en directo: prefijo verificado a cache (cacheDir, JAMAS el
+     *  perfil), bajada con PRIORIDAD de piezas (pumpAt del motor)
+     *  desde su propio hilo y player continuable con espera acotada;
+     *  el cleanup borra la cache SIEMPRE. */
+    private var streamTorrent: TorrentStream? = null
+    private var sesionStreamTorrent: TorrentSession? = null
+    private var indiceStreamTorrent = -1
+    private var hiloStreamTorrent: Thread? = null
+    private var pararStreamRef: AtomicBoolean? = null
+    private var cacheStreamTorrent: File? = null
+    @Volatile private var escritosStreamTorrent = 0L
+    @Volatile private var prefijoPreparadoStream = 0L
+    @Volatile private var continuarPendienteTorrent = false
+    @Volatile private var topeContinuarTorrent = 0L
+    @Volatile private var seekAlPrepararStream: Long? = null
+    private var listenerStreamRegistrado = false
 
     /** T072 (R0323, RES-0131): pool acotado para las navegaciones del
      *  shell (resto del hallazgo 3.1 del informe externo: un Thread
@@ -3489,7 +3508,7 @@ class BrowserActivity : Activity() {
                     TorrentState.QUEUED, TorrentState.RUNNING ->
                         elegirAccionTorrent(s.meta.infoHashHex, s.meta.name)
                     TorrentState.PAUSED -> elegirAccionPausadaTorrent(s.meta.infoHashHex)
-                    TorrentState.DONE -> elegirArchivoGuardar(s.meta.infoHashHex)
+                    TorrentState.DONE -> elegirHechoTorrent(s.meta.infoHashHex)
                     TorrentState.CANCELLED -> confirmarBorrarTorrent(s.meta.infoHashHex)
                 }
             }
@@ -3505,16 +3524,17 @@ class BrowserActivity : Activity() {
     private fun elegirAccionTorrent(hash: String, nombre: String) {
         AlertDialog.Builder(this)
             .setTitle("Torrent: " + nombre)
-            .setItems(arrayOf("Pausar", "Reintentar", "Cancelar")) { _, cual ->
+            .setItems(arrayOf("Reproducir", "Pausar", "Reintentar", "Cancelar")) { _, cual ->
                 when (cual) {
-                    0 -> {
+                    0 -> elegirArchivoStreamTorrent(hash)
+                    1 -> {
                         torrents.find(hash)?.pause()
                         estado.text = "torrent pausado"
                         traza("torrents", "pausar " + hash.take(8))
                         mostrarTorrents()
                     }
-                    1 -> relanzarTorrent(hash)
-                    2 -> confirmarCancelarTorrent(hash)
+                    2 -> relanzarTorrent(hash)
+                    3 -> confirmarCancelarTorrent(hash)
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -3526,11 +3546,12 @@ class BrowserActivity : Activity() {
     private fun elegirAccionPausadaTorrent(hash: String) {
         AlertDialog.Builder(this)
             .setTitle("Torrent pausado")
-            .setItems(arrayOf("Reanudar", "Cancelar", "Borrar")) { _, cual ->
+            .setItems(arrayOf("Reproducir", "Reanudar", "Cancelar", "Borrar")) { _, cual ->
                 when (cual) {
-                    0 -> relanzarTorrent(hash)
-                    1 -> confirmarCancelarTorrent(hash)
-                    2 -> confirmarBorrarTorrent(hash)
+                    0 -> elegirArchivoStreamTorrent(hash)
+                    1 -> relanzarTorrent(hash)
+                    2 -> confirmarCancelarTorrent(hash)
+                    3 -> confirmarBorrarTorrent(hash)
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -3585,6 +3606,281 @@ class BrowserActivity : Activity() {
             }
             .setNegativeButton("No", null)
             .show()
+    }
+
+    /** Torrent completado (T105): guardar a SAF o reproducir desde
+     *  las piezas ya en memoria (cache efimera, sin bajada). */
+    private fun elegirHechoTorrent(hash: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Torrent completado")
+            .setItems(arrayOf("Guardar archivo", "Reproducir archivo")) { _, cual ->
+                if (cual == 0) elegirArchivoGuardar(hash) else elegirArchivoStreamTorrent(hash)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** T105 v1 (R0398, RES-0158): elige el archivo del torrent a
+     *  reproducir EN DIRECTO: solo archivos necesarios, con el
+     *  prefijo contiguo YA verificado legible por archivo; JAMAS se
+     *  exige la descarga completa para empezar. */
+    private fun elegirArchivoStreamTorrent(hash: String) {
+        val s = torrents.find(hash) ?: return
+        val indices = s.meta.files.indices.filter { s.isFileNeeded(it) }
+        if (indices.isEmpty()) {
+            estado.text = "stream: sin archivos elegidos en la sesion"
+            return
+        }
+        val nombres = indices.map { i ->
+            val disp = TorrentStream(s, i).readableBytes()
+            s.meta.files[i].path + " (" + disp + "/" + s.meta.files[i].length + " B listos)"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Reproducir archivo del torrent")
+            .setItems(nombres) { _, cual -> arrancarStreamTorrent(s, indices[cual]) }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Prepara el stream (T105): copia el prefijo legible ACTUAL a la
+     *  cache (cacheDir, JAMAS el perfil del usuario), abre el player
+     *  en modo torrent y suelta el hilo de streaming con prioridad
+     *  de piezas; sin prefijo reproducible avisa honesto y NO abre. */
+    private fun arrancarStreamTorrent(s: TorrentSession, fileIndex: Int) {
+        detenerStreamTorrent()
+        val st = TorrentStream(s, fileIndex)
+        val cache = File(cacheDir, "torrent-stream-" + s.meta.infoHashHex.take(8) + ".bin")
+        var escritos = 0L
+        try {
+            FileOutputStream(cache).use { out ->
+                while (true) {
+                    val trozo = st.read(escritos, 65536) ?: break
+                    out.write(trozo.bytes)
+                    escritos += trozo.length
+                }
+            }
+        } catch (e: Exception) {
+            estado.text = "stream: cache no escribible"
+            traza("torrents", "stream cache fallo: " + e.javaClass.simpleName)
+            cache.delete()
+            return
+        }
+        if (escritos <= 0L) {
+            estado.text = "stream: sin prefijo reproducible todavia"
+            traza("torrents", "stream sin prefijo")
+            cache.delete()
+            return
+        }
+        streamTorrent = st
+        sesionStreamTorrent = s
+        indiceStreamTorrent = fileIndex
+        cacheStreamTorrent = cache
+        escritosStreamTorrent = escritos
+        prefijoPreparadoStream = escritos
+        continuarPendienteTorrent = false
+        if (!listenerStreamRegistrado) {
+            listenerStreamRegistrado = true
+            media.addListener { est ->
+                val objetivo = seekAlPrepararStream
+                if (est == MediaState.READY && objetivo != null) {
+                    seekAlPrepararStream = null
+                    media.seekTo(objetivo)
+                }
+            }
+        }
+        estado.text = "stream: " + escritos + " B listos, bajando con prioridad"
+        traza("torrents", "stream " + s.meta.infoHashHex.take(8) + " archivo " + fileIndex + " " + escritos + " B")
+        abrirPlayer("torrent", Uri.fromFile(cache).toString())
+        if (s.state != TorrentState.DONE) relanzarHiloStream()
+    }
+
+    /** Hilo de streaming (T105): FUERA del pool de bajada (la cuota
+     *  de UNA bajada a la vez sigue intacta), announce propio NONE y
+     *  piezas DEL ARCHIVO con pumpAt sincronizado con la bajada del
+     *  pool; el prefijo crecido se anexa a la cache en deltas 64 KiB. */
+    private fun relanzarHiloStream() {
+        val s = sesionStreamTorrent ?: return
+        val st = streamTorrent ?: return
+        val cache = cacheStreamTorrent ?: return
+        val fileIndex = indiceStreamTorrent
+        val parar = AtomicBoolean(false)
+        pararStreamRef = parar
+        val hilo = Thread { bombearStreamTorrent(s, st, cache, fileIndex, parar) }
+        hiloStreamTorrent = hilo
+        hilo.start()
+    }
+
+    /** El bucle de streaming (T105): anexa lo legible a cache, pide la
+     *  siguiente pieza incompleta DEL ARCHIVO (prioridad real de
+     *  streaming sobre el orden global de la bajada), reintentos y
+     *  parada honesta como la bajada, y atiende el Continuar
+     *  pendiente con espera ACOTADA; JAMAS toca la UI si no es con
+     *  runOnUiThread. */
+    private fun bombearStreamTorrent(
+        s: TorrentSession,
+        st: TorrentStream,
+        cache: File,
+        fileIndex: Int,
+        parar: AtomicBoolean
+    ) {
+        try {
+            val meta = s.meta
+            val piezas = meta.piecesForFile(fileIndex).toList()
+            val cliente = TrackerClient(PlatformTrackerTransport())
+            var peers: List<TrackerPeer> = emptyList()
+            for (t in meta.trackers) {
+                try {
+                    peers = cliente.announce(
+                        t,
+                        TrackerAnnounceRequest(meta.infoHash, peerIdTorrent, 0, 0L, 0L, 0L, AnnounceEvent.NONE)
+                    ).peers
+                    break
+                } catch (e: Exception) {
+                }
+            }
+            if (peers.isEmpty()) {
+                avisarStream("stream sin peers alcanzables")
+                return
+            }
+            val fuente = PeerPoolSource(peers, PlatformPeerTransport(), meta.infoHash, peerIdTorrent, meta.pieceCount())
+            var sinPiezas = 0
+            var rechazadas = 0
+            var escritos = escritosStreamTorrent
+            while (!parar.get()) {
+                val out = FileOutputStream(cache, true)
+                try {
+                    while (true) {
+                        val trozo = st.read(escritos, 65536) ?: break
+                        out.write(trozo.bytes)
+                        escritos += trozo.length
+                    }
+                } finally {
+                    out.close()
+                }
+                escritosStreamTorrent = escritos
+                if (continuarPendienteTorrent &&
+                    (escritos >= prefijoPreparadoStream + 1048576L || escritos >= st.length)
+                ) {
+                    continuarPendienteTorrent = false
+                    runOnUiThread { recargarStreamContinuo() }
+                } else if (continuarPendienteTorrent && System.currentTimeMillis() > topeContinuarTorrent) {
+                    continuarPendienteTorrent = false
+                    avisarStream("stream: el prefijo no crecio a tiempo (Continuar)")
+                }
+                val siguiente = piezas.firstOrNull { p -> synchronized(s) { s.pieceData(p) == null } }
+                if (siguiente == null) {
+                    avisarStream("stream completo: " + meta.files[fileIndex].path)
+                    return
+                }
+                val r = synchronized(s) { s.pumpAt(fuente, siguiente) }
+                when (r) {
+                    PumpResult.COMPLETED -> {
+                        sinPiezas = 0
+                        rechazadas = 0
+                    }
+                    PumpResult.UNAVAILABLE -> {
+                        sinPiezas += 1
+                        if (sinPiezas >= 3) {
+                            avisarStream("stream sin peers con piezas (Continuar reintentara)")
+                            return
+                        }
+                        Thread.sleep(3000L)
+                    }
+                    PumpResult.REJECTED -> {
+                        rechazadas += 1
+                        if (rechazadas >= 5) {
+                            avisarStream("stream con piezas corruptas de todos los peers")
+                            return
+                        }
+                    }
+                    PumpResult.PAUSED -> {
+                        avisarStream("stream pausado con la sesion")
+                        return
+                    }
+                    PumpResult.CANCELLED -> {
+                        avisarStream("stream cancelado con la sesion")
+                        return
+                    }
+                    PumpResult.DONE -> {
+                        avisarStream("stream completo: " + meta.files[fileIndex].path)
+                        return
+                    }
+                }
+            }
+        } catch (e: InterruptedException) {
+            return
+        } catch (e: Exception) {
+            if (!parar.get()) avisarStream("stream fallo: " + e.javaClass.simpleName)
+        }
+    }
+
+    /** Continuar (T105): recarga el player con el prefijo YA crecido
+     *  en la posicion actual (anexar NO cambia el significado de los
+     *  bytes previos); si no crecio, ESPERA ACOTADA de 20 s atendida
+     *  por el hilo (la UI JAMAS se bloquea) con rearme del hilo si
+     *  murio; JAMAS se promete lo que no llego. */
+    private fun continuarStreamTorrent() {
+        val s = sesionStreamTorrent ?: return
+        if (streamTorrent == null || cacheStreamTorrent == null) return
+        if (escritosStreamTorrent > prefijoPreparadoStream) {
+            recargarStreamContinuo()
+            return
+        }
+        if (s.state == TorrentState.DONE) {
+            estado.text = "stream: ya esta completo en cache"
+            return
+        }
+        val hilo = hiloStreamTorrent
+        if (hilo == null || !hilo.isAlive) relanzarHiloStream()
+        continuarPendienteTorrent = true
+        topeContinuarTorrent = System.currentTimeMillis() + 20000L
+        estado.text = "stream: esperando mas prefijo (max 20 s)..."
+        traza("torrents", "stream continuar pendiente")
+    }
+
+    /** Recarga del player del stream (T105): MediaPlayer JAMAS ve
+     *  los bytes anexados sin re-prepare; el seek pendiente lo aplica
+     *  el listener de READY (MediaEngine ignora seeks en PREPARING). */
+    private fun recargarStreamContinuo() {
+        val cache = cacheStreamTorrent ?: return
+        val pos = media.position()
+        seekAlPrepararStream = pos
+        try {
+            media.load(MediaSource.Local(Uri.fromFile(cache).toString()), autoplay = true)
+            prefijoPreparadoStream = escritosStreamTorrent
+            estado.text = "stream: continuando (" + escritosStreamTorrent + " B en cache)"
+            traza("torrents", "stream recarga en " + pos)
+        } catch (e: MediaException) {
+            estado.text = "stream: no se pudo recargar (" + e.message + ")"
+            traza("torrents", "stream recarga fallo: " + e.javaClass.simpleName)
+        }
+    }
+
+    /** Cleanup del stream (T105): detiene el hilo (flag + interrupt),
+     *  borra la cache SIEMPRE y suelta TODO; la sesion y su bajada
+     *  del pool SIGUEN su curso (cancelar/pausar va por la sesion). */
+    private fun detenerStreamTorrent() {
+        pararStreamRef?.set(true)
+        pararStreamRef = null
+        hiloStreamTorrent?.interrupt()
+        hiloStreamTorrent = null
+        streamTorrent = null
+        sesionStreamTorrent = null
+        cacheStreamTorrent?.delete()
+        cacheStreamTorrent = null
+        escritosStreamTorrent = 0L
+        prefijoPreparadoStream = 0L
+        indiceStreamTorrent = -1
+        continuarPendienteTorrent = false
+        seekAlPrepararStream = null
+    }
+
+    /** Aviso del hilo de streaming: SIEMPRE al hilo de UI. */
+    private fun avisarStream(mensaje: String) {
+        runOnUiThread {
+            estado.text = mensaje
+            traza("torrents", mensaje)
+        }
     }
 
     /** Guardar a SAF UN archivo de los elegidos, ensamblando desde las
@@ -3768,7 +4064,7 @@ class BrowserActivity : Activity() {
         var sinPiezas = 0
         var rechazadas = 0
         while (true) {
-            when (session.pump(fuente)) {
+            when (synchronized(session) { session.pump(fuente) }) {
                 PumpResult.COMPLETED -> {
                     rechazadas = 0
                     sinPiezas = 0
@@ -3900,6 +4196,10 @@ class BrowserActivity : Activity() {
         bSubsMas.text = "Subs +0.5s"
         val bSubsFuera = Button(this)
         bSubsFuera.text = "Sin subs"
+        // T105 v1 (R0398, RES-0158): continuar el stream del torrent
+        // con el prefijo YA crecido (recarga + seek en la posicion).
+        val bStream = Button(this)
+        bStream.text = "Continuar"
         botones.addView(bPlay)
         botones.addView(bAtras)
         botones.addView(bAdelante)
@@ -3909,6 +4209,7 @@ class BrowserActivity : Activity() {
         botones.addView(bSubsMenos)
         botones.addView(bSubsMas)
         botones.addView(bSubsFuera)
+        if (origen == "torrent") botones.addView(bStream)
         contenedor.addView(botones)
         // T104 v1: overlay de subs del player (cue activo).
         val subsTexto = TextView(this)
@@ -3950,6 +4251,7 @@ class BrowserActivity : Activity() {
             pistaSubs = null
             pintarSubs()
         }
+        bStream.setOnClickListener { continuarStreamTorrent() }
         barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(b: SeekBar?, progreso: Int, desdeUsuario: Boolean) {}
             override fun onStartTrackingTouch(b: SeekBar?) {}
@@ -4094,6 +4396,8 @@ class BrowserActivity : Activity() {
         media.close()
         soltarAudioFocus()
         pestanaMedia = null
+        // T105 v1: el stream del torrent muere con el player.
+        detenerStreamTorrent()
         // T065 v2: el servicio muere con el player (R0137).
         pararServicioMedia()
         // T104 v1: la pista efimera muere con el player; las
