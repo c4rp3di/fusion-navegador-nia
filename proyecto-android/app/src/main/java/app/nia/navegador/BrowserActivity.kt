@@ -596,6 +596,10 @@ class BrowserActivity : Activity() {
     private var descargaPendienteUrl: String? = null
     private val urisDescargas = HashMap<Long, Uri>()
 
+    /** T112 v4 (R0407, RES-0162): copia en espera de que el usuario
+     *  elija el destino SAF de export; JAMAS contenido en traza. */
+    private var copiaPendienteExport: BackupInfo? = null
+
     /** Ajustes del navegador (T093 v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10): armazon del SettingsManager
      * del motor con busqueda, export/import sin secretos y
      * persistencia; cada opcion enlaza capacidad real o declara su
@@ -5539,6 +5543,34 @@ class BrowserActivity : Activity() {
                 traza("copias", "importar fallo al leer")
             }
         }
+        if (requestCode == REQUEST_EXPORT_COPIA && resultCode == RESULT_OK) {
+            val uri = data?.data
+            val info = copiaPendienteExport
+            copiaPendienteExport = null
+            if (uri == null || info == null) {
+                estado.text = "exportar copia: sin destino o sin copia"
+                traza("copias", "exportar sin uri")
+                return
+            }
+            when (val r = backupsPerfil.texto(info.nombre)) {
+                is Outcome.Success -> {
+                    try {
+                        contentResolver.openOutputStream(uri, "wt")?.use { s ->
+                            s.write(r.value.toByteArray())
+                        }
+                        estado.text = "copia v" + info.version + " exportada a archivo"
+                        traza("copias", "exportada v" + info.version)
+                    } catch (noEscribible: Exception) {
+                        estado.text = "exportar copia: no se pudo escribir"
+                        traza("copias", "exportar fallo al escribir")
+                    }
+                }
+                is Outcome.Failure -> {
+                    estado.text = "no exportada: " + r.error.safeMessage
+                    traza("copias", "exportar fallo: " + r.error.safeMessage)
+                }
+            }
+        }
         if (requestCode == REQUEST_GUARDAR_PDF && resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri == null) {
@@ -6003,9 +6035,11 @@ class BrowserActivity : Activity() {
     private fun elegirCopia(info: BackupInfo) {
         AlertDialog.Builder(this)
             .setTitle("Copia v" + info.version)
-            .setItems(arrayOf("Restaurar (staging)", "Borrar")) { _, cual ->
+            .setItems(arrayOf("Restaurar (staging)", "Exportar a archivo", "Borrar")) { _, cual ->
                 if (cual == 0) {
                     confirmarRestaurarCopia(info)
+                } else if (cual == 1) {
+                    lanzarExportarCopia(info)
                 } else {
                     confirmarBorrarCopia(info)
                 }
@@ -6187,11 +6221,13 @@ class BrowserActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Perfiles")
             .setMessage("Perfil activo: " + perfilActivo())
-            .setItems(arrayOf("Crear perfil", "Cambiar de perfil", "Borrar perfil")) { _, cual ->
+            .setItems(arrayOf("Crear perfil", "Cambiar de perfil", "Renombrar perfil", "Borrar perfil")) { _, cual ->
                 if (cual == 0) {
                     pedirNombrePerfil()
                 } else if (cual == 1) {
                     pedirCambiarPerfil()
+                } else if (cual == 2) {
+                    pedirRenombrarPerfil()
                 } else {
                     pedirBorrarPerfil()
                 }
@@ -6270,6 +6306,75 @@ class BrowserActivity : Activity() {
         escribirPerfilActivo(nombre)
         traza("perfiles", "cambio a " + nombre)
         recreate()
+    }
+
+    /** Elige el perfil a renombrar (T112 v4): el ACTIVO JAMAS entra
+     *  (el activo del shell quedaria colgado con su archivo). */
+    private fun pedirRenombrarPerfil() {
+        val otros = gestorPerfiles.listar().filter { it != perfilActivo() }
+        if (otros.isEmpty()) {
+            estado.text = "no hay otros perfiles para renombrar"
+            traza("perfiles", "renombrar: sin candidatos")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Renombrar perfil")
+            .setItems(otros.toTypedArray()) { _, cual -> pedirNombreNuevoPerfil(otros[cual]) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Pide el nombre nuevo (T112 v4): el mismo NOMBRE_RE del motor;
+     *  JAMAS se renombra sin validar ni sobre un nombre existente. */
+    private fun pedirNombreNuevoPerfil(actual: String) {
+        val campo = EditText(this)
+        campo.hint = "Nombre ([a-z0-9-], 1 a 16)"
+        AlertDialog.Builder(this)
+            .setTitle("Renombrar " + actual)
+            .setView(campo)
+            .setPositiveButton("Renombrar") { _, _ ->
+                val nuevo = campo.text.toString().trim().lowercase()
+                if (!GestorPerfiles.NOMBRE_RE.matches(nuevo)) {
+                    estado.text = "nombre de perfil no valido"
+                    traza("perfiles", "nombre no valido")
+                    return@setPositiveButton
+                }
+                confirmarRenombrarPerfil(actual, nuevo)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** Confirmacion explicita del renombrado (T112 v4): PRIMERO el
+     *  DIRECTORIO (si falla, NADA cambia: abort limpio) y DESPUES el
+     *  registro; si el registro falla, el perfil sale del listado
+     *  PERO sus datos quedan intactos en el directorio nuevo
+     *  (recuperable: crear de nuevo con el mismo nombre). */
+    private fun confirmarRenombrarPerfil(actual: String, nuevo: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Renombrar " + actual + " a " + nuevo + "?")
+            .setMessage("El perfil " + actual + " pasa a llamarse " + nuevo + ". Renombrar?")
+            .setPositiveButton("Renombrar") { _, _ ->
+                val base = File(filesDir, "perfiles")
+                val dirViejo = File(base, actual)
+                if (dirViejo.isDirectory && !dirViejo.renameTo(File(base, nuevo))) {
+                    estado.text = "no renombrado: el directorio no se pudo renombrar"
+                    traza("perfiles", "renombrar fallo: directorio")
+                    return@setPositiveButton
+                }
+                when (val r = gestorPerfiles.renombrar(actual, nuevo)) {
+                    is Outcome.Success -> {
+                        estado.text = "perfil " + actual + " renombrado a " + nuevo
+                        traza("perfiles", "renombrado " + actual + " a " + nuevo)
+                    }
+                    is Outcome.Failure -> {
+                        estado.text = "no renombrado: " + r.error.safeMessage
+                        traza("perfiles", "renombrar fallo: " + r.error.safeMessage)
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     /** Elige el perfil a borrar (T112 v3): el ACTIVO JAMAS entra (hay
@@ -6378,6 +6483,19 @@ class BrowserActivity : Activity() {
         } catch (ilegible: Exception) {
             null
         }
+    }
+
+    /** T112 v4 (R0407, RES-0162): lanza el selector SAF del destino
+     *  de la copia a exportar (patron del export html de
+     *  marcadores); el contenido JAMAS se registra. */
+    private fun lanzarExportarCopia(info: BackupInfo) {
+        copiaPendienteExport = info
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.setType("text/plain")
+        i.putExtra(Intent.EXTRA_TITLE, info.nombre)
+        startActivityForResult(i, REQUEST_EXPORT_COPIA)
+        traza("copias", "exportar: pidiendo destino v" + info.version)
     }
 
     /** Tipo de perfil de la pestana activa (normal si no hay). */
@@ -6701,5 +6819,6 @@ class BrowserActivity : Activity() {
         private const val REQUEST_MEDIA = 53
         private const val REQUEST_NOTIFICACIONES = 54
         private const val REQUEST_IMPORT_COPIA = 55
+        private const val REQUEST_EXPORT_COPIA = 56
     }
 }

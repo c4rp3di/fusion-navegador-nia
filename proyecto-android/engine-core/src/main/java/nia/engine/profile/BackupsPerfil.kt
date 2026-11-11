@@ -32,6 +32,9 @@ import nia.contracts.Outcome
  * de Ajustes (v2), sin import desde SAF (v2+), sin cifrado propio
  * (los secretos no viajan, no se cifran aqui) y sin tests nuevos
  * (convencion del tiron: el smoke de Actions compila el motor).
+ *
+ * T112 v4 (R0407, RES-0162): texto(nombre) expone el texto canonico
+ * para que el host lo exporte por SAF a donde el usuario elija.
  */
 data class BackupInfo(
     val nombre: String,
@@ -187,6 +190,26 @@ class BackupsPerfil(
         return Outcome.success(
             BackupInfo(nombreDe(version), version, areas.keys.sorted(), texto.length.toLong())
         )
+    }
+
+    /**
+     * T112 v4 (R0407, RES-0162): texto CANONICO de un backup para
+     * EXPORTARLO (SAF): valida TODO-o-NADA (parsear) y re-serializa
+     * con la MISMA version y el orden canonico; un backup corrupto
+     * JAMAS sale del disco. El contenido viaja SOLO al destino que
+     * el usuario elige: ni estado ni traza lo repiten.
+     */
+    fun texto(nombre: String): Outcome<String> {
+        if (!NOMBRE_RE.matches(nombre)) return fallo("nombre no valido")
+        val f = File(dir, nombre)
+        if (!f.isFile) return fallo("backup no existe")
+        val contenido = try {
+            f.readText()
+        } catch (ilegible: Exception) {
+            return fallo("backup ilegible")
+        }
+        val parse = parsear(contenido) ?: return fallo("backup corrupto")
+        return Outcome.success(serializar(parse.first, parse.second))
     }
 
     /** Info del archivo o null si no es un backup valido. */

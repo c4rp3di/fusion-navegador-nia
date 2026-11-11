@@ -21,8 +21,12 @@ import nia.contracts.Outcome
  * [a-z0-9-] de 1 a 16: jamas una ruta, jamas contenido del perfil.
  *
  * Exclusiones v3: el activo lo decide el host (archivo propio del
- * shell), sin renombrar perfiles, sin import/export del registro y
- * sin tests nuevos (convencion del tiron).
+ * shell), sin import/export del registro y sin tests nuevos
+ * (convencion del tiron).
+ *
+ * T112 v4 (R0407, RES-0162): renombrar(de, a) reescribe el registro
+ * de forma atomica; el DIRECTORIO lo renombra el host y el activo
+ * JAMAS entra (cambiarlo dejaria el shell colgado).
  */
 class GestorPerfiles(private val dir: File) {
 
@@ -77,6 +81,23 @@ class GestorPerfiles(private val dir: File) {
         val lista = ArrayList(listar())
         lista.remove(nombre)
         return persistir(lista, Unit)
+    }
+
+    /**
+     * T112 v4 (R0407, RES-0162): renombra un perfil del registro:
+     * ambos nombres validos, el origen existe y el destino JAMAS
+     * existe (el conteo NO cambia: renombrar no crea); reescritura
+     * atomica completa. El DIRECTORIO lo renombra el host.
+     */
+    fun renombrar(de: String, a: String): Outcome<String> {
+        if (!NOMBRE_RE.matches(de)) return fallo("nombre de perfil no valido")
+        if (!NOMBRE_RE.matches(a)) return fallo("nombre de perfil no valido")
+        if (!existe(de)) return fallo("perfil no existe")
+        if (existe(a)) return fallo("perfil ya existe")
+        val lista = ArrayList(listar())
+        lista.remove(de)
+        lista.add(a)
+        return persistir(lista, a)
     }
 
     /** Reescritura atomica completa del registro (tmp+rename). */
