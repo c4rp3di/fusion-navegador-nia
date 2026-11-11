@@ -105,6 +105,12 @@ import nia.engine.url.UrlParser
  * como initiator y storage particionado (top-site del documento, origin
  * del subframe); sandbox sin allow-scripts los BLOQUEA; subframe opaco
  * corre SIN storage.
+ *
+ * T071 v2e / TK-071-2 (R0429, RES-0169): frame tree RECURSIVO con tope
+ * de profundidad 3: los iframes dentro de un subframe cargan como
+ * subframes de ese subframe (mismo fetch/particion/sandbox/scripts; el
+ * fallo de red de cualquier nivel tumba la navegacion tras el commit
+ * como los de nivel 1); a profundidad 3 no se cargan mas.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -122,9 +128,11 @@ data class NavScript(val ref: String, val output: String)
  * (null si no resuelve), origin del subframe (null/opaco cuando el
  * sandbox esta presente sin allow-same-origin), flags sandbox medidas,
  * estado (loaded, blocked-mixed-content, failed:CODE, unresolved), el
- * subdocumento parseado (null si no cargo) y, desde T071 v2d
- * (R0426, RES-0168), los scripts ejecutados DENTRO (inline:N o src:url
- * con su salida; vacio si el sandbox lo prohibe o no cargo).
+ * subdocumento parseado (null si no cargo), los scripts ejecutados
+ * DENTRO desde T071 v2d (R0426, RES-0168) (inline:N o src:url con su
+ * salida; vacio si el sandbox lo prohibe o no cargo) y, desde T071 v2e
+ * (R0429, RES-0169), los subframes ANIDADOS dentro (arbol con tope de
+ * profundidad 3; vacio en los niveles mas profundos).
  */
 data class NavSubframe(
     val src: String,
@@ -133,7 +141,8 @@ data class NavSubframe(
     val sandbox: List<String>,
     val estado: String,
     val document: DomDocument?,
-    val scripts: List<NavScript> = emptyList()
+    val scripts: List<NavScript> = emptyList(),
+    val subframes: List<NavSubframe> = emptyList()
 )
 
 /**
@@ -373,75 +382,11 @@ class NavController(
                     }
                 }
                 is LoadItem.Frame -> {
-                    if (item.src.isEmpty()) {
-                        subframes.add(
-                            NavSubframe(item.src, "about:blank", null, item.sandbox, "loaded", DomDocument.parse(""))
-                        )
-                    } else {
-                        val full = resolveUrl(finalUrl, item.src)
-                        if (full == null) {
-                            subframes.add(NavSubframe(item.src, null, null, item.sandbox, "unresolved", null))
-                        } else {
-                            val r = fetchSide(full, finalUrl, site, "document", current)
-                            if (r is SideResult.NavFailure) {
-                                return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
-                            }
-                            if (r is SideResult.Ok) {
-                                val opaco = item.sandbox.isNotEmpty() && "allow-same-origin" !in item.sandbox
-                                val subOrigin = if (opaco) null else subframeOrigin(full)
-                                val subDoc = DomDocument.parse(r.source)
-                                val subScripts = ArrayList<NavScript>()
-                                if (item.sandbox.isEmpty() || "allow-scripts" in item.sandbox) {
-                                    val subUrl = try {
-                                        UrlParser.parse(full)
-                                    } catch (e: UrlParseException) {
-                                        null
-                                    }
-                                    if (subUrl != null) {
-                                        val subFetchApi = JsFetchApi(transport, clock, null, filter, full)
-                                        val subTuple = subOrigin as? Origin.Tuple
-                                        val subStorageApi = if (subTuple == null) null else JsStorageApi(profile.storage, profile.idb, site, subTuple)
-                                        val subBaseMedia = subUrl.scheme + "://" + subUrl.host +
-                                            (if (subUrl.port != null) ":" + subUrl.port else "")
-                                        val subItems = ArrayList<LoadItem>()
-                                        walkLoadItems(subDoc.nodeOf(subDoc.rootHandle()), subUrl, subItems)
-                                        var subInline = 0
-                                        for (sub in subItems) {
-                                            when (sub) {
-                                                is LoadItem.InlineScript -> {
-                                                    subInline += 1
-                                                    val result = JsInterpreter.evaluateWithDom(sub.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
-                                                    subScripts.add(NavScript("inline:" + subInline, JsInterpreter.dumpResult(result)))
-                                                }
-                                                is LoadItem.ScriptSrc -> {
-                                                    val ref = "src:" + sub.url
-                                                    val sr = fetchSide(sub.url, subUrl, site, "script", current)
-                                                    if (sr is SideResult.NavFailure) {
-                                                        return NavOutcome.Failed(NavState.LOADED, sr.code, sr.message, committed)
-                                                    }
-                                                    if (sr is SideResult.Ok) {
-                                                        val result = JsInterpreter.evaluateWithDom(sr.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
-                                                        subScripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
-                                                    } else {
-                                                        subScripts.add(NavScript(ref, describe(sr)))
-                                                    }
-                                                }
-                                                else -> {}
-                                            }
-                                        }
-                                    }
-                                }
-                                subframes.add(
-                                    NavSubframe(
-                                        item.src, full, subOrigin, item.sandbox, "loaded",
-                                        subDoc, subScripts
-                                    )
-                                )
-                            } else {
-                                subframes.add(NavSubframe(item.src, full, null, item.sandbox, describe(r), null))
-                            }
-                        }
+                    val c = cargarSubframe(item.src, item.sandbox, finalUrl, site, current, 1)
+                    if (c is CargaSubframe.Fallo) {
+                        return NavOutcome.Failed(NavState.LOADED, c.code, c.message, committed)
                     }
+                    subframes.add((c as CargaSubframe.Ok).subframe)
                 }
             }
         }
@@ -514,6 +459,100 @@ class NavController(
      * T071 v2 (R0416, RES-0165): origin del subframe; fetchSide ya
      * rechaza urls con origen no-Tuple, asi que aqui el parse no falla.
      */
+    private sealed class CargaSubframe {
+        data class Ok(val subframe: NavSubframe) : CargaSubframe()
+        data class Fallo(val code: ErrorCode, val message: String) : CargaSubframe()
+    }
+
+    /**
+     * T071 v2e / TK-071-2 (R0429, RES-0169): carga un subframe del frame
+     * tree RECURSIVO (tope de profundidad 3): about:blank sintetico sin
+     * src (v2c), fetchSide tipo document, scripts del subdocumento (v2d)
+     * y los iframes DENTRO cargados un nivel mas abajo hasta el tope; el
+     * fallo de red de cualquier nivel se propaga como Fallo y la rama del
+     * nivel 1 decide el return de la navegacion.
+     */
+    private fun cargarSubframe(
+        src: String,
+        sandbox: List<String>,
+        base: Url,
+        topSite: Site,
+        currentUrl: String,
+        profundidad: Int
+    ): CargaSubframe {
+        if (src.isEmpty()) {
+            return CargaSubframe.Ok(NavSubframe(src, "about:blank", null, sandbox, "loaded", DomDocument.parse("")))
+        }
+        val full = resolveUrl(base, src)
+        if (full == null) {
+            return CargaSubframe.Ok(NavSubframe(src, null, null, sandbox, "unresolved", null))
+        }
+        val r = fetchSide(full, base, topSite, "document", currentUrl)
+        if (r is SideResult.NavFailure) {
+            return CargaSubframe.Fallo(r.code, r.message)
+        }
+        if (r !is SideResult.Ok) {
+            return CargaSubframe.Ok(NavSubframe(src, full, null, sandbox, describe(r), null))
+        }
+        val opaco = sandbox.isNotEmpty() && "allow-same-origin" !in sandbox
+        val subOrigin = if (opaco) null else subframeOrigin(full)
+        val subDoc = DomDocument.parse(r.source)
+        val subScripts = ArrayList<NavScript>()
+        val subHijos = ArrayList<NavSubframe>()
+        if (sandbox.isEmpty() || "allow-scripts" in sandbox) {
+            val subUrl = try {
+                UrlParser.parse(full)
+            } catch (e: UrlParseException) {
+                null
+            }
+            if (subUrl != null) {
+                val subFetchApi = JsFetchApi(transport, clock, null, filter, full)
+                val subTuple = subOrigin as? Origin.Tuple
+                val subStorageApi = if (subTuple == null) null else JsStorageApi(profile.storage, profile.idb, topSite, subTuple)
+                val subBaseMedia = subUrl.scheme + "://" + subUrl.host +
+                    (if (subUrl.port != null) ":" + subUrl.port else "")
+                val subItems = ArrayList<LoadItem>()
+                walkLoadItems(subDoc.nodeOf(subDoc.rootHandle()), subUrl, subItems)
+                var subInline = 0
+                for (sub in subItems) {
+                    when (sub) {
+                        is LoadItem.InlineScript -> {
+                            subInline += 1
+                            val result = JsInterpreter.evaluateWithDom(sub.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                            subScripts.add(NavScript("inline:" + subInline, JsInterpreter.dumpResult(result)))
+                        }
+                        is LoadItem.ScriptSrc -> {
+                            val ref = "src:" + sub.url
+                            val sr = fetchSide(sub.url, subUrl, topSite, "script", currentUrl)
+                            if (sr is SideResult.NavFailure) {
+                                return CargaSubframe.Fallo(sr.code, sr.message)
+                            }
+                            if (sr is SideResult.Ok) {
+                                val result = JsInterpreter.evaluateWithDom(sr.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                                subScripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                            } else {
+                                subScripts.add(NavScript(ref, describe(sr)))
+                            }
+                        }
+                        is LoadItem.Frame -> {
+                            if (profundidad < 3) {
+                                val cr = cargarSubframe(sub.src, sub.sandbox, subUrl, topSite, currentUrl, profundidad + 1)
+                                if (cr is CargaSubframe.Fallo) {
+                                    return cr
+                                }
+                                subHijos.add((cr as CargaSubframe.Ok).subframe)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+        }
+        return CargaSubframe.Ok(
+            NavSubframe(src, full, subOrigin, sandbox, "loaded", subDoc, subScripts, subHijos)
+        )
+    }
+
     private fun subframeOrigin(url: String): Origin? = try {
         Origin.of(UrlParser.parse(url))
     } catch (e: UrlParseException) {
