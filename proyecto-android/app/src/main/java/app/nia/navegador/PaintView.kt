@@ -377,8 +377,9 @@ class PaintView(context: Context) : View(context) {
         for (i in iframes.indices) {
             val sf = subframesPendientes[i]
             for (k in document.childrenOf(iframes[i]).toList()) document.removeChild(iframes[i], k)
-            val texto = if (sf.estado == "loaded" && sf.document != null) {
-                textoPlanoDe(sf.document)
+            val subdoc = sf.document
+            val texto = if (sf.estado == "loaded" && subdoc != null) {
+                textoPlanoDe(subdoc)
             } else {
                 "[iframe " + (sf.url ?: sf.src) + " " + sf.estado + "]"
             }
