@@ -43,6 +43,11 @@ import nia.contracts.WallClock
  * cache. Sin cache inyectado el comportamiento es exactamente el
  * de v1.
  *
+ * T113 v2 (R0413, RES-0164): servir de cache ya no pierde la
+ * identidad: el Fresh y el 304 revivido devuelven el TlsInfo
+ * guardado con la entrada, y el panel de identidad sigue
+ * mostrando el certificado real de la pagina.
+ *
  * v3 (R0242, T052): filtro de red opcional ANTES de cache y
  * transporte. Con un RequestFilter inyectado, cada fetch consulta el
  * filtro primero con el RequestContext del llamador (o uno por
@@ -192,7 +197,7 @@ class FetchManager(
             when (val lu = cache.lookup(request.method, request.url)) {
                 is HttpCache.Lookup.Fresh -> {
                     delivered += 1
-                    return Outcome.success(FetchResponse(lu.entry.status, lu.entry.headers, lu.entry.body))
+                    return Outcome.success(FetchResponse(lu.entry.status, lu.entry.headers, lu.entry.body, lu.entry.seguridad))
                 }
                 is HttpCache.Lookup.Stale -> {
                     val conditional = cache.revalidationHeaders(lu.entry)

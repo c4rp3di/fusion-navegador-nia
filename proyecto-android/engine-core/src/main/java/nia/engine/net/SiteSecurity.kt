@@ -6,8 +6,9 @@ package nia.engine.net
  * La identidad la produce el motor desde el transporte REAL, jamas desde el
  * contenido de la pagina (no spoofeable): TlsInfo lleva emisor, sujeto y
  * ventana de validez SOLO cuando el adaptador los expone. PanelIdentidad
- * pinta esas lineas sin fabricar datos: cache o adaptador sin cadena se
- * muestran como "no disponible" y el panel SIEMPRE recuerda que el cifrado
+ * pinta esas lineas sin fabricar datos: un adaptador sin cadena se
+ * muestra como "no disponible" (la cache conserva el tls guardado con
+ * la entrada desde T113 v2) y el panel SIEMPRE recuerda que el cifrado
  * no hace que el sitio sea de confiar (HTTPS != sitio de confianza).
  *
  * ExcepcionesHttps mantiene las excepciones HTTP por sitio separadas,

@@ -37,6 +37,11 @@ import nia.engine.url.UrlParser
  * (T033); v5 (R0324, RES-0132): frescura heuristica RFC 9111
  * cuando no hay max-age ni Expires (10% de Date-Last-Modified,
  * tope 24 h).
+ *
+ * T113 v2 (R0413, RES-0164): la Entry conserva el TlsInfo de la
+ * respuesta almacenada; lookup Fresh y el 304 revivido lo
+ * devuelven: el panel de identidad no pierde el certificado al
+ * volver a una pagina servida de cache.
  */
 class HttpCache(
     private val clock: WallClock,
@@ -55,7 +60,8 @@ class HttpCache(
         val body: ByteArray,
         val storedAtMillis: Long,
         val freshForMillis: Long,
-        val mustRevalidate: Boolean
+        val mustRevalidate: Boolean,
+        val seguridad: TlsInfo? = null
     )
 
     sealed class Lookup {
@@ -121,7 +127,8 @@ class HttpCache(
             response.body,
             now,
             freshnessMillis(response.headers, now, cc),
-            cc["no-cache"] != null || cc["must-revalidate"] != null
+            cc["no-cache"] != null || cc["must-revalidate"] != null,
+            response.seguridad
         )
         entries[url]?.let { totalBytes -= it.body.size.toLong() }
         entries[url] = entry
@@ -163,10 +170,11 @@ class HttpCache(
             entry.body,
             now,
             freshnessMillis(merged, now, dir),
-            dir["no-cache"] != null || dir["must-revalidate"] != null
+            dir["no-cache"] != null || dir["must-revalidate"] != null,
+            entry.seguridad
         )
         entries[url] = updated
-        return FetchResponse(updated.status, updated.headers, updated.body)
+        return FetchResponse(updated.status, updated.headers, updated.body, updated.seguridad)
     }
 
     /** T026 v3 (R0311, RES-0127): desaloja la LRU (access-order)

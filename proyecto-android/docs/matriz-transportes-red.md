@@ -83,3 +83,40 @@ BrowserActivity.kt (6825, regiones descargas/torrents).
 - Cuota honesta del torrent documentada en la UI (T103): UNA
   bajada, sin siembra, piezas en memoria sin escritura automatica
   a disco.
+
+## v2 (R0413, RES-0164): relectura medida y cierre de TK-113-1/2
+
+T113 v2 relee COMPLETAS las fuentes de las dos filas que v1 marco
+PARCIAL y corrige la linea base (lectura medida, sha c946f4b0,
+verificado byte a byte identico en 46e5781d: los errores son de
+lectura de v1, no de codigo cambiado):
+
+- Cache HTTP: SOPORTADO, no PARCIAL. HttpCache.kt 228 l parsea
+  Cache-Control desde T026 v2/v5: directives (183-195) mide
+  no-store (store devuelve null, 114), no-cache/must-revalidate
+  (mustRevalidate, 124) y max-age (freshnessMillis 206-216:
+  max-age, Expires-Date y heuristica 10% de Date-Last-Modified
+  con tope 24 h). La fila v1 vio la revalidacion ETag (144-145)
+  y no el parseo: error de lectura de v1. TK-113-2 CERRADO sin
+  cambio de codigo (ya estaba implementado).
+- Detalle TLS (certificado): SOPORTADO, no PARCIAL. La cadena ya
+  existia de punta a punta: HttpTransport.kt 174 l llena TlsInfo
+  con el certificado hoja REAL (seguridadTls 102-117: issuerDN,
+  subjectDN, notBefore, notAfter; null en http o sin cadena,
+  JAMAS fabricada; llamada real en 78), Fetch.kt 331 l lo acarrea
+  (FetchResponse.seguridad, 85), NavController.kt 526 l lo fija en
+  NavPage.tls (117, desde body.seguridad en 290) y
+  BrowserActivity.kt 6825 l pinta PanelIdentidad.lineas(page.url,
+  page.tls) (2822). La fila v1 leyo el default null (85) y no la
+  llamada real: error de lectura de v1. Brecha REAL residual
+  medida y CERRADA en v2: servir de cache (Fetch.kt 195) o revivir
+  un 304 (HttpCache.serveRevalidated 169) devolvia el
+  FetchResponse SIN seguridad y el panel perdia el certificado al
+  volver a una pagina en cache; la Entry ahora conserva el tls y
+  el Fresh y el 304 lo devuelven. TK-113-1 CERRADO.
+
+TK-113-3 (HTTP/2-3, solo ADR), TK-113-4 (proxy) y TK-113-5
+(adaptador UDP/DHT real) siguen abiertos; el resto de la matriz v1
+queda igual. Los dos errores de lectura de v1 quedan aqui
+documentados como leccion de la regla X04: lectura completa
+medida, jamas parcial ni de memoria.
