@@ -69,8 +69,10 @@ import nia.engine.url.UrlParser
  * Exclusiones v1 (API propia del motor): sin frame tree ni CSP (X02,
  * subtareas futuras de T071); un solo Set-Cookie por respuesta (el
  * transporte entrega cabeceras como mapa); Location relativa compleja
- * sin resolver (RedirectPolicy la entrega como Stop); subrecursos solo
- * absolutos o relativos al origen; un script src con un unico hijo de
+ * sin resolver (RedirectPolicy la entrega como Stop); subrecursos
+ * resueltos contra la base efectiva desde T111 v2 (R0404, RES-0161:
+ * relativas de ruta, ?query y //host, y <base href>), sin iframe ni
+ * font ni media contables; un script src con un unico hijo de
  * texto; scripts bloqueantes en LOADED sin event loop (T025, T072) ni
  * service workers (T034); back/forward que re-navega, sin snapshots. El
  * gemelo TS validado offline (2 corridas identicas, huella
@@ -263,7 +265,7 @@ class NavController(
         val body = response ?: return NavOutcome.Failed(NavState.NAVIGATING, ErrorCode.UNSUPPORTED, "sin respuesta", null)
         lastState = NavState.PARSING
         events.add(NavEvent(NavState.PARSING, current))
-        val fuente = String(body.body, Charsets.UTF_8)
+        val fuente = decodificarDocumento(body, headerValue(body.headers, "content-type"))
         val document = DomDocument.parse(fuente)
         val finalUrl: Url = try {
             UrlParser.parse(current)
@@ -290,7 +292,7 @@ class NavController(
         page = committed
         lastState = NavState.LOADED
         val items = ArrayList<LoadItem>()
-        walkLoadItems(document.nodeOf(document.rootHandle()), finalUrl, items)
+        walkLoadItems(document.nodeOf(document.rootHandle()), baseDeResolucion(document, finalUrl), items)
         val subresources = ArrayList<NavSubresource>()
         val scripts = ArrayList<NavScript>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
@@ -435,17 +437,83 @@ class NavController(
         }
     }
 
-    /** URL absoluta del subrecurso: absoluta o relativa al origen. */
+    /**
+     * T111 v2 (R0404, RES-0161): URL absoluta de un subrecurso contra la
+     * base efectiva: absolutas, //host, /ruta, ?query y rutas relativas
+     * con segmentos . y .. (los normaliza UrlParser al parsear la
+     * candidata). null si la referencia queda vacia, es solo #fragmento
+     * o la candidata no parsea.
+     */
     private fun resolveUrl(page: Url, raw: String): String? {
         val t = raw.trim()
         if (t.isEmpty()) return null
         if (t.startsWith("http://") || t.startsWith("https://")) return t
-        if (t.startsWith("/")) {
-            val port = if (page.port != null) ":" + page.port else ""
-            return page.scheme + "://" + page.host + port + t
+        if (t.startsWith("#")) return null
+        val origen = page.scheme + "://" + page.host +
+            (if (page.port != null) ":" + page.port else "")
+        if (t.startsWith("//")) return page.scheme + ":" + t
+        if (t.startsWith("?")) return origen + page.path + t
+        if (t.startsWith("/")) return origen + t
+        val corte = page.path.lastIndexOf('/')
+        val dir = if (corte <= 0) "/" else page.path.substring(0, corte + 1)
+        return try {
+            UrlParser.parse(origen + dir + t).toString()
+        } catch (e: UrlParseException) {
+            null
         }
-        return null
     }
+
+    /**
+     * T111 v2 (R0404, RES-0161): base efectiva de resolucion: el href del
+     * primer <base> del documento si existe y parsea (absoluto o relativo
+     * a la pagina); si no, la URL de la pagina.
+     */
+    private fun baseDeResolucion(document: DomDocument, page: Url): Url {
+        val handle = document.findFirst("base") ?: return page
+        val href = document.attributeOf(handle, "href")?.trim() ?: return page
+        if (href.isEmpty()) return page
+        val resuelta = resolveUrl(page, href) ?: return page
+        return try {
+            UrlParser.parse(resuelta)
+        } catch (e: UrlParseException) {
+            page
+        }
+    }
+
+    /**
+     * T111 v2 (R0404, RES-0161, TK-111-4): decodifica el documento con el
+     * charset de la cabecera Content-Type y, en su ausencia, con el del
+     * primer meta charset del crudo (escaneado como latin-1 para leer los
+     * bytes intactos en los primeros 2048 caracteres); si no hay ninguno,
+     * o el nombre es desconocido, UTF-8 como antes.
+     */
+    private fun decodificarDocumento(respuesta: FetchResponse, contentType: String?): String {
+        val porCabecera = charsetDeCabecera(contentType)
+        if (porCabecera != null) {
+            return decodificar(respuesta.body, porCabecera)
+        }
+        val vista = String(respuesta.body, Charsets.ISO_8859_1)
+        val limite = minOf(vista.length, 2048)
+        val m = Regex("(?i)<meta[^>]{0,200}charset\\s*=\\s*[\"']?\\s*([A-Za-z0-9._\\-]+)").find(vista.substring(0, limite))
+        if (m != null) {
+            return decodificar(respuesta.body, m.groupValues[1])
+        }
+        return String(respuesta.body, Charsets.UTF_8)
+    }
+
+    /** charset declarado en una cabecera Content-Type; null si no esta. */
+    private fun charsetDeCabecera(contentType: String?): String? {
+        if (contentType == null) return null
+        val m = Regex("(?i)charset\\s*=\\s*[\"']?\\s*([A-Za-z0-9._\\-]+)").find(contentType)
+        return m?.groupValues?.get(1)
+    }
+
+    private fun decodificar(crudo: ByteArray, nombre: String): String =
+        try {
+            String(crudo, java.nio.charset.Charset.forName(nombre))
+        } catch (e: Exception) {
+            String(crudo, Charsets.UTF_8)
+        }
 
     private fun headerValue(headers: Map<String, String>, name: String): String? {
         val lower = name.lowercase()

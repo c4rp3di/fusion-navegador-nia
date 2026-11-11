@@ -75,3 +75,95 @@ media/MediaEngine.kt (222), paint/Paint.kt (138), css/CssCascade.kt
   js/JsWorker y storage.
 - Los fixtures upstream (fallo causal reproducible) pertenecen a las
   versiones de cierre de brechas, no a esta linea base.
+
+## v2 (R0405, RES-0161): cierre de brechas pequenas sobre 9d2c0b72
+
+T111 v2 (contrato R0404, entrega R0405): re-auditoria de las superficies
+que v1 dejo pendientes (layout fino, parser Css.kt completo, workers y
+storage, bindings de media) con conteos medidos sobre el canonico, DOS
+brechas pequenas cerradas en el MISMO commit (decision del usuario:
+informe + arreglos pequenos en la misma tanda; todas las superficies
+por igual sin priorizar) y el resto honesto en tickets.
+
+Lectura medida en 9d2c0b72 ANTES del fix (deltas contra 2d419193 de v1):
+nav/NavController.kt 458 l (+9 desde v1: cuotas de script T100 y puente
+media T092 v2), nav/NavControllerTest.kt 352 l (14 tests; NINGUN
+fixture usa URLs relativas de subrecurso, <base> ni charset no UTF-8:
+los fixes no tocan las fijaciones del gemelo), url/UrlParser.kt 424 l
+(normaliza . y .. en normalizePath; referencias relativas fuera de
+alcance, la resolucion vive en NavController), dom/DomDocument.kt
+305 l (findFirst/attributeOf soportan el <base> sin traversal nuevo),
+html/HtmlTreeBuilder.kt 1098 l (base/meta/source/track void en head,
+iframe rawtext), js/JsDomBindings.kt 856 l, media/MediaPuente.kt
+50 l, css/Css.kt 459 l, layout/Layout.kt 810 l,
+workers/VisorWorkers.kt 169 l, storage: IndexedDb.kt 13103 B,
+Storage.kt 4948 B, StoragePersistence.kt 10109 B.
+
+Brechas cerradas en esta entrega (NavController.kt):
+
+1. TK-111-4 CERRADO para el DOCUMENTO: charset por cabecera
+   Content-Type y, si no, primer <meta ... charset=...> de los
+   primeros 2048 caracteres (escaneo simple sin excluir comentarios);
+   nombre desconocido o ausente -> UTF-8 como antes. Los SUBRECURSOS
+   siguen en UTF-8 fijo: nuevo TK-111-10.
+2. URL base CERRADA en lo esencial: script/img/link stylesheet se
+   resuelven contra la base efectiva (href del primer <base> si
+   parsea; si no, la URL de la pagina): absolutas, //host, /ruta,
+   ?query y rutas relativas con . y .. normalizadas al parsear la
+   candidata. En 9d2c0b72 relativas de documento y //host devolvian
+   null y el subrecurso se ignoraba en silencio.
+
+Deltas de veredicto contra v1 (evidencia medida en 9d2c0b72):
+
+- HTMLMediaElement hacia el backend: NO -> PARCIAL. TK-111-1 CERRADO
+  por T092 v2 (R0358, RES-0145): MediaPuente.kt 50 l con
+  reproducir/pausar/posicionMs/duracionMs/volumen/velocidad/buscar;
+  JsDomBindings.kt 683-692 expone video/audio (play/pause/paused/
+  currentTime) SOLO con puente (nada fingido); el shell lo cablea
+  (BrowserActivity usa PuenteMedia). Quedan ended/timeupdate
+  persistentes y UN medio activo (exclusiones del puente v2).
+- Scripts module / async/defer: SIN CAMBIOS. 0 hits de module/defer
+  en JsDomBindings 856 l re-verificado; TK-111-2 sigue.
+- Historia / SPA: SIN CAMBIOS. 0 hits de pushState/popstate/
+  hashchange en JsDomBindings 856 l; TK-111-3 sigue.
+- Formularios: PARCIAL con matiz. JsDomBindings 665: form.submit()
+  existe y DISPARA el evento submit sincrono al elemento, pero NO
+  navega ni hace peticion real (0 multipart en JsFetchApi);
+  TK-111-8 sigue.
+- Foco / IME / scroll: SIN CAMBIOS. 0 hits de focus/activeElement
+  en JsDomBindings 856 l.
+- Layout fino (nuevo en v2): PARCIAL. Layout.kt 810 l: caja
+  rectangular, tablas v3, sin float/flex/grid (v4), medicion
+  monoespaciada (avance = fontSize/2), 0 hits de img/bidi/canvas:
+  sin imagenes en layout ni bidi (TK-111-5 sigue; nuevo TK-111-11).
+- Parser Css.kt (nuevo en v2): SOPORTADO con limites. Css.kt 459 l:
+  selectores tipo/universal/clase/id/atributo, combinadores
+  descendiente/hijo/+/~, pseudo-clases estaticas, agrupacion por
+  comas; @-rules SOLO @media (skipAtRule para el resto): 0 hits de
+  @import y font-face; TK-111-6 sigue.
+- Workers / storage: SIN CAMBIOS. VisorWorkers.kt 169 l (T102 v1,
+  RES-0110) espejo JVM de JsWorkers/JsServiceWorkers; storage
+  particionado T033 con persistencia propia.
+
+Tickets actualizados:
+
+- TK-111-1 CERRADO (T092 v2, R0358, RES-0145); los eventos
+  persistentes (ended/timeupdate) quedan como exclusion del puente v2.
+- TK-111-4 CERRADO para el documento; NUEVO TK-111-10: charset de
+  subrecursos (script/stylesheet) y BOM, hoy UTF-8 fijo en fetchSide.
+- TK-111-2/3/5/6/7/8/9 SIGUEN (re-verificados con conteos en esta v2).
+- NUEVO TK-111-11: bidi/RTL en layout y pintado (medicion
+  monoespaciada sin direccion; UrlParser ya declara IDNA sin bidi).
+
+Exclusiones honestas de v2:
+
+- El scan de meta charset es simple (primeros 2048 caracteres, sin
+  excluir comentarios ni BOM ni http-equiv completo): va con TK-111-10.
+- La resolucion relativa cubre el walk de LOADED (script/img/link
+  stylesheet); iframe/font/media siguen sin pedirse.
+- Los fixes se verifican SOLO por CI del conteo 2562 (sin tests
+  nuevos, protocolo del maestro); los fixtures upstream de fallo
+  causal pertenecen a las versiones de cierre de brechas grandes.
+- El shell se describe por entregas verificadas (T035 IME, T034
+  workers, T092 v2 puente); MainActivity/PaintView no se auditaron
+  linea a linea en v2.
