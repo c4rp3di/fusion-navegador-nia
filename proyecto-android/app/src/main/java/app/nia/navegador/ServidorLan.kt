@@ -192,9 +192,8 @@ class ServidorLan {
             tam = if (f != null) {
                 f.length()
             } else {
-                r!!.openFileDescriptor(Uri.parse(uriTexto!!), "r").use { p ->
-                    p.statSize
-                }
+                val p = r!!.openFileDescriptor(Uri.parse(uriTexto!!), "r")
+                if (p == null) -1L else p.use { pfd -> pfd.statSize }
             }
         } catch (e: Exception) {
             responderNo(cliente)
@@ -229,7 +228,9 @@ class ServidorLan {
                     }
                 }
             } else {
-                r!!.openFileDescriptor(Uri.parse(uriTexto!!), "r").use { pfd ->
+                val p = r!!.openFileDescriptor(Uri.parse(uriTexto!!), "r")
+                if (p == null) return
+                p.use { pfd ->
                     val ent = FileInputStream(pfd.fileDescriptor)
                     var saltar = ini
                     while (saltar > 0L) {
