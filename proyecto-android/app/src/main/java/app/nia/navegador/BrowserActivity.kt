@@ -113,6 +113,7 @@ import nia.engine.print.DocumentoPaginado
 import nia.engine.print.Impresor
 import nia.engine.print.Orientacion
 import nia.engine.print.PaginaImpresa
+import nia.engine.nav.NavSubframe
 import nia.engine.net.FetchManager
 import nia.engine.net.GestorCookies
 import nia.engine.net.HttpTransport
@@ -2793,6 +2794,11 @@ class BrowserActivity : Activity() {
      * pipeline, el shell NO se cierra: se conserva la pagina previa y el
      * estado cuenta que fallo (honesto, sin WebView). */
     private fun pintar(html: String) {
+        pintar(html, emptyList())
+    }
+
+    /** TK-071-6 (R0419, RES-0166): pintar con los subframes del frame tree. */
+    private fun pintar(html: String, subframes: List<NavSubframe>) {
         val hoja = hojaParaPintar
         hojaParaPintar = null
         val script = scriptParaPintar
@@ -2805,6 +2811,7 @@ class BrowserActivity : Activity() {
             pagina.cargarHojaModulo(hoja)
             pagina.cargarScriptModulo(script)
             pagina.cargarCosmeticosModulo(cosmeticos, hostCos)
+            pagina.cargarSubframes(subframes)
             pagina.loadPagina(html, cssNavegador(), true)
             scroll.scrollTo(0, 0)
         } catch (e: Exception) {
@@ -2837,7 +2844,7 @@ class BrowserActivity : Activity() {
         indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
         val html = page.html
         if (html != null) {
-            pintar(html)
+            pintar(html, page.subframes)
         } else {
             // C6 v1: sin html la hoja ganada se descarta (vive con el documento)
             hojaParaPintar = null
@@ -3005,7 +3012,7 @@ class BrowserActivity : Activity() {
         estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
         val html = page.html
         if (html != null) {
-            pintar(html)
+            pintar(html, page.subframes)
         }
     }
 
@@ -6774,7 +6781,8 @@ class BrowserActivity : Activity() {
             "h2{font-size:20px;color:" + colores.accent + "}" +
             "p{margin-top:8px}" +
             "input{display:block;padding:10px;border-width:1px;border-color:" + colores.surface +
-            ";background-color:#23233f;color:#f0eef8;font-size:14px;margin-top:8px}"
+            ";background-color:#23233f;color:#f0eef8;font-size:14px;margin-top:8px}" +
+            "iframe{display:block;border-width:1px;border-color:" + colores.surface + ";padding:6px;margin-top:8px}"
 
     /** T078 v1 (R0199, RES-0094): ScrollView que expone el
      * SOBRESCROLL REAL del borde superior al TironRefresh del motor

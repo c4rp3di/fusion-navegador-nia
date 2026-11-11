@@ -39,6 +39,7 @@ import nia.engine.layout.LayoutResult
 import nia.engine.modules.CosmeticosModulos
 import nia.engine.modules.EstilosModulos
 import nia.engine.modules.PluginRuntime
+import nia.engine.nav.NavSubframe
 import nia.engine.paint.PaintOp
 import nia.engine.paint.PaintScene
 import nia.engine.paint.PaintSceneBuilder
@@ -130,6 +131,11 @@ class PaintView(context: Context) : View(context) {
      *  (null = sin script); corre al inicio del documento en su PROPIA
      *  sesion del event loop con DOM y cuotas de plugin. */
     private var scriptModulo: String? = null
+
+    /** TK-071-6 (R0419, RES-0166): subframes del PROXIMO documento
+     * (frame tree de 1 nivel del motor, X02); los inyecta loadPagina
+     * como texto del iframe y se consume con el documento. */
+    private var subframesPendientes: List<NavSubframe> = emptyList()
 
     /** C5 v1 (R0280, RES-0121): sesion del loop del script VIVO; la
      *  sesion anterior muere ANTES de abrir la del documento nuevo
@@ -292,6 +298,7 @@ class PaintView(context: Context) : View(context) {
         modoDemo = false
         scrollDocumento = scroll
         document = DomDocument.parse(html)
+        inyectarSubframes()
         devtoolsModel = DevToolsModel(document, css)
         root = document.nodeOf(document.rootHandle())
         rootDoc = root as DomNode.Document
@@ -330,6 +337,76 @@ class PaintView(context: Context) : View(context) {
     fun cargarCosmeticosModulo(texto: String?, host: String?) {
         hostCosmeticos = host
         listaCosmeticos = if (texto == null || host == null) null else CosmeticosModulos.parse(texto)
+    }
+
+    /** TK-071-6 (R0419, RES-0166): fija los subframes del PROXIMO
+     * documento (frame tree de 1 nivel del motor, X02); los inyecta
+     * loadPagina como texto del iframe y se consume con el. */
+    fun cargarSubframes(subframes: List<NavSubframe>) {
+        subframesPendientes = subframes
+    }
+
+    /**
+     * TK-071-6 (R0419, RES-0166): reemplaza el texto de fallback de cada
+     * iframe por el contenido visible del subframe (texto plano del
+     * subdocumento) o por un aviso honesto con su estado. La
+     * correspondencia es por ORDEN de documento contra walkLoadItems del
+     * motor (mismo html, mismo recorrido): si el numero de iframes con
+     * src no coincide con el de subframes, NO se toca nada.
+     */
+    private fun inyectarSubframes() {
+        if (subframesPendientes.isEmpty()) return
+        val iframes = ArrayList<DomHandle>()
+        fun walk(h: DomHandle) {
+            val n = document.nodeOf(h)
+            if (n is DomNode.Element) {
+                if (n.name == "iframe" && n.attributes["src"] != null) {
+                    iframes.add(h)
+                    return
+                }
+                for (k in document.childrenOf(h)) walk(k)
+            } else if (n is DomNode.Document) {
+                for (k in document.childrenOf(h)) walk(k)
+            }
+        }
+        walk(document.rootHandle())
+        if (iframes.size != subframesPendientes.size) {
+            subframesPendientes = emptyList()
+            return
+        }
+        for (i in iframes.indices) {
+            val sf = subframesPendientes[i]
+            for (k in document.childrenOf(iframes[i]).toList()) document.removeChild(iframes[i], k)
+            val texto = if (sf.estado == "loaded" && sf.document != null) {
+                textoPlanoDe(sf.document)
+            } else {
+                "[iframe " + (sf.url ?: sf.src) + " " + sf.estado + "]"
+            }
+            if (texto.isNotBlank()) document.appendChild(iframes[i], document.createTextNode(texto))
+        }
+        subframesPendientes = emptyList()
+    }
+
+    /** Texto visible de un documento del motor (solo lectura, pre-orden). */
+    private fun textoPlanoDe(doc: DomDocument): String {
+        val out = StringBuilder()
+        fun walk(h: DomHandle) {
+            val n = doc.nodeOf(h)
+            when (n) {
+                is DomNode.Text -> {
+                    val t = n.data.trim()
+                    if (t.isNotEmpty()) {
+                        if (out.isNotEmpty()) out.append(' ')
+                        out.append(t)
+                    }
+                }
+                is DomNode.Document -> for (k in doc.childrenOf(h)) walk(k)
+                is DomNode.Element -> for (k in doc.childrenOf(h)) walk(k)
+                else -> {}
+            }
+        }
+        walk(doc.rootHandle())
+        return out.toString()
     }
 
     /** C5 v1 (R0280, RES-0121): corre el script de documento contra el
