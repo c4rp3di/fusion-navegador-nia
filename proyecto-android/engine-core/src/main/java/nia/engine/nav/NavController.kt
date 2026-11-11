@@ -111,6 +111,14 @@ import nia.engine.url.UrlParser
  * subframes de ese subframe (mismo fetch/particion/sandbox/scripts; el
  * fallo de red de cualquier nivel tumba la navegacion tras el commit
  * como los de nivel 1); a profundidad 3 no se cargan mas.
+ *
+ * T071 v2f / TK-071-4 (R0432, RES-0170): CSP por directiva: la cabecera
+ * Content-Security-Policy del documento (si viene) se aplica con
+ * script-src, style-src, img-src y frame-src con fallback a default-src
+ * sobre scripts inline (solo 'unsafe-inline'), scripts src, subrecursos
+ * image/stylesheet y frames de nivel 1; lo bloqueado se registra como
+ * "blocked-csp" SIN fetch ni ejecucion; la CSP del subdocumento propio
+ * queda para version siguiente.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -155,6 +163,11 @@ data class NavSubframe(
  *
  * T071 v2 (R0416, RES-0165): subframes lista los iframes con src del
  * documento (frame tree de 1 nivel, X02); vacia en paginas sin iframe.
+ *
+ * T071 v2f (R0432, RES-0170): csp lleva el crudo de la cabecera
+ * Content-Security-Policy de la respuesta del documento (null si no
+ * viene); la politica se aplica por directiva sobre los subrecursos,
+ * scripts y frames de ESTE documento.
  */
 data class NavPage(
     val url: String,
@@ -168,7 +181,8 @@ data class NavPage(
     val events: List<NavEvent>,
     val tls: TlsInfo? = null,
     val html: String? = null,
-    val subframes: List<NavSubframe> = emptyList()
+    val subframes: List<NavSubframe> = emptyList(),
+    val csp: String? = null
 )
 
 /**
@@ -331,6 +345,8 @@ class NavController(
             return NavOutcome.Failed(NavState.PARSING, ErrorCode.UNSUPPORTED, "origen opaco", null)
         }
         val site = Site.fromOrigin(tuple)
+        val cspCrudo = headerValue(body.headers, "content-security-policy")
+        val csp = parseCsp(cspCrudo)
         lastState = NavState.COMMITTED
         events.add(NavEvent(NavState.COMMITTED, current))
         if (push) {
@@ -340,7 +356,8 @@ class NavController(
         }
         val committed = NavPage(
             current, body.status, origin, site, document, document.snapshot().revision,
-            ArrayList(), ArrayList(), ArrayList(events), body.seguridad, fuente
+            ArrayList(), ArrayList(), ArrayList(events), body.seguridad, fuente,
+            csp = cspCrudo
         )
         page = committed
         lastState = NavState.LOADED
@@ -357,36 +374,54 @@ class NavController(
         for (item in items) {
             when (item) {
                 is LoadItem.Subresource -> {
-                    val r = fetchSide(item.url, finalUrl, site, item.kind, current)
-                    if (r is SideResult.NavFailure) {
-                        return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                    val dir = if (item.kind == "stylesheet") "style-src" else "img-src"
+                    if (!cspPermite(csp, dir, item.url, origin, false)) {
+                        subresources.add(NavSubresource(item.kind, item.url, "blocked-csp"))
+                    } else {
+                        val r = fetchSide(item.url, finalUrl, site, item.kind, current)
+                        if (r is SideResult.NavFailure) {
+                            return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                        }
+                        subresources.add(NavSubresource(item.kind, item.url, describe(r)))
                     }
-                    subresources.add(NavSubresource(item.kind, item.url, describe(r)))
                 }
                 is LoadItem.InlineScript -> {
                     inlineCount += 1
-                    val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
-                    scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
+                    if (!cspPermite(csp, "script-src", null, origin, true)) {
+                        scripts.add(NavScript("inline:" + inlineCount, "blocked-csp"))
+                    } else {
+                        val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                        scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
+                    }
                 }
                 is LoadItem.ScriptSrc -> {
                     val ref = "src:" + item.url
-                    val r = fetchSide(item.url, finalUrl, site, "script", current)
-                    if (r is SideResult.NavFailure) {
-                        return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
-                    }
-                    if (r is SideResult.Ok) {
-                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
-                        scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                    if (!cspPermite(csp, "script-src", item.url, origin, false)) {
+                        scripts.add(NavScript(ref, "blocked-csp"))
                     } else {
-                        scripts.add(NavScript(ref, describe(r)))
+                        val r = fetchSide(item.url, finalUrl, site, "script", current)
+                        if (r is SideResult.NavFailure) {
+                            return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                        }
+                        if (r is SideResult.Ok) {
+                            val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                            scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                        } else {
+                            scripts.add(NavScript(ref, describe(r)))
+                        }
                     }
                 }
                 is LoadItem.Frame -> {
-                    val c = cargarSubframe(item.src, item.sandbox, finalUrl, site, current, 1)
-                    if (c is CargaSubframe.Fallo) {
-                        return NavOutcome.Failed(NavState.LOADED, c.code, c.message, committed)
+                    val frameUrl = resolveUrl(finalUrl, item.src)
+                    if (frameUrl != null && !cspPermite(csp, "frame-src", frameUrl, origin, false)) {
+                        subframes.add(NavSubframe(item.src, frameUrl, null, item.sandbox, "blocked-csp", null))
+                    } else {
+                        val c = cargarSubframe(item.src, item.sandbox, finalUrl, site, current, 1)
+                        if (c is CargaSubframe.Fallo) {
+                            return NavOutcome.Failed(NavState.LOADED, c.code, c.message, committed)
+                        }
+                        subframes.add((c as CargaSubframe.Ok).subframe)
                     }
-                    subframes.add((c as CargaSubframe.Ok).subframe)
                 }
             }
         }
@@ -551,6 +586,66 @@ class NavController(
         return CargaSubframe.Ok(
             NavSubframe(src, full, subOrigin, sandbox, "loaded", subDoc, subScripts, subHijos)
         )
+    }
+
+    /**
+     * T071 v2f / TK-071-4 (R0432, RES-0170): parseo de la cabecera
+     * Content-Security-Policy: directivas separadas por ';', nombre en
+     * minusculas y fuentes en crudo (vacias = 'none'); null si la
+     * cabecera no viene. Las directivas desconocidas se guardan y se
+     * ignoran al aplicar.
+     */
+    private fun parseCsp(crudo: String?): Map<String, List<String>>? {
+        if (crudo == null) return null
+        val out = LinkedHashMap<String, List<String>>()
+        for (parte in crudo.split(';')) {
+            val tokens = parte.trim().split(' ', '\t', '\n', '\r').filter { it.isNotEmpty() }
+            if (tokens.isEmpty()) continue
+            out[tokens[0].lowercase()] = tokens.drop(1)
+        }
+        return out
+    }
+
+    /**
+     * T071 v2f / TK-071-4: aplicacion POR DIRECTIVA con fallback a
+     * default-src SOLO si la directiva especifica falta (la especifica
+     * gana entera): sin CSP pasa todo; fuentes vacias o 'none' bloquean;
+     * inline pasa solo con 'unsafe-inline'; una url pasa con '*', con
+     * 'self' (mismo origen del documento) o si su origen coincide
+     * exacto con una fuente. Sin hashes, nonces, wildcards parciales ni
+     * report-only (v1).
+     */
+    private fun cspPermite(
+        csp: Map<String, List<String>>?,
+        directiva: String,
+        url: String?,
+        pageOrigin: Origin,
+        inline: Boolean
+    ): Boolean {
+        if (csp == null) return true
+        val fuentes = csp[directiva] ?: csp["default-src"] ?: return true
+        if (fuentes.isEmpty() || "'none'" in fuentes) return false
+        if (inline) return "'unsafe-inline'" in fuentes
+        if (url == null) return false
+        if ("*" in fuentes) return true
+        val origenUrl = try {
+            Origin.of(UrlParser.parse(url))
+        } catch (e: UrlParseException) {
+            null
+        } ?: return false
+        for (f in fuentes) {
+            if (f == "'self'") {
+                if (origenUrl == pageOrigin) return true
+            } else {
+                val origenFuente = try {
+                    Origin.of(UrlParser.parse(f))
+                } catch (e: UrlParseException) {
+                    null
+                }
+                if (origenFuente != null && origenFuente == origenUrl) return true
+            }
+        }
+        return false
     }
 
     private fun subframeOrigin(url: String): Origin? = try {
