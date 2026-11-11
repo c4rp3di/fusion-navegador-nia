@@ -1,6 +1,6 @@
 # ADR-020 — Casting a Smart TV: protocolos y subtítulos
 
-**Estado:** ACEPTADO (R0100, RES-0054) · **Base:** NIA-MAESTRO
+**Estado:** ACEPTADO (R0100, RES-0054; Enmienda 1 en R0401, RES-0159) · **Base:** NIA-MAESTRO
 
 - Problema: T066 (envío multimedia a Smart TV con subtítulos) necesita
   protocolos objetivo, dispositivos y la política de subtítulos del
@@ -22,10 +22,16 @@
   objetivo; NO se declara compatibilidad general de subtítulos por el
   mero hecho de enviar el vídeo — si el receptor no admite pistas
   externas, incompatibilidad honesta y visible.
-- Servidor temporal: para pistas o medios locales, servidor en loopback
-  SOLO si el receptor exige URL; acotado a la sesión y al dispositivo,
-  con cancelación y limpieza al desconectar (mismo patrón que la
-  exposición local del streaming de ADR-016).
+- Servidor temporal: para pistas o medios locales, servidor en la
+  interfaz LAN — **Enmienda 1 (R0401, RES-0159)**: el loopback original
+  es imposible para una TV remota, que no puede descargar del teléfono;
+  el endpoint escucha en la IPv4 de la LAN SOLO si el receptor exige
+  URL, acotado a la sesión y al dispositivo, sirve EXCLUSIVAMENTE el
+  medio y la pista elegidos en rutas con token aleatorio de sesión (sin
+  listados ni rutas arbitrarias), con caducidad por inactividad y
+  cancelación y limpieza al desconectar (mismo patrón que la exposición
+  local del streaming de ADR-016). Las URLs remotas van directas al
+  receptor, JAMAS por el servidor.
 - Límites: casting de URL/media NO es mirroring de pantalla; DRM,
   autenticación, códecs o restricciones del sitio pueden impedir el
   envío (ADR-015); la transcodificación con subtítulos incrustados queda

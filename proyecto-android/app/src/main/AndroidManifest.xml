@@ -3,6 +3,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- T066 v1 (R0401, RES-0159): descubrimiento SSDP de
+         receptores DLNA para el casting (ADR-020, enmienda R0401);
+         permiso NORMAL (sin dialogo) y MulticastLock solo durante
+         la busqueda. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- T065 v2 (R0385, RES-0154): servicio foreground de media con
          MediaSession y controles del sistema; SIN servicio
          residente sin reproduccion: el shell lo arranca al abrir el

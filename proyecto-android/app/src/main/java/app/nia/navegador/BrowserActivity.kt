@@ -569,6 +569,23 @@ class BrowserActivity : Activity() {
     @Volatile private var seekAlPrepararStream: Long? = null
     private var listenerStreamRegistrado = false
 
+    /** T066 v1 (R0401, RES-0159): casting DLNA a Smart TV (enmienda
+     *  de ADR-020): el endpoint LAN vive SOLO mientras dura el cast.
+     *  El hilo de refresco del cast lee el estado del receptor, por
+     *  eso los campos compartidos son @Volatile. */
+    private val castingDlna = CastingDlna(this)
+    private var servidorLan: ServidorLan? = null
+    @Volatile private var receptorCast: ReceptorDlna? = null
+    @Volatile private var castActivo = false
+    @Volatile private var estadoCast = "STOPPED"
+    @Volatile private var posCastMs = 0L
+    @Volatile private var durCastMs = 0L
+    private var hiloCast: Thread? = null
+    private var origenPlayer = ""
+    private var fuentePlayer = ""
+    private var contenidoSubsCast: String? = null
+    private var nombreArchivoStream = ""
+
     /** T072 (R0323, RES-0131): pool acotado para las navegaciones del
      *  shell (resto del hallazgo 3.1 del informe externo: un Thread
      *  nuevo por navegacion, SIN tope). Dos hilos: la politica del
@@ -3674,6 +3691,7 @@ class BrowserActivity : Activity() {
         streamTorrent = st
         sesionStreamTorrent = s
         indiceStreamTorrent = fileIndex
+        nombreArchivoStream = s.meta.files[fileIndex].path
         cacheStreamTorrent = cache
         escritosStreamTorrent = escritos
         prefijoPreparadoStream = escritos
@@ -3871,6 +3889,7 @@ class BrowserActivity : Activity() {
         escritosStreamTorrent = 0L
         prefijoPreparadoStream = 0L
         indiceStreamTorrent = -1
+        nombreArchivoStream = ""
         continuarPendienteTorrent = false
         seekAlPrepararStream = null
     }
@@ -4162,6 +4181,9 @@ class BrowserActivity : Activity() {
         // T109 v2 (R0366, RES-0148): el standalone NO esta atado a
         // pestana; "pagina" la fija el puente antes de llegar aqui.
         if (origen != "pagina") pestanaMedia = null
+        // T066 v1: el cast necesita saber que esta sonando.
+        origenPlayer = origen
+        fuentePlayer = fuente
         // T104 v2: la busqueda por hash necesita el archivo local.
         uriMediaLocal = if (origen == "archivo") fuente else null
         val contenedor = LinearLayout(this)
@@ -4200,6 +4222,9 @@ class BrowserActivity : Activity() {
         // con el prefijo YA crecido (recarga + seek en la posicion).
         val bStream = Button(this)
         bStream.text = "Continuar"
+        // T066 v1 (R0401, RES-0159): cast DLNA (enmienda ADR-020).
+        val bCast = Button(this)
+        bCast.text = "Cast"
         botones.addView(bPlay)
         botones.addView(bAtras)
         botones.addView(bAdelante)
@@ -4210,22 +4235,35 @@ class BrowserActivity : Activity() {
         botones.addView(bSubsMas)
         botones.addView(bSubsFuera)
         if (origen == "torrent") botones.addView(bStream)
+        botones.addView(bCast)
         contenedor.addView(botones)
         // T104 v1: overlay de subs del player (cue activo).
         val subsTexto = TextView(this)
         contenedor.addView(subsTexto)
         vistaSubs = subsTexto
         bPlay.setOnClickListener {
-            media.playPause()
-            refrescarPlayer(bPlay, relojTexto, barra)
+            if (castActivo) {
+                alternarCast()
+            } else {
+                media.playPause()
+                refrescarPlayer(bPlay, relojTexto, barra)
+            }
         }
         bAtras.setOnClickListener {
-            media.seekBy(-10000L)
-            refrescarPlayer(bPlay, relojTexto, barra)
+            if (castActivo) {
+                mandarSeekCast(posCastMs - 10000L)
+            } else {
+                media.seekBy(-10000L)
+                refrescarPlayer(bPlay, relojTexto, barra)
+            }
         }
         bAdelante.setOnClickListener {
-            media.seekBy(10000L)
-            refrescarPlayer(bPlay, relojTexto, barra)
+            if (castActivo) {
+                mandarSeekCast(posCastMs + 10000L)
+            } else {
+                media.seekBy(10000L)
+                refrescarPlayer(bPlay, relojTexto, barra)
+            }
         }
         bVolumen.setOnClickListener {
             volumenMedia = if (volumenMedia > 0.0) 0.0 else 1.0
@@ -4249,15 +4287,21 @@ class BrowserActivity : Activity() {
         }
         bSubsFuera.setOnClickListener {
             pistaSubs = null
+            contenidoSubsCast = null
             pintarSubs()
         }
         bStream.setOnClickListener { continuarStreamTorrent() }
+        bCast.setOnClickListener { elegirReceptorCast() }
         barra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(b: SeekBar?, progreso: Int, desdeUsuario: Boolean) {}
             override fun onStartTrackingTouch(b: SeekBar?) {}
             override fun onStopTrackingTouch(b: SeekBar?) {
-                media.seekTo(b?.progress?.toLong() ?: 0L)
-                refrescarPlayer(bPlay, relojTexto, barra)
+                if (castActivo) {
+                    mandarSeekCast(b?.progress?.toLong() ?: 0L)
+                } else {
+                    media.seekTo(b?.progress?.toLong() ?: 0L)
+                    refrescarPlayer(bPlay, relojTexto, barra)
+                }
             }
         })
         superficie.holder.addCallback(object : SurfaceHolder.Callback {
@@ -4306,8 +4350,241 @@ class BrowserActivity : Activity() {
         }, 300L)
     }
 
+    /** T066 v1 (R0401, RES-0159): boton Cast: busca receptores
+     *  DLNA por SSDP en un hilo aparte (JAMAS red en el de UI) y
+     *  conecta el elegido; con cast ya activo abre la pantalla del
+     *  receptor (enmienda de ADR-020: sin receptores, aviso
+     *  honesto, JAMAS un receptor inventado). */
+    private fun elegirReceptorCast() {
+        if (castActivo) {
+            pantallaReceptorCast()
+            return
+        }
+        estado.text = "cast: buscando receptores en la red..."
+        Thread {
+            val encontrados = castingDlna.buscar(4000)
+            runOnUiThread {
+                if (encontrados.isEmpty()) {
+                    estado.text = "cast: ningun receptor DLNA en la red"
+                    return@runOnUiThread
+                }
+                val nombres = encontrados.map { r -> r.nombre }.toTypedArray()
+                AlertDialog.Builder(this)
+                    .setTitle("Enviar a la tele")
+                    .setItems(nombres) { _, cual -> conectarCast(encontrados[cual]) }
+                    .setNegativeButton("Cerrar", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    /** Conecta el receptor elegido: la URL remota va DIRECTA al
+     *  receptor; el archivo o el stream del torrent van por el
+     *  endpoint LAN (token de sesion, SOLO el medio elegido y la
+     *  pista elegida, cierre al desconectar; enmienda ADR-020). El
+     *  player local PAUSA al conectar: sin doble audio. */
+    private fun conectarCast(receptor: ReceptorDlna) {
+        var uriVideo: String? = null
+        var archivoMedio: File? = null
+        var uriMedio: String? = null
+        if (origenPlayer == "url" ||
+            (origenPlayer == "pagina" && fuentePlayer.startsWith("http"))
+        ) {
+            uriVideo = fuentePlayer
+        } else if (origenPlayer == "torrent" && fuentePlayer.startsWith("file://")) {
+            archivoMedio = File(Uri.parse(fuentePlayer).path ?: "")
+            if (!archivoMedio.exists()) archivoMedio = null
+        } else if (origenPlayer == "archivo" && fuentePlayer.startsWith("content://")) {
+            uriMedio = fuentePlayer
+        } else {
+            estado.text = "cast: esta fuente no se puede enviar a la tele"
+            return
+        }
+        val pistaVtt = subsParaCast()
+        if (contenidoSubsCast != null && pistaVtt == null) {
+            estado.text = "cast: la pista no es compatible con la tele; ira sin ella"
+        }
+        if (origenPlayer == "torrent") {
+            traza("cast", "torrent sin terminar: la tele puede cortarse en el prefijo")
+        }
+        if (archivoMedio != null || uriMedio != null || pistaVtt != null) {
+            val servidor = ServidorLan()
+            if (!servidor.arrancar(archivoMedio, uriMedio, pistaVtt, nombreMedioCast(), contentResolver)) {
+                estado.text = "cast: sin red LAN para servir el medio a la tele"
+                return
+            }
+            servidorLan = servidor
+            if (uriVideo == null) uriVideo = servidor.urlMedio()
+        }
+        if (uriVideo == null) {
+            estado.text = "cast: sin fuente preparada para el receptor"
+            return
+        }
+        media.pause()
+        val nombreMedio = nombreMedioCast()
+        val videoFinal = uriVideo
+        Thread {
+            val subsUrl = servidorLan?.urlSubs()
+            val enviado = castingDlna.enviar(
+                receptor, videoFinal, nombreMedio,
+                CastingDlna.mimeDe(nombreMedio), subsUrl
+            ) && castingDlna.play(receptor)
+            runOnUiThread {
+                if (!enviado) {
+                    estado.text = "cast: el receptor no acepto el envio"
+                    desconectarCast(false)
+                    return@runOnUiThread
+                }
+                receptorCast = receptor
+                castActivo = true
+                estadoCast = "PLAYING"
+                arrancarRefrescoCast()
+                estado.text = "cast: enviando a " + receptor.nombre
+                traza("cast", "conectado a " + receptor.nombre)
+            }
+        }.start()
+    }
+
+    /** Pista elegida lista para el receptor (ADR-020): WebVTT
+     *  directa, SRT convertida sin perdida esencial (solo la coma
+     *  de los tiempos a punto), cualquier otra pista avisa y va
+     *  SIN pista; JAMAS se prometen subtitulos universales. */
+    private fun subsParaCast(): String? {
+        val limpio = contenidoSubsCast?.trim() ?: return null
+        if (limpio.startsWith("WEBVTT")) return limpio
+        if (limpio.contains(" --> ") && limpio.contains(",")) {
+            val cuerpo = limpio.split("\n").joinToString("\n") { linea ->
+                if (linea.contains(" --> ")) linea.replace(",", ".") else linea
+            }
+            return "WEBVTT\n\n" + cuerpo
+        }
+        return null
+    }
+
+    /** Nombre del medio para el DIDL del receptor. */
+    private fun nombreMedioCast(): String {
+        val f = fuentePlayer
+        return when {
+            origenPlayer == "torrent" && nombreArchivoStream.isNotEmpty() -> nombreArchivoStream
+            f.startsWith("file://") -> File(Uri.parse(f).path ?: "").name
+            f.startsWith("content://") -> {
+                val seg = Uri.parse(f).lastPathSegment ?: "media"
+                seg.substringAfterLast("/").substringAfterLast(":")
+            }
+            else -> hostDe(f)
+        }
+    }
+
+    /** Hilo de refresco del cast: SOLO consultas SOAP al receptor
+     *  (posicion/duracion/estado); la UI lee los campos @Volatile
+     *  en su tick de 300 ms, JAMAS red en el hilo de UI. */
+    private fun arrancarRefrescoCast() {
+        hiloCast?.interrupt()
+        hiloCast = Thread {
+            while (castActivo) {
+                val receptor = receptorCast
+                if (receptor != null) {
+                    val pos = castingDlna.posicion(receptor)
+                    if (pos != null) {
+                        posCastMs = pos.first
+                        if (pos.second > 0) durCastMs = pos.second
+                    }
+                    estadoCast = castingDlna.estado(receptor) ?: estadoCast
+                }
+                try {
+                    Thread.sleep(1000L)
+                } catch (e: InterruptedException) {
+                    break
+                }
+            }
+        }
+        hiloCast?.start()
+    }
+
+    /** Alterna el cast con un solo SOAP (pausa o play). */
+    private fun alternarCast() {
+        if (estadoCast == "PLAYING") castingPausa() else castingPlay()
+    }
+
+    private fun castingPlay() {
+        val receptor = receptorCast ?: return
+        Thread {
+            if (castingDlna.play(receptor)) estadoCast = "PLAYING"
+        }.start()
+    }
+
+    private fun castingPausa() {
+        val receptor = receptorCast ?: return
+        Thread {
+            if (castingDlna.pausa(receptor)) estadoCast = "PAUSED_PLAYBACK"
+        }.start()
+    }
+
+    /** Seek al receptor (REL_TIME) en hilo aparte; la barra local
+     *  pinta la posicion volatil hasta que el refresco la trae. */
+    private fun mandarSeekCast(ms: Long) {
+        val receptor = receptorCast ?: return
+        posCastMs = ms.coerceAtLeast(0L)
+        Thread { castingDlna.saltar(receptor, posCastMs / 1000L) }.start()
+    }
+
+    /** Pantalla del receptor: pausar/reanudar y desconectar (el
+     *  Stop del receptor SIEMPRE al desconectar; el endpoint LAN
+     *  se cierra y la reproduccion local queda en pausa). */
+    private fun pantallaReceptorCast() {
+        val receptor = receptorCast ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Cast: " + receptor.nombre)
+            .setItems(arrayOf("Pausa / Reanudar", "Desconectar")) { _, cual ->
+                if (cual == 0) alternarCast() else desconectarCast(false)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Desconecta el cast: Stop al receptor (best-effort), cierre
+     *  del endpoint LAN (enmienda de ADR-020: nada queda
+     *  escuchando) y reproduccion local en pausa; silencioso al
+     *  cerrar el player. */
+    private fun desconectarCast(desdeCierre: Boolean) {
+        val receptor = receptorCast
+        if (receptor != null) {
+            Thread { castingDlna.parar(receptor) }.start()
+        }
+        castActivo = false
+        estadoCast = "STOPPED"
+        receptorCast = null
+        hiloCast?.interrupt()
+        hiloCast = null
+        servidorLan?.detener()
+        servidorLan = null
+        if (!desdeCierre) {
+            estado.text = "cast: desconectado"
+            traza("cast", "desconectado")
+        }
+    }
+
     /** Refresco del player: etiqueta, reloj y barra desde el motor. */
     private fun refrescarPlayer(bPlay: Button, relojTexto: TextView, barra: SeekBar) {
+        // T066 v1: en cast el estado REAL es el del receptor (el
+        //  hilo de refresco lo trae por SOAP cada segundo).
+        if (castActivo) {
+            val activo = estadoCast == "PLAYING"
+            bPlay.text = if (activo) "Pausa" else "Reproducir"
+            val posSeg = posCastMs / 1000
+            val durSeg = durCastMs / 1000
+            relojTexto.text = formatoTiempo(posSeg) + " / " + formatoTiempo(durSeg) +
+                " (cast: " + (receptorCast?.nombre ?: "?") + ")"
+            if (durSeg > 0) {
+                barra.max = durSeg.toInt()
+                if (!barra.isPressed) barra.progress = posSeg.toInt().coerceAtMost(durSeg.toInt())
+            } else {
+                barra.max = 0
+                if (!barra.isPressed) barra.progress = 0
+            }
+            ServicioMedia.estado(activo, posCastMs, durCastMs)
+            return
+        }
         val est = media.state()
         bPlay.text = if (est == MediaState.PLAYING) "Pausa" else "Reproducir"
         val posSeg = media.position() / 1000
@@ -4393,6 +4670,8 @@ class BrowserActivity : Activity() {
     /** Cierre del player: corta el refresco y libera el backend REAL. */
     private fun cerrarPlayer() {
         playerAbierto = false
+        // T066 v1: el cast y su endpoint LAN mueren con el player.
+        desconectarCast(true)
         media.close()
         soltarAudioFocus()
         pestanaMedia = null
@@ -4403,6 +4682,7 @@ class BrowserActivity : Activity() {
         // T104 v1: la pista efimera muere con el player; las
         // descargadas persistentes siguen en el almacen privado.
         pistaSubs = null
+        contenidoSubsCast = null
         vistaSubs = null
         uriMediaLocal = null
         traza("media", "player cerrado")
@@ -4444,13 +4724,15 @@ class BrowserActivity : Activity() {
         runOnUiThread {
             if (!playerAbierto) return@runOnUiThread
             when (orden) {
-                "play" -> {
+                "play" -> if (castActivo) {
+                    castingPlay()
+                } else {
                     pedirAudioFocus()
                     media.play()
                 }
-                "pause" -> media.pause()
+                "pause" -> if (castActivo) castingPausa() else media.pause()
                 "stop" -> cerrarPlayer()
-                "seek" -> media.seekTo(ms)
+                "seek" -> if (castActivo) mandarSeekCast(ms) else media.seekTo(ms)
             }
         }
     }
@@ -4809,6 +5091,7 @@ class BrowserActivity : Activity() {
             return
         }
         pistaSubs = pista
+        contenidoSubsCast = contenido
         pintarSubs()
         estado.text = "subs os: pista activa (" + nombre + ")"
         traza("media", "subs os activa")
