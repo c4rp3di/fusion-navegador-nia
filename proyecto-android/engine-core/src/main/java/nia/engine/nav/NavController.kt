@@ -119,6 +119,13 @@ import nia.engine.url.UrlParser
  * image/stylesheet y frames de nivel 1; lo bloqueado se registra como
  * "blocked-csp" SIN fetch ni ejecucion; la CSP del subdocumento propio
  * queda para version siguiente.
+ *
+ * T111 v3 / TK-111-2 (R0434, RES-0171): async/defer/module: los script
+ * src con defer (o type=module sin async) se ejecutan DESPUES del resto
+ * de la carga, en orden de documento; async (y module con async) se
+ * ejecutan al cargar como los classic; type=module inline tambien
+ * defiere. Los module corren SIN resolucion de import/export
+ * (exclusion): si fallan, la salida lo muestra.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -371,6 +378,8 @@ class NavController(
         val baseMedia = finalUrl.scheme + "://" + finalUrl.host +
             (if (finalUrl.port != null) ":" + finalUrl.port else "")
         var inlineCount = 0
+        val deferPendientes = ArrayList<DeferPendiente>()
+        var deferInline = 0
         for (item in items) {
             when (item) {
                 is LoadItem.Subresource -> {
@@ -386,28 +395,37 @@ class NavController(
                     }
                 }
                 is LoadItem.InlineScript -> {
-                    inlineCount += 1
-                    if (!cspPermite(csp, "script-src", null, origin, true)) {
-                        scripts.add(NavScript("inline:" + inlineCount, "blocked-csp"))
+                    if (item.defer) {
+                        deferInline += 1
+                        deferPendientes.add(DeferPendiente("defer:inline:" + deferInline, null, item.source))
                     } else {
-                        val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
-                        scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
+                        inlineCount += 1
+                        if (!cspPermite(csp, "script-src", null, origin, true)) {
+                            scripts.add(NavScript("inline:" + inlineCount, "blocked-csp"))
+                        } else {
+                            val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                            scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
+                        }
                     }
                 }
                 is LoadItem.ScriptSrc -> {
-                    val ref = "src:" + item.url
-                    if (!cspPermite(csp, "script-src", item.url, origin, false)) {
-                        scripts.add(NavScript(ref, "blocked-csp"))
+                    if (item.defer) {
+                        deferPendientes.add(DeferPendiente("defer:src:" + item.url, item.url, null))
                     } else {
-                        val r = fetchSide(item.url, finalUrl, site, "script", current)
-                        if (r is SideResult.NavFailure) {
-                            return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
-                        }
-                        if (r is SideResult.Ok) {
-                            val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
-                            scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                        val ref = if (item.async) "async:src:" + item.url else "src:" + item.url
+                        if (!cspPermite(csp, "script-src", item.url, origin, false)) {
+                            scripts.add(NavScript(ref, "blocked-csp"))
                         } else {
-                            scripts.add(NavScript(ref, describe(r)))
+                            val r = fetchSide(item.url, finalUrl, site, "script", current)
+                            if (r is SideResult.NavFailure) {
+                                return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                            }
+                            if (r is SideResult.Ok) {
+                                val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                                scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                            } else {
+                                scripts.add(NavScript(ref, describe(r)))
+                            }
                         }
                     }
                 }
@@ -425,6 +443,32 @@ class NavController(
                 }
             }
         }
+        for (d in deferPendientes) {
+            if (d.src != null) {
+                val ds = d.src
+                if (!cspPermite(csp, "script-src", ds, origin, false)) {
+                    scripts.add(NavScript(d.ref, "blocked-csp"))
+                } else {
+                    val r = fetchSide(ds, finalUrl, site, "script", current)
+                    if (r is SideResult.NavFailure) {
+                        return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                    }
+                    if (r is SideResult.Ok) {
+                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                        scripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
+                    } else {
+                        scripts.add(NavScript(d.ref, describe(r)))
+                    }
+                }
+            } else {
+                if (!cspPermite(csp, "script-src", null, origin, true)) {
+                    scripts.add(NavScript(d.ref, "blocked-csp"))
+                } else {
+                    val result = JsInterpreter.evaluateWithDom(d.source!!, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia)
+                    scripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
+                }
+            }
+        }
         events.add(NavEvent(NavState.LOADED, current))
         val loaded = committed.copy(
             subresources = subresources,
@@ -436,10 +480,26 @@ class NavController(
         return NavOutcome.Loaded(loaded)
     }
 
+    /**
+     * T111 v3 / TK-111-2 (R0434, RES-0171): script defer encolado durante
+     * el recorrido, con su ref ya numerada y el src o el fuente crudo
+     * (nunca ambos); se ejecuta al final de la carga, en orden.
+     */
+    private class DeferPendiente(val ref: String, val src: String?, val source: String?)
+
     private sealed class LoadItem {
         data class Subresource(val kind: String, val url: String) : LoadItem()
-        data class InlineScript(val source: String) : LoadItem()
-        data class ScriptSrc(val url: String) : LoadItem()
+        data class InlineScript(
+            val source: String,
+            val defer: Boolean = false,
+            val module: Boolean = false
+        ) : LoadItem()
+        data class ScriptSrc(
+            val url: String,
+            val async: Boolean = false,
+            val defer: Boolean = false,
+            val module: Boolean = false
+        ) : LoadItem()
         data class Frame(val src: String, val sandbox: List<String>) : LoadItem()
     }
 
@@ -548,25 +608,35 @@ class NavController(
                     (if (subUrl.port != null) ":" + subUrl.port else "")
                 val subItems = ArrayList<LoadItem>()
                 walkLoadItems(subDoc.nodeOf(subDoc.rootHandle()), subUrl, subItems)
+                val subDefer = ArrayList<DeferPendiente>()
                 var subInline = 0
                 for (sub in subItems) {
                     when (sub) {
                         is LoadItem.InlineScript -> {
-                            subInline += 1
-                            val result = JsInterpreter.evaluateWithDom(sub.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
-                            subScripts.add(NavScript("inline:" + subInline, JsInterpreter.dumpResult(result)))
+                            if (sub.defer) {
+                                subInline += 1
+                                subDefer.add(DeferPendiente("defer:inline:" + subInline, null, sub.source))
+                            } else {
+                                subInline += 1
+                                val result = JsInterpreter.evaluateWithDom(sub.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                                subScripts.add(NavScript("inline:" + subInline, JsInterpreter.dumpResult(result)))
+                            }
                         }
                         is LoadItem.ScriptSrc -> {
-                            val ref = "src:" + sub.url
-                            val sr = fetchSide(sub.url, subUrl, topSite, "script", currentUrl)
-                            if (sr is SideResult.NavFailure) {
-                                return CargaSubframe.Fallo(sr.code, sr.message)
-                            }
-                            if (sr is SideResult.Ok) {
-                                val result = JsInterpreter.evaluateWithDom(sr.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
-                                subScripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                            if (sub.defer) {
+                                subDefer.add(DeferPendiente("defer:src:" + sub.url, sub.url, null))
                             } else {
-                                subScripts.add(NavScript(ref, describe(sr)))
+                                val ref = if (sub.async) "async:src:" + sub.url else "src:" + sub.url
+                                val sr = fetchSide(sub.url, subUrl, topSite, "script", currentUrl)
+                                if (sr is SideResult.NavFailure) {
+                                    return CargaSubframe.Fallo(sr.code, sr.message)
+                                }
+                                if (sr is SideResult.Ok) {
+                                    val result = JsInterpreter.evaluateWithDom(sr.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                                    subScripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
+                                } else {
+                                    subScripts.add(NavScript(ref, describe(sr)))
+                                }
                             }
                         }
                         is LoadItem.Frame -> {
@@ -579,6 +649,24 @@ class NavController(
                             }
                         }
                         else -> {}
+                    }
+                }
+                for (d in subDefer) {
+                    if (d.src != null) {
+                        val ds = d.src
+                        val r2 = fetchSide(ds, subUrl, topSite, "script", currentUrl)
+                        if (r2 is SideResult.NavFailure) {
+                            return CargaSubframe.Fallo(r2.code, r2.message)
+                        }
+                        if (r2 is SideResult.Ok) {
+                            val result = JsInterpreter.evaluateWithDom(r2.source, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                            subScripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
+                        } else {
+                            subScripts.add(NavScript(d.ref, describe(r2)))
+                        }
+                    } else {
+                        val result = JsInterpreter.evaluateWithDom(d.source!!, subDoc, cuotasScript, subFetchApi, subStorageApi, puenteMedia, subBaseMedia)
+                        subScripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
                     }
                 }
             }
@@ -662,20 +750,31 @@ class NavController(
             .filter { it.isNotEmpty() }
     }
 
-    /** Recorrido en orden del documento que declara la fase LOADED. */
+    /**
+     * Recorrido en orden del documento que declara la fase LOADED.
+     *
+     * T111 v3 (R0434, RES-0171): los script se recogen con async/defer
+     * (por presencia) y type=module medidos: async gana a defer, defer o
+     * module sin async difieren, el inline classic ignora defer y solo
+     * el module inline defiere.
+     */
     private fun walkLoadItems(node: DomNode, page: Url, out: MutableList<LoadItem>) {
         if (node is DomNode.Element) {
             when (node.name) {
                 "script" -> {
                     val src = node.attributes["src"]
+                    val tipo = node.attributes["type"]
+                    val module = tipo != null && tipo.trim().lowercase() == "module"
+                    val esAsync = node.attributes.containsKey("async")
+                    val esDefer = (node.attributes.containsKey("defer") || module) && !esAsync
                     if (src == null) {
                         val text = node.children.firstOrNull() as? DomNode.Text
                         if (text != null && text.data.isNotBlank()) {
-                            out.add(LoadItem.InlineScript(text.data))
+                            out.add(LoadItem.InlineScript(text.data, module, module))
                         }
                     } else {
                         val full = resolveUrl(page, src)
-                        if (full != null) out.add(LoadItem.ScriptSrc(full))
+                        if (full != null) out.add(LoadItem.ScriptSrc(full, esAsync, esDefer, module))
                     }
                 }
                 "img" -> {
