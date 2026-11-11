@@ -93,6 +93,11 @@ import nia.engine.url.UrlParser
  * scripts ni subframes anidados. NavPage.subframes expone cada uno
  * (src crudo, url resuelta, origin --null/opaco con sandbox sin
  * allow-same-origin--, flags sandbox medidos, estado y subdocumento).
+ *
+ * T071 v2c / TK-071-7 (R0423, RES-0167): los iframes SIN src (o con src
+ * vacio) tambien entran al frame tree como about:blank SINTETICO:
+ * subframe loaded con url "about:blank", origin null (opaco, NO hereda
+ * el del padre) y subdocumento vacio, SIN fetch de red.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -358,25 +363,31 @@ class NavController(
                     }
                 }
                 is LoadItem.Frame -> {
-                    val full = resolveUrl(finalUrl, item.src)
-                    if (full == null) {
-                        subframes.add(NavSubframe(item.src, null, null, item.sandbox, "unresolved", null))
+                    if (item.src.isEmpty()) {
+                        subframes.add(
+                            NavSubframe(item.src, "about:blank", null, item.sandbox, "loaded", DomDocument.parse(""))
+                        )
                     } else {
-                        val r = fetchSide(full, finalUrl, site, "document", current)
-                        if (r is SideResult.NavFailure) {
-                            return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
-                        }
-                        if (r is SideResult.Ok) {
-                            val opaco = item.sandbox.isNotEmpty() && "allow-same-origin" !in item.sandbox
-                            val subOrigin = if (opaco) null else subframeOrigin(full)
-                            subframes.add(
-                                NavSubframe(
-                                    item.src, full, subOrigin, item.sandbox, "loaded",
-                                    DomDocument.parse(r.source)
-                                )
-                            )
+                        val full = resolveUrl(finalUrl, item.src)
+                        if (full == null) {
+                            subframes.add(NavSubframe(item.src, null, null, item.sandbox, "unresolved", null))
                         } else {
-                            subframes.add(NavSubframe(item.src, full, null, item.sandbox, describe(r), null))
+                            val r = fetchSide(full, finalUrl, site, "document", current)
+                            if (r is SideResult.NavFailure) {
+                                return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                            }
+                            if (r is SideResult.Ok) {
+                                val opaco = item.sandbox.isNotEmpty() && "allow-same-origin" !in item.sandbox
+                                val subOrigin = if (opaco) null else subframeOrigin(full)
+                                subframes.add(
+                                    NavSubframe(
+                                        item.src, full, subOrigin, item.sandbox, "loaded",
+                                        DomDocument.parse(r.source)
+                                    )
+                                )
+                            } else {
+                                subframes.add(NavSubframe(item.src, full, null, item.sandbox, describe(r), null))
+                            }
                         }
                     }
                 }
@@ -500,9 +511,7 @@ class NavController(
                 }
                 "iframe" -> {
                     val src = node.attributes["src"]
-                    if (src != null) {
-                        out.add(LoadItem.Frame(src, sandboxFlags(node.attributes["sandbox"])))
-                    }
+                    out.add(LoadItem.Frame(src ?: "", sandboxFlags(node.attributes["sandbox"])))
                 }
             }
         }

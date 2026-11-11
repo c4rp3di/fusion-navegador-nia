@@ -351,8 +351,11 @@ class PaintView(context: Context) : View(context) {
      * iframe por el contenido visible del subframe (texto plano del
      * subdocumento) o por un aviso honesto con su estado. La
      * correspondencia es por ORDEN de documento contra walkLoadItems del
-     * motor (mismo html, mismo recorrido): si el numero de iframes con
-     * src no coincide con el de subframes, NO se toca nada.
+     * motor (mismo html, mismo recorrido): si el numero de iframes no
+     * coincide con el de subframes, NO se toca nada.
+     *
+     * TK-071-7 (R0423, RES-0167): los iframes SIN src tambien cuentan
+     * (about:blank sintetico del motor): quedan como caja vacia.
      */
     private fun inyectarSubframes() {
         if (subframesPendientes.isEmpty()) return
@@ -360,7 +363,7 @@ class PaintView(context: Context) : View(context) {
         fun walk(h: DomHandle) {
             val n = document.nodeOf(h)
             if (n is DomNode.Element) {
-                if (n.name == "iframe" && n.attributes["src"] != null) {
+                if (n.name == "iframe") {
                     iframes.add(h)
                     return
                 }
