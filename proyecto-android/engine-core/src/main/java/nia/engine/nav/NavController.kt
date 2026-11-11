@@ -66,8 +66,9 @@ import nia.engine.url.UrlParser
  * la respuesta final (null si el transporte no lo expone o sirvio de
  * cache: NUNCA se fabrica).
  *
- * Exclusiones v1 (API propia del motor): sin frame tree ni CSP (X02,
- * subtareas futuras de T071); un solo Set-Cookie por respuesta (el
+ * Exclusiones v1 (API propia del motor): frame tree minimo desde T071
+ * v2 (R0416, RES-0165: iframes con src cargados 1 nivel, sin scripts
+ * de subframe); CSP sigue fuera (X02); un solo Set-Cookie por respuesta (el
  * transporte entrega cabeceras como mapa); Location relativa compleja
  * sin resolver (RedirectPolicy la entrega como Stop); subrecursos
  * resueltos contra la base efectiva desde T111 v2 (R0404, RES-0161:
@@ -84,6 +85,14 @@ import nia.engine.url.UrlParser
  * (image, stylesheet, script) viaja con su tipo e iniciador; el
  * tercero lo calcula el host contra Site v1. Sin filtro, el
  * comportamiento es exactamente el de antes.
+ *
+ * T071 v2 / X02 frame tree minimo (R0416, RES-0165): los iframes con
+ * src del documento se cargan en LOADED como subframes de 1 nivel:
+ * resolveUrl contra la base efectiva, fetchSide tipo "document" con
+ * mixed-content y cookies EMBEDDED reales, subdocumento parseado SIN
+ * scripts ni subframes anidados. NavPage.subframes expone cada uno
+ * (src crudo, url resuelta, origin --null/opaco con sandbox sin
+ * allow-same-origin--, flags sandbox medidos, estado y subdocumento).
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -97,12 +106,31 @@ data class NavSubresource(val kind: String, val url: String, val outcome: String
 data class NavScript(val ref: String, val output: String)
 
 /**
+ * Subframe de 1 nivel (T071 v2, X02): src crudo del iframe, url resuelta
+ * (null si no resuelve), origin del subframe (null/opaco cuando el
+ * sandbox esta presente sin allow-same-origin), flags sandbox medidas,
+ * estado (loaded, blocked-mixed-content, failed:CODE, unresolved) y el
+ * subdocumento parseado (null si no cargo).
+ */
+data class NavSubframe(
+    val src: String,
+    val url: String?,
+    val origin: Origin?,
+    val sandbox: List<String>,
+    val estado: String,
+    val document: DomDocument?
+)
+
+/**
  * Pagina comprometida: URL final tras redirecciones, estado, identidad,
  * documento vivo, revision capturada al commit y contadores de carga.
  *
  * T072 v2 (R0168, RES-0078): html lleva el crudo de la respuesta final
  * para que el shell pinte la pagina con el motor sin re-fetch; null si
  * el llamador no lo conoce.
+ *
+ * T071 v2 (R0416, RES-0165): subframes lista los iframes con src del
+ * documento (frame tree de 1 nivel, X02); vacia en paginas sin iframe.
  */
 data class NavPage(
     val url: String,
@@ -115,7 +143,8 @@ data class NavPage(
     val scripts: List<NavScript>,
     val events: List<NavEvent>,
     val tls: TlsInfo? = null,
-    val html: String? = null
+    val html: String? = null,
+    val subframes: List<NavSubframe> = emptyList()
 )
 
 /**
@@ -295,6 +324,7 @@ class NavController(
         walkLoadItems(document.nodeOf(document.rootHandle()), baseDeResolucion(document, finalUrl), items)
         val subresources = ArrayList<NavSubresource>()
         val scripts = ArrayList<NavScript>()
+        val subframes = ArrayList<NavSubframe>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
         val fetchApi = JsFetchApi(transport, clock, null, filter, current)
         val baseMedia = finalUrl.scheme + "://" + finalUrl.host +
@@ -327,13 +357,37 @@ class NavController(
                         scripts.add(NavScript(ref, describe(r)))
                     }
                 }
+                is LoadItem.Frame -> {
+                    val full = resolveUrl(finalUrl, item.src)
+                    if (full == null) {
+                        subframes.add(NavSubframe(item.src, null, null, item.sandbox, "unresolved", null))
+                    } else {
+                        val r = fetchSide(full, finalUrl, site, "document", current)
+                        if (r is SideResult.NavFailure) {
+                            return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                        }
+                        if (r is SideResult.Ok) {
+                            val opaco = item.sandbox.isNotEmpty() && "allow-same-origin" !in item.sandbox
+                            val subOrigin = if (opaco) null else subframeOrigin(full)
+                            subframes.add(
+                                NavSubframe(
+                                    item.src, full, subOrigin, item.sandbox, "loaded",
+                                    DomDocument.parse(r.source)
+                                )
+                            )
+                        } else {
+                            subframes.add(NavSubframe(item.src, full, null, item.sandbox, describe(r), null))
+                        }
+                    }
+                }
             }
         }
         events.add(NavEvent(NavState.LOADED, current))
         val loaded = committed.copy(
             subresources = subresources,
             scripts = scripts,
-            events = ArrayList(events)
+            events = ArrayList(events),
+            subframes = subframes
         )
         page = loaded
         return NavOutcome.Loaded(loaded)
@@ -343,6 +397,7 @@ class NavController(
         data class Subresource(val kind: String, val url: String) : LoadItem()
         data class InlineScript(val source: String) : LoadItem()
         data class ScriptSrc(val url: String) : LoadItem()
+        data class Frame(val src: String, val sandbox: List<String>) : LoadItem()
     }
 
     /** Resultado de un fetch lateral: subrecurso o script con src. */
@@ -392,6 +447,24 @@ class NavController(
         return SideResult.Ok(String(resp.body, Charsets.UTF_8))
     }
 
+    /**
+     * T071 v2 (R0416, RES-0165): origin del subframe; fetchSide ya
+     * rechaza urls con origen no-Tuple, asi que aqui el parse no falla.
+     */
+    private fun subframeOrigin(url: String): Origin? = try {
+        Origin.of(UrlParser.parse(url))
+    } catch (e: UrlParseException) {
+        null
+    }
+
+    /** Flags del atributo sandbox en minusculas, sin vacios; sin atributo, vacia. */
+    private fun sandboxFlags(raw: String?): List<String> {
+        if (raw == null) return emptyList()
+        return raw.split(' ', '\t', '\n', '\r', '\u000C')
+            .map { it.lowercase() }
+            .filter { it.isNotEmpty() }
+    }
+
     /** Recorrido en orden del documento que declara la fase LOADED. */
     private fun walkLoadItems(node: DomNode, page: Url, out: MutableList<LoadItem>) {
         if (node is DomNode.Element) {
@@ -423,6 +496,12 @@ class NavController(
                             val full = resolveUrl(page, href)
                             if (full != null) out.add(LoadItem.Subresource("stylesheet", full))
                         }
+                    }
+                }
+                "iframe" -> {
+                    val src = node.attributes["src"]
+                    if (src != null) {
+                        out.add(LoadItem.Frame(src, sandboxFlags(node.attributes["sandbox"])))
                     }
                 }
             }
