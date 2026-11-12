@@ -15,11 +15,13 @@ package nia.engine.js
  * se conserva como el VALOR JS entregado (sin clonado estructural: los
  * closures dentro no son invocables tras la sesion que lo creo).
  *
- * Exclusiones v1: SIN popstate/hashchange (las sesiones de script
- * mueren con cada evaluacion: no hay event loop de documento vivo
- * donde dispararlos), SIN history.back/forward/go desde JS (sin
- * re-entrancia en la navegacion), el titulo se ignora (como en el
- * spec) y el subframe no recibe history propio (exclusion).
+ * Exclusiones v2 (T111 v7 / TK-111-3 v2, R0446, RES-0175):
+ * popstate/hashchange los dispara el HOST sobre el event loop de
+ * documento (DocumentLoop, TK-111-3 v2); SIN history.back/forward/go
+ * desde JS (sin re-entrancia en la navegacion), el titulo se ignora
+ * (como en el spec), el subframe no recibe history propio ni event
+ * loop y location es de SOLO LECTURA (sin assign/replace/reload ni
+ * setters: exclusion v2).
  */
 interface JsHistoryHost {
     /** pushState: nueva entrada tras la actual (trunca el futuro);
@@ -34,6 +36,10 @@ interface JsHistoryHost {
 
     /** Estado JS de la entrada actual (null si no lo lleva). */
     fun historyState(): JsValue?
+
+    /** T111 v7 (TK-111-3 v2, R0446): URL viva de la entrada ACTUAL (la
+     * que muestran href y los campos de location). */
+    fun historyUrl(): String
 }
 
 /**
@@ -88,6 +94,64 @@ class JsHistoryApi(private val host: JsHistoryHost, urlViva: String) {
             JsUndefined
         })
         genv.declare("history", h)
+        instalarLocation(genv)
+    }
+
+    /**
+     * T111 v7 / TK-111-3 v2 (R0446, RES-0175): global location de SOLO
+     * LECTURA sobre la URL viva de la entrada actual del host: href,
+     * protocol, origin, host, hostname, pathname, search y hash con
+     * accessores reales (patron de arriba). SIN setters ni
+     * assign/replace/reload (exclusion v2).
+     */
+    private fun instalarLocation(genv: Env) {
+        val loc = JsRuntime.newObj()
+        val campos = listOf("href", "protocol", "origin", "host", "hostname", "pathname", "search", "hash")
+        for (c in campos) {
+            loc.props["__" + c + "Get"] = JsProp.Value(
+                JsBuiltins.fn("__" + c + "Get") { _, _ -> JsStr(campo(c)) }
+            )
+            loc.props[c] = JsProp.Accessor(
+                parseAccessorFun("(function () { return this.__" + c + "Get(); })"),
+                null
+            )
+        }
+        genv.declare("location", loc)
+    }
+
+    /** Campo de la URL viva de la entrada actual (partes del spec). */
+    private fun campo(nombre: String): String {
+        val u = host.historyUrl()
+        if (nombre == "href") return u
+        if (nombre == "hash") return if (u.contains('#')) u.substring(u.indexOf('#')) else ""
+        if (nombre == "search") {
+            val s = u.indexOf('?')
+            if (s < 0) return ""
+            val f = u.indexOf('#')
+            return if (f > s) u.substring(s, f) else u.substring(s)
+        }
+        val doble = u.indexOf("://")
+        if (doble < 0) return ""
+        val proto = u.substring(0, doble)
+        if (nombre == "protocol") return proto + ":"
+        val resto = u.substring(doble + 3)
+        var fin = -1
+        for (i in resto.indices) {
+            val ch = resto[i]
+            if (ch == '/' || ch == '?' || ch == '#') {
+                fin = i
+                break
+            }
+        }
+        val autoridad = if (fin < 0) resto else resto.substring(0, fin)
+        val rutaDesde = if (fin < 0) resto.length else fin
+        if (nombre == "origin") return proto + "://" + autoridad
+        if (nombre == "host") return autoridad
+        if (nombre == "hostname") return autoridad.substringBefore(':')
+        val trasAutoridad = resto.substring(rutaDesde)
+        val sinQuery = trasAutoridad.substringBefore('?').substringBefore('#')
+        if (nombre == "pathname") return if (sinQuery.isEmpty()) "/" else sinQuery
+        return ""
     }
 
     /** URL efectiva del tercer argumento: vacia, ausente o null duplica

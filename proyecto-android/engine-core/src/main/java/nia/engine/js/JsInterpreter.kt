@@ -1912,6 +1912,17 @@ object JsInterpreter {
         JsQuotas.end()
     }
 
+    /**
+     * T111 v7 / TK-111-3 v2 (R0446, RES-0175): reafirma los runners
+     * vivos de la sesion del loop de documento: una evaluacion ANIDADA
+     * (los scripts de un subframe) apaga keepAliveRunners al entrar y
+     * el loop de documento la llama ANTES de cada entrada de JS para
+     * que el drain no corte los runners de la pagina.
+     */
+    internal fun reanudarSesionLoop() {
+        keepAliveRunners = true
+    }
+
     // ---- Workers (T034 v1, RES-0039) ----
 
     /**

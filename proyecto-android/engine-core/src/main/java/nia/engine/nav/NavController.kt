@@ -5,12 +5,15 @@ import nia.contracts.Outcome
 import nia.contracts.WallClock
 import nia.engine.dom.DomDocument
 import nia.engine.html.DomNode
+import nia.engine.js.DocumentLoop
+import nia.engine.js.JsEvalResult
 import nia.engine.js.JsFetchApi
 import nia.engine.js.JsHistoryApi
 import nia.engine.js.JsHistoryHost
 import nia.engine.js.JsInterpreter
 import nia.engine.js.JsLimits
 import nia.engine.js.JsStorageApi
+import nia.engine.js.JsStr
 import nia.engine.js.JsValue
 import nia.engine.media.MediaPuente
 import nia.engine.net.FetchManager
@@ -145,6 +148,15 @@ import nia.engine.url.UrlParser
  * documento TOP gana sobre cabecera y meta charset. SIN meta charset
  * en subframes (solo BOM y cabecera), sin @charset de CSS ni
  * sniffing heuristico (exclusiones v1).
+ *
+ * T111 v7 / TK-111-3 v2 (R0446, RES-0175): event loop de documento y
+ * eventos de historia: los scripts del documento corren en la MISMA
+ * sesion JS viva (globals y listeners de window persisten entre
+ * scripts); back/forward a una entrada SPA del documento actual
+ * disparan popstate en window (y hashchange si el fragmento cambia)
+ * sobre el loop de documento; global location de solo lectura con la
+ * URL viva. Subframes y history.back/forward/go desde JS siguen
+ * excluidos (v1).
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -243,6 +255,11 @@ class NavController(
     private var page: NavPage? = null
     private var lastState: NavState? = null
 
+    /** T111 v7 / TK-111-3 v2 (R0446, RES-0175): event loop de documento
+     * de la pagina actual (sesion JS viva); muere al comprometer la
+     * navegacion siguiente. */
+    private var loop: DocumentLoop? = null
+
     /** Cuotas de los scripts de la pagina (T100, RES-0104): el shell
      * fija el JsLimits resuelto ANTES de navegar; por defecto el del
      * motor (100M pasos y 10M allocs, T021). */
@@ -291,13 +308,30 @@ class NavController(
      * documento es el ACTUAL, se sirve ese documento sin fetch ni
      * re-navegacion (la URL de la pagina pasa a ser la de la entrada);
      * null cuando hay que re-navegar por red.
+     *
+     * T111 v7 (TK-111-3 v2, R0446, RES-0175): la travesia same-doc
+     * dispara popstate en el loop de documento (con el estado de la
+     * entrada) y hashchange si el fragmento cambia (oldURL/newURL).
      */
     private fun servirSpa(e: EntradaHistoria): NavOutcome? {
         val p = page ?: return null
         val d = e.doc ?: return null
         if (!e.spa || d !== p.document) return null
+        val anterior = p.url
         val nueva = p.copy(url = e.url)
         page = nueva
+        val l = loop
+        if (l != null) {
+            l.despacharWindow("popstate", mapOf("state" to e.state))
+            val fragViejo = anterior.substringAfter('#', "")
+            val fragNuevo = e.url.substringAfter('#', "")
+            if (fragViejo != fragNuevo) {
+                l.despacharWindow(
+                    "hashchange",
+                    mapOf("oldURL" to JsStr(anterior), "newURL" to JsStr(e.url))
+                )
+            }
+        }
         return NavOutcome.Loaded(nueva)
     }
 
@@ -314,6 +348,15 @@ class NavController(
     fun currentPage(): NavPage? = page
 
     fun state(): NavState? = lastState
+
+    /** T111 v7 / TK-111-3 v2 (R0446, RES-0175): corre un script de la
+     * pagina en el event loop de documento VIVO: sesion JS compartida
+     * (globals y listeners persisten entre scripts, como en una pagina
+     * real) con sesion de cuotas propia por script, como hoy. */
+    private fun correrEnDocumento(source: String): JsEvalResult {
+        val l = loop ?: throw IllegalStateException("loop de documento ausente")
+        return l.eval(source)
+    }
 
     /** True si el documento vivo muto desde el commit: hay que renderizar. */
     fun needsLayout(): Boolean {
@@ -411,6 +454,8 @@ class NavController(
         )
         page = committed
         lastState = NavState.LOADED
+        loop?.end()
+        loop = DocumentLoop(cuotasScript, document, puenteMedia, baseMedia, historyApi)
         val items = ArrayList<LoadItem>()
         walkLoadItems(document.nodeOf(document.rootHandle()), baseDeResolucion(document, finalUrl), items)
         val subresources = ArrayList<NavSubresource>()
@@ -445,6 +490,7 @@ class NavController(
             }
             override fun historyLength(): Int = history.size
             override fun historyState(): JsValue? = history.getOrNull(index)?.state
+            override fun historyUrl(): String = history.getOrNull(index)?.url ?: current
         }, current)
         val baseMedia = finalUrl.scheme + "://" + finalUrl.host +
             (if (finalUrl.port != null) ":" + finalUrl.port else "")
@@ -474,7 +520,7 @@ class NavController(
                         if (!cspPermite(csp, "script-src", null, origin, true)) {
                             scripts.add(NavScript("inline:" + inlineCount, "blocked-csp"))
                         } else {
-                            val result = JsInterpreter.evaluateWithDom(item.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
+                            val result = correrEnDocumento(item.source)
                             scripts.add(NavScript("inline:" + inlineCount, JsInterpreter.dumpResult(result)))
                         }
                     }
@@ -492,7 +538,7 @@ class NavController(
                                 return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                             }
                             if (r is SideResult.Ok) {
-                                val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
+                                val result = correrEnDocumento(r.source)
                                 scripts.add(NavScript(ref, JsInterpreter.dumpResult(result)))
                             } else {
                                 scripts.add(NavScript(ref, describe(r)))
@@ -525,7 +571,7 @@ class NavController(
                         return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                     }
                     if (r is SideResult.Ok) {
-                        val result = JsInterpreter.evaluateWithDom(r.source, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
+                        val result = correrEnDocumento(r.source)
                         scripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
                     } else {
                         scripts.add(NavScript(d.ref, describe(r)))
@@ -535,7 +581,7 @@ class NavController(
                 if (!cspPermite(csp, "script-src", null, origin, true)) {
                     scripts.add(NavScript(d.ref, "blocked-csp"))
                 } else {
-                    val result = JsInterpreter.evaluateWithDom(d.source!!, document, cuotasScript, fetchApi, storageApi, puenteMedia, baseMedia, historyApi)
+                    val result = correrEnDocumento(d.source!!)
                     scripts.add(NavScript(d.ref, JsInterpreter.dumpResult(result)))
                 }
             }
