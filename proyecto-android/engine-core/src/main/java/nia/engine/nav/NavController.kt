@@ -137,6 +137,14 @@ import nia.engine.url.UrlParser
  * cuando es el documento que la creo; si no, re-navegan por red.
  * SIN popstate/hashchange, sin history.back/forward/go desde JS y
  * sin history en el subframe (exclusiones v1, en JsHistoryApi).
+ *
+ * T111 v5 / TK-111-10 (R0440, RES-0173): charset de subrecursos y BOM:
+ * los cuerpos de fetchSide decodifican con BOM (UTF-8, UTF-16LE,
+ * UTF-16BE, desechado) por encima del charset de la cabecera
+ * Content-Type y UTF-8 como fallback (antes UTF-8 fijo); el BOM del
+ * documento TOP gana sobre cabecera y meta charset. SIN meta charset
+ * en subframes (solo BOM y cabecera), sin @charset de CSS ni
+ * sniffing heuristico (exclusiones v1).
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -624,7 +632,7 @@ class NavController(
             return SideResult.Failed(code)
         }
         val resp = (outcome as Outcome.Success<FetchResponse>).value
-        return SideResult.Ok(String(resp.body, Charsets.UTF_8))
+        return SideResult.Ok(decodificarCuerpo(resp.body, headerValue(resp.headers, "content-type")))
     }
 
     /**
@@ -935,9 +943,13 @@ class NavController(
      * charset de la cabecera Content-Type y, en su ausencia, con el del
      * primer meta charset del crudo (escaneado como latin-1 para leer los
      * bytes intactos en los primeros 2048 caracteres); si no hay ninguno,
-     * o el nombre es desconocido, UTF-8 como antes.
+     * o el nombre es desconocido, UTF-8 como antes. T111 v5 (R0440): un
+     * BOM en el cuerpo GANA sobre cabecera y meta (decodificarCuerpo).
      */
     private fun decodificarDocumento(respuesta: FetchResponse, contentType: String?): String {
+        if (bomCharset(respuesta.body) != null) {
+            return decodificarCuerpo(respuesta.body, null)
+        }
         val porCabecera = charsetDeCabecera(contentType)
         if (porCabecera != null) {
             return decodificar(respuesta.body, porCabecera)
@@ -964,6 +976,43 @@ class NavController(
         } catch (e: Exception) {
             String(crudo, Charsets.UTF_8)
         }
+
+    /**
+     * T111 v5 / TK-111-10 (R0440, RES-0173): BOM inicial del cuerpo:
+     * UTF-8 (EF BB BF), UTF-16LE (FF FE) o UTF-16BE (FE FF); null si
+     * no hay BOM. UTF-32 no se detecta (exclusion v1).
+     */
+    private fun bomCharset(crudo: ByteArray): java.nio.charset.Charset? {
+        if (crudo.size >= 3 && crudo[0] == 0xEF.toByte() && crudo[1] == 0xBB.toByte() && crudo[2] == 0xBF.toByte()) {
+            return Charsets.UTF_8
+        }
+        if (crudo.size >= 2 && crudo[0] == 0xFF.toByte() && crudo[1] == 0xFE.toByte()) {
+            return Charsets.UTF_16LE
+        }
+        if (crudo.size >= 2 && crudo[0] == 0xFE.toByte() && crudo[1] == 0xFF.toByte()) {
+            return Charsets.UTF_16BE
+        }
+        return null
+    }
+
+    /**
+     * T111 v5 / TK-111-10 (R0440, RES-0173): decodificacion de un cuerpo
+     * de respuesta: BOM (desechado) sobre charset de Content-Type sobre
+     * UTF-8 (fallback); un nombre desconocido cae a UTF-8 (decodificar).
+     */
+    private fun decodificarCuerpo(crudo: ByteArray, contentType: String?): String {
+        val bom = bomCharset(crudo)
+        if (bom != null) {
+            val offset = if (bom == Charsets.UTF_8) 3 else 2
+            return String(crudo, offset, crudo.size - offset, bom)
+        }
+        val porCabecera = charsetDeCabecera(contentType)
+        if (porCabecera != null) {
+            return decodificar(crudo, porCabecera)
+        }
+        return String(crudo, Charsets.UTF_8)
+    }
+
 
     private fun headerValue(headers: Map<String, String>, name: String): String? {
         val lower = name.lowercase()
