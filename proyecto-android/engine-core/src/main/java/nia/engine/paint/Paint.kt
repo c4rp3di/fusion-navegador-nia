@@ -65,7 +65,10 @@ class PaintScene(val ops: List<PaintOp>) {
  * despues hasta 4 tiras de borde (border-color o color heredado): arriba y
  * abajo a lo ancho de la caja, izquierda y derecha entre las tiras
  * horizontales. Contrato del layout: fragmentsOf(texto) devuelve una caja
- * por palabra de wordsOf(texto.data), en el mismo orden.
+ * por palabra de wordsOf(texto.data), en el mismo orden. T111 v6
+ * (TK-111-11, R0443): visualWordsOf(texto) da la forma VISUAL (bidi v1)
+ * de cada palabra y sustituye a la cruda al pintar (fallback a wordsOf
+ * si el layout no la calculo).
  */
 object PaintSceneBuilder {
 
@@ -115,7 +118,7 @@ object PaintSceneBuilder {
                     for (c in node.children) walk(c, elFs, elColor)
                 }
                 is DomNode.Text -> {
-                    val words = wordsOf(node.data)
+                    val words = layout.visualWordsOf(node) ?: wordsOf(node.data)
                     val frags = layout.fragmentsOf(node)
                     var i = 0
                     while (i < words.size && i < frags.size) {

@@ -19,7 +19,8 @@ class LayoutBox(val x: Double, val y: Double, val width: Double, val height: Dou
 class LayoutResult internal constructor(
     private val blockBoxes: Map<DomNode, LayoutBox>,
     private val fragments: Map<DomNode, List<LayoutBox>>,
-    private val noneElements: Set<DomNode>
+    private val noneElements: Set<DomNode>,
+    private val visualWords: Map<DomNode, List<String>> = emptyMap()
 ) {
     fun boxOf(node: DomNode): LayoutBox? {
         if (node is DomNode.Element) return blockBoxes[node] ?: inlineBounding(node)
@@ -28,6 +29,10 @@ class LayoutResult internal constructor(
     }
 
     fun fragmentsOf(node: DomNode): List<LayoutBox> = fragments[node] ?: emptyList()
+
+    /** T111 v6 / TK-111-11 (R0443, RES-0174): forma VISUAL (bidi v1) de las
+     * palabras de un texto; null si el layout no la calculo. */
+    fun visualWordsOf(node: DomNode): List<String>? = visualWords[node]
 
     private fun bounding(list: List<LayoutBox>): LayoutBox? {
         if (list.isEmpty()) return null
@@ -104,6 +109,20 @@ class LayoutResult internal constructor(
  * el viewport (default 360). Exclusiones v2: sin flex-shrink/order/basis
  * ni align-self, sin grid-template-rows ni areas, el contenido de bloque
  * de un item no se estructura (se mide como texto inline).
+ *
+ * v6 (T111 v6 / TK-111-11, R0443, RES-0174) - bidi/RTL v1: direccion
+ * base del texto por CSS direction o atributo dir (rtl/ltr, auto por
+ * primer caracter fuerte; heredada subiendo por los ancestros),
+ * lineas rtl con las palabras colocadas de derecha a izquierda (la
+ * envoltura greedy es logica, igual que en CSS), text-align ausente
+ * = start (right con rtl) y la forma VISUAL de cada palabra (runs
+ * fuertes RTL invertidos; orden de runs invertido con base rtl;
+ * digitos y latinas legibles) expuesta en visualWordsOf para la
+ * pintura. Exclusiones v1: bidi simplificado sin UBA completo
+ * (neutrales, mirroring de pares, marcas combinantes), sin
+ * unicode-bidi/isolate, direccion uniforme por run inline (un
+ * elemento con dir propio dentro del inline NO rompe la linea) y sin
+ * flex/grid/tablas espejados (solo el flujo de texto).
  */
 object LayoutEngine {
 
@@ -134,6 +153,7 @@ object LayoutEngine {
         private val noneElements = HashSet<DomNode>()
         private val blockBoxes = LinkedHashMap<DomNode, LayoutBox>()
         private val fragments = LinkedHashMap<DomNode, MutableList<LayoutBox>>()
+        private val visualWords = LinkedHashMap<DomNode, MutableList<String>>()
 
         private val lenRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))(px|em|rem|%)$")
         private val numRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))$")
@@ -152,7 +172,7 @@ object LayoutEngine {
 
         fun run(): LayoutResult {
             layoutContainer(root, 0.0, 0.0, viewport)
-            return LayoutResult(LinkedHashMap(blockBoxes), fragments.mapValues { it.value.toList() }, noneElements)
+            return LayoutResult(LinkedHashMap(blockBoxes), fragments.mapValues { it.value.toList() }, noneElements, visualWords.mapValues { it.value.toList() })
         }
 
         private fun childrenOf(node: DomNode): List<DomNode> = when (node) {
@@ -237,7 +257,8 @@ object LayoutEngine {
         private fun alignOf(n: DomNode): String {
             val el = nearestEl(n)
             val v = if (el != null) styleOf(el, "text-align") else null
-            return if (v == "center" || v == "right") v else "left"
+            if (v == "center" || v == "right" || v == "left") return v
+            return if (dirOf(n) == "rtl") "right" else "left"
         }
 
         private fun textWidth(s: String, fs: Double): Double = s.length * fs / 2
@@ -245,6 +266,81 @@ object LayoutEngine {
         private fun wordsOf(s: String): List<String> =
             s.split(' ', '\t', '\n', '\r', '\u000C').filter { it.isNotEmpty() }
 
+
+        /**
+         * T111 v6 / TK-111-11 (R0443, RES-0174): direccion base del texto:
+         * propiedad CSS direction sobre el atributo dir (rtl/ltr),
+         * heredada subiendo por los ancestros; dir=auto resuelve con el
+         * primer caracter fuerte del texto (hebreo/arabe -> rtl, latina
+         * -> ltr); default ltr.
+         */
+        private fun dirOf(n: DomNode): String {
+            var cur: DomNode? = n
+            while (cur != null) {
+                val el = cur as? DomNode.Element
+                if (el != null) {
+                    val css = styleOf(el, "direction")?.trim()?.lowercase()
+                    if (css == "rtl" || css == "ltr") return css
+                    val attr = el.attributes["dir"]?.trim()?.lowercase()
+                    if (attr == "rtl" || attr == "ltr") return attr
+                    if (attr == "auto") {
+                        if (n is DomNode.Text) {
+                            for (c in n.data) {
+                                if (esRtlFuerte(c)) return "rtl"
+                                if (c in 'A'..'Z' || c in 'a'..'z') return "ltr"
+                            }
+                        }
+                        return "ltr"
+                    }
+                }
+                cur = parents[cur]
+            }
+            return "ltr"
+        }
+
+        /** T111 v6 / TK-111-11 (R0443, RES-0174): caracter fuerte RTL (hebreo/arabe). */
+        private fun esRtlFuerte(c: Char): Boolean =
+            c in '\u0590'..'\u05FF' || c in '\uFB1D'..'\uFB4F' ||
+                c in '\u0600'..'\u06FF' || c in '\u0750'..'\u077F' ||
+                c in '\u08A0'..'\u08FF' || c in '\uFB50'..'\uFDFF' ||
+                c in '\uFE70'..'\uFEFF'
+
+        /**
+         * T111 v6 / TK-111-11 (R0443, RES-0174): forma VISUAL de una palabra
+         * para un renderer que dibuja de izquierda a derecha (bidi
+         * simplificado v1): con base rtl se invierte el orden de los runs
+         * y los runs fuertes RTL se invierten por dentro; con base ltr
+         * SOLO se invierten los runs RTL (digitos y latinas quedan
+         * legibles). Sin neutrales del UBA, sin mirroring de pares ni
+         * marcas combinantes (exclusiones v1).
+         */
+        private fun visualOf(s: String, dir: String): String {
+            val runs = mutableListOf<Pair<Boolean, StringBuilder>>()
+            var rtl = false
+            var cur = StringBuilder()
+            for (c in s) {
+                val r = esRtlFuerte(c)
+                if (cur.isEmpty() || r != rtl) {
+                    if (cur.isNotEmpty()) runs.add(rtl to cur)
+                    cur = StringBuilder()
+                    rtl = r
+                }
+                cur.append(c)
+            }
+            if (cur.isNotEmpty()) runs.add(rtl to cur)
+            val out = StringBuilder()
+            if (dir == "rtl") {
+                for (i in runs.indices.reversed()) {
+                    val run = runs[i]
+                    if (run.first) out.append(run.second.reverse().toString()) else out.append(run.second.toString())
+                }
+            } else {
+                for (run in runs) {
+                    if (run.first) out.append(run.second.reverse().toString()) else out.append(run.second.toString())
+                }
+            }
+            return out.toString()
+        }
         private fun isWsOnly(s: String): Boolean = wordsOf(s).isEmpty()
 
         private fun collectText(item: DomNode, out: MutableList<W>) {
@@ -263,6 +359,7 @@ object LayoutEngine {
         private fun layoutInlineRun(run: List<DomNode>, x: Double, y: Double, width: Double, align: String): Double {
             val words = mutableListOf<W>()
             for (it in run) collectText(it, words)
+            val dir = if (run.isEmpty()) "ltr" else dirOf(run.first())
             val lines = mutableListOf<LineBox>()
             var line = LineBox()
             for (w in words) {
@@ -293,8 +390,11 @@ object LayoutEngine {
                     else -> 0.0
                 }
                 for (it in L.items) {
+                    val vx = if (dir == "rtl") L.x - it.startX - textWidth(it.text, it.fs) else it.startX
                     fragments.getOrPut(it.node) { mutableListOf() }
-                        .add(LayoutBox(x + offset + it.startX, lineY, textWidth(it.text, it.fs), lh))
+                        .add(LayoutBox(x + offset + vx, lineY, textWidth(it.text, it.fs), lh))
+                    visualWords.getOrPut(it.node) { mutableListOf() }
+                        .add(visualOf(it.text, dir))
                 }
                 lineY += lh
             }
