@@ -11,9 +11,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.graphics.pdf.PdfDocument
 import android.media.AudioAttributes
@@ -2659,6 +2662,32 @@ class BrowserActivity : Activity() {
                         brocha
                     )
                 }
+                is PaintOp.DrawImage -> {
+                    // T111 v8 (TK-111-5, R0448, RES-0176): imagen en el
+                    // PDF/impresion; placeholder gris si no decodifica.
+                    val bmp = if (op.data != null) {
+                        BitmapFactory.decodeByteArray(op.data, 0, op.data.size)
+                    } else {
+                        null
+                    }
+                    if (bmp != null) {
+                        canvas.drawBitmap(
+                            bmp, null,
+                            RectF(
+                                op.x.toFloat(), op.y.toFloat(),
+                                (op.x + op.width).toFloat(), (op.y + op.height).toFloat()
+                            ),
+                            null
+                        )
+                    } else {
+                        brocha.color = Color.rgb(70, 70, 96)
+                        canvas.drawRect(
+                            op.x.toFloat(), op.y.toFloat(),
+                            (op.x + op.width).toFloat(), (op.y + op.height).toFloat(),
+                            brocha
+                        )
+                    }
+                }
             }
         }
     }
@@ -2797,8 +2826,13 @@ class BrowserActivity : Activity() {
         pintar(html, emptyList())
     }
 
-    /** TK-071-6 (R0419, RES-0166): pintar con los subframes del frame tree. */
-    private fun pintar(html: String, subframes: List<NavSubframe>) {
+    /** TK-071-6 (R0419, RES-0166): pintar con los subframes del frame tree.
+     * T111 v8 (TK-111-5, R0448, RES-0176): imagenes = bytes crudos por src. */
+    private fun pintar(
+        html: String,
+        subframes: List<NavSubframe>,
+        imagenes: Map<String, ByteArray> = emptyMap()
+    ) {
         val hoja = hojaParaPintar
         hojaParaPintar = null
         val script = scriptParaPintar
@@ -2812,6 +2846,7 @@ class BrowserActivity : Activity() {
             pagina.cargarScriptModulo(script)
             pagina.cargarCosmeticosModulo(cosmeticos, hostCos)
             pagina.cargarSubframes(subframes)
+            pagina.cargarImagenes(imagenes)
             pagina.loadPagina(html, cssNavegador(), true)
             scroll.scrollTo(0, 0)
         } catch (e: Exception) {
@@ -2844,7 +2879,7 @@ class BrowserActivity : Activity() {
         indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
         val html = page.html
         if (html != null) {
-            pintar(html, page.subframes)
+            pintar(html, page.subframes, page.imagenes)
         } else {
             // C6 v1: sin html la hoja ganada se descarta (vive con el documento)
             hojaParaPintar = null
@@ -3012,7 +3047,7 @@ class BrowserActivity : Activity() {
         estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
         val html = page.html
         if (html != null) {
-            pintar(html, page.subframes)
+            pintar(html, page.subframes, page.imagenes)
         }
     }
 
@@ -6830,3 +6865,4 @@ class BrowserActivity : Activity() {
         private const val REQUEST_EXPORT_COPIA = 56
     }
 }
+

@@ -157,6 +157,10 @@ import nia.engine.url.UrlParser
  * sobre el loop de documento; global location de solo lectura con la
  * URL viva. Subframes y history.back/forward/go desde JS siguen
  * excluidos (v1).
+ *
+ * T111 v8 / TK-111-5 (R0448, RES-0176): los img del documento viajan
+ * como subrecursos image y NavPage.imagenes expone los bytes crudos
+ * por src CRUDO para que el shell los decodifique y pinte.
  */
 enum class NavState { NAVIGATING, RESPONSE_RECEIVED, PARSING, COMMITTED, LOADED }
 
@@ -220,7 +224,8 @@ data class NavPage(
     val tls: TlsInfo? = null,
     val html: String? = null,
     val subframes: List<NavSubframe> = emptyList(),
-    val csp: String? = null
+    val csp: String? = null,
+    val imagenes: Map<String, ByteArray> = emptyMap()
 )
 
 /**
@@ -455,12 +460,14 @@ class NavController(
         page = committed
         lastState = NavState.LOADED
         loop?.end()
-        loop = DocumentLoop(cuotasScript, document, puenteMedia, baseMedia, historyApi)
         val items = ArrayList<LoadItem>()
         walkLoadItems(document.nodeOf(document.rootHandle()), baseDeResolucion(document, finalUrl), items)
         val subresources = ArrayList<NavSubresource>()
         val scripts = ArrayList<NavScript>()
         val subframes = ArrayList<NavSubframe>()
+        // T111 v8 (TK-111-5, R0448, RES-0176): bytes crudos de las
+        // imagenes del documento, por src CRUDO.
+        val imagenes = LinkedHashMap<String, ByteArray>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
         val fetchApi = JsFetchApi(transport, clock, null, filter, current)
         val historyApi = JsHistoryApi(object : JsHistoryHost {
@@ -494,6 +501,9 @@ class NavController(
         }, current)
         val baseMedia = finalUrl.scheme + "://" + finalUrl.host +
             (if (finalUrl.port != null) ":" + finalUrl.port else "")
+        // Hotfix v7 (R0448): la sesion viva se abre DESPUES de declarar
+        // baseMedia e historyApi (referencia adelantada rota en d0c260ee).
+        loop = DocumentLoop(cuotasScript, document, puenteMedia, baseMedia, historyApi)
         var inlineCount = 0
         val deferPendientes = ArrayList<DeferPendiente>()
         var deferInline = 0
@@ -509,6 +519,9 @@ class NavController(
                             return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
                         }
                         subresources.add(NavSubresource(item.kind, item.url, describe(r)))
+                        if (item.kind == "image" && r is SideResult.Ok && r.crudo != null) {
+                            imagenes[item.srcCrudo ?: item.url] = r.crudo
+                        }
                     }
                 }
                 is LoadItem.InlineScript -> {
@@ -592,7 +605,8 @@ class NavController(
             subresources = subresources,
             scripts = scripts,
             events = ArrayList(events),
-            subframes = subframes
+            subframes = subframes,
+            imagenes = imagenes
         )
         page = loaded
         return NavOutcome.Loaded(loaded)
@@ -619,7 +633,7 @@ class NavController(
     private class DeferPendiente(val ref: String, val src: String?, val source: String?)
 
     private sealed class LoadItem {
-        data class Subresource(val kind: String, val url: String) : LoadItem()
+        data class Subresource(val kind: String, val url: String, val srcCrudo: String? = null) : LoadItem()
         data class InlineScript(
             val source: String,
             val defer: Boolean = false,
@@ -636,7 +650,7 @@ class NavController(
 
     /** Resultado de un fetch lateral: subrecurso o script con src. */
     private sealed class SideResult {
-        data class Ok(val source: String) : SideResult()
+        data class Ok(val source: String, val crudo: ByteArray? = null) : SideResult()
         object Blocked : SideResult()
         data class NavFailure(val code: ErrorCode, val message: String) : SideResult()
         data class Failed(val code: ErrorCode) : SideResult()
@@ -678,7 +692,10 @@ class NavController(
             return SideResult.Failed(code)
         }
         val resp = (outcome as Outcome.Success<FetchResponse>).value
-        return SideResult.Ok(decodificarCuerpo(resp.body, headerValue(resp.headers, "content-type")))
+        return SideResult.Ok(
+            decodificarCuerpo(resp.body, headerValue(resp.headers, "content-type")),
+            resp.body
+        )
     }
 
     /**
@@ -912,7 +929,7 @@ class NavController(
                     val src = node.attributes["src"]
                     if (src != null) {
                         val full = resolveUrl(page, src)
-                        if (full != null) out.add(LoadItem.Subresource("image", full))
+                        if (full != null) out.add(LoadItem.Subresource("image", full, src))
                     }
                 }
                 "link" -> {
@@ -1068,3 +1085,4 @@ class NavController(
         return null
     }
 }
+

@@ -109,5 +109,15 @@ object Impresor {
                 op.fontSize,
                 op.node
             )
+            // T111 v8 (TK-111-5, R0448, RES-0176): la imagen viaja intacta.
+            is PaintOp.DrawImage -> PaintOp.DrawImage(
+                op.x + margen,
+                op.y - inicioAlto + margen,
+                op.width,
+                op.height,
+                op.data,
+                op.node
+            )
         }
 }
+

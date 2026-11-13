@@ -1,10 +1,13 @@
 package app.nia.navegador
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Bundle
 import android.text.Editable
 import android.text.Selection
@@ -136,6 +139,11 @@ class PaintView(context: Context) : View(context) {
      * (frame tree de 1 nivel del motor, X02); los inyecta loadPagina
      * como texto del iframe y se consume con el documento. */
     private var subframesPendientes: List<NavSubframe> = emptyList()
+
+    // T111 v8 (TK-111-5, R0448, RES-0176): bytes crudos de las imagenes
+    // del documento actual (por src CRUDO) y cache de bitmaps decodificados.
+    private var imagenesPendientes: Map<String, ByteArray> = emptyMap()
+    private val bitmaps = HashMap<String, Bitmap>()
 
     /** C5 v1 (R0280, RES-0121): sesion del loop del script VIVO; la
      *  sesion anterior muere ANTES de abrir la del documento nuevo
@@ -286,6 +294,8 @@ class PaintView(context: Context) : View(context) {
         // navegacion se descarta.
         listaCosmeticos = null
         hostCosmeticos = null
+        // T111 v8 (TK-111-5, R0448, RES-0176): demo/SAF no trae imagenes.
+        imagenesPendientes = emptyMap()
         correrScriptDocumento()
         rebuild()
     }
@@ -344,6 +354,12 @@ class PaintView(context: Context) : View(context) {
      * loadPagina como texto del iframe y se consume con el. */
     fun cargarSubframes(subframes: List<NavSubframe>) {
         subframesPendientes = subframes
+    }
+
+    /** T111 v8 (TK-111-5, R0448, RES-0176): fija los bytes crudos de las
+     * imagenes del documento actual (por src CRUDO). */
+    fun cargarImagenes(imagenes: Map<String, ByteArray>) {
+        imagenesPendientes = imagenes
     }
 
     /**
@@ -446,7 +462,7 @@ class PaintView(context: Context) : View(context) {
         if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
         val laid = LayoutEngine.layout(rootDoc, styleOfDe(computed), anchoUtil)
-        return PaintSceneBuilder.build(rootDoc, computed, laid)
+        return PaintSceneBuilder.build(rootDoc, computed, laid, imagenesPendientes)
     }
 
     /** Hijos del handle o vacio si el nodo no es contenedor (patron de
@@ -532,7 +548,7 @@ class PaintView(context: Context) : View(context) {
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
         val laid = LayoutEngine.layout(rootDoc, styleOfDe(computed), viewport)
         layout = laid
-        scene = PaintSceneBuilder.build(rootDoc, computed, laid)
+        scene = PaintSceneBuilder.build(rootDoc, computed, laid, imagenesPendientes)
         builtRevision = DevToolsState.revision
     }
 
@@ -579,6 +595,32 @@ class PaintView(context: Context) : View(context) {
                         ((op.y + op.fontSize) * scale).toFloat(),
                         textPaint
                     )
+                }
+                is PaintOp.DrawImage -> {
+                    // T111 v8 (TK-111-5, R0448, RES-0176): bitmap si hay
+                    // bytes; placeholder gris si no decodifica.
+                    val bmp = bitmapDe(op)
+                    if (bmp != null) {
+                        canvas.drawBitmap(
+                            bmp, null,
+                            RectF(
+                                (op.x * scale).toFloat(),
+                                (op.y * scale).toFloat(),
+                                ((op.x + op.width) * scale).toFloat(),
+                                ((op.y + op.height) * scale).toFloat()
+                            ),
+                            null
+                        )
+                    } else {
+                        fillPaint.color = Color.rgb(70, 70, 96)
+                        canvas.drawRect(
+                            (op.x * scale).toFloat(),
+                            (op.y * scale).toFloat(),
+                            ((op.x + op.width) * scale).toFloat(),
+                            ((op.y + op.height) * scale).toFloat(),
+                            fillPaint
+                        )
+                    }
                 }
             }
         }
@@ -1156,6 +1198,18 @@ class PaintView(context: Context) : View(context) {
         else -> "android.widget.View"
     }
 
+    /** T111 v8 (TK-111-5, R0448, RES-0176): decodifica los bytes del op
+     * (cache por src, tope 24); null si no hay bytes o no decodifica. */
+    private fun bitmapDe(op: PaintOp.DrawImage): Bitmap? {
+        val src = (op.node as? DomNode.Element)?.attributes?.get("src") ?: return null
+        bitmaps[src]?.let { return it }
+        val data = op.data ?: return null
+        val bmp = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return null
+        if (bitmaps.size >= 24) bitmaps.clear()
+        bitmaps[src] = bmp
+        return bmp
+    }
+
     private fun parseColor(hex: String): Int =
         try {
             Color.parseColor(hex)
@@ -1165,3 +1219,4 @@ class PaintView(context: Context) : View(context) {
             Color.rgb(176, 176, 192)
         }
 }
+

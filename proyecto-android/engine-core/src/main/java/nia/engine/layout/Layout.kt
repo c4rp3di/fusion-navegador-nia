@@ -123,6 +123,13 @@ class LayoutResult internal constructor(
  * unicode-bidi/isolate, direccion uniforme por run inline (un
  * elemento con dir propio dentro del inline NO rompe la linea) y sin
  * flex/grid/tablas espejados (solo el flujo de texto).
+ *
+ * v8 (T111 v8 / TK-111-5, R0448, RES-0176): img inline en el flujo de
+ * texto: el elemento img reserva una palabra-caja propia con ancho y
+ * alto por atributos width/height (48x32 por defecto, sin CSS), se
+ * envuelve como una palabra mas y su caja de bloque queda en boxOf
+ * para que la pintura la consuma. Exclusion: dimensiones solo por
+ * atributos (no CSS).
  */
 object LayoutEngine {
 
@@ -159,7 +166,7 @@ object LayoutEngine {
         private val numRegex = Regex("^([+-]?(\\d+(\\.\\d+)?|\\.\\d+))$")
         private val frRegex = Regex("^(\\d+(\\.\\d+)?|\\.\\d+)fr$")
 
-        private class W(val node: DomNode.Text, val text: String, val fs: Double, val lh: Double, var startX: Double)
+        private class W(val node: DomNode, val text: String, val fs: Double, val lh: Double, var startX: Double, val boxW: Double = -1.0)
 
         private class LineBox {
             val items = mutableListOf<W>()
@@ -352,6 +359,14 @@ object LayoutEngine {
                 for (w in wordsOf(item.data)) out.add(W(item, w, fs, lh, 0.0))
             } else if (item is DomNode.Element) {
                 if (displayOf(item) == "none") return
+                // T111 v8 (TK-111-5, R0448, RES-0176): el img reserva su
+                // palabra-caja inline (dimensiones por atributos, no CSS).
+                if (item.name.equals("img", ignoreCase = true)) {
+                    val w = item.attributes["width"]?.toDoubleOrNull() ?: 48.0
+                    val h = item.attributes["height"]?.toDoubleOrNull() ?: 32.0
+                    out.add(W(item, "", fontSizeOf(item), h, 0.0, w))
+                    return
+                }
                 for (c in item.children) collectText(c, out)
             }
         }
@@ -363,7 +378,7 @@ object LayoutEngine {
             val lines = mutableListOf<LineBox>()
             var line = LineBox()
             for (w in words) {
-                val ww = textWidth(w.text, w.fs)
+                val ww = if (w.boxW >= 0.0) w.boxW else textWidth(w.text, w.fs)
                 val sp = w.fs / 2
                 if (line.items.isNotEmpty() && line.x + sp + ww > width) {
                     lines.add(line)
@@ -390,9 +405,13 @@ object LayoutEngine {
                     else -> 0.0
                 }
                 for (it in L.items) {
-                    val vx = if (dir == "rtl") L.x - it.startX - textWidth(it.text, it.fs) else it.startX
+                    val iw = if (it.boxW >= 0.0) it.boxW else textWidth(it.text, it.fs)
+                    val vx = if (dir == "rtl") L.x - it.startX - iw else it.startX
                     fragments.getOrPut(it.node) { mutableListOf() }
-                        .add(LayoutBox(x + offset + vx, lineY, textWidth(it.text, it.fs), lh))
+                        .add(LayoutBox(x + offset + vx, lineY, iw, lh))
+                    if (it.boxW >= 0.0 && it.node is DomNode.Element) {
+                        blockBoxes[it.node] = LayoutBox(x + offset + vx, lineY, iw, lh)
+                    }
                     visualWords.getOrPut(it.node) { mutableListOf() }
                         .add(visualOf(it.text, dir))
                 }
@@ -410,7 +429,7 @@ object LayoutEngine {
             var has = false
             var h = 0.0
             for (w in words) {
-                val ww = textWidth(w.text, w.fs)
+                val ww = if (w.boxW >= 0.0) w.boxW else textWidth(w.text, w.fs)
                 val sp = w.fs / 2
                 if (has && x + sp + ww > width) {
                     h += curLh
@@ -463,7 +482,7 @@ object LayoutEngine {
             var w = 0.0
             for (i in words.indices) {
                 if (i > 0) w += words[i].fs / 2
-                w += textWidth(words[i].text, words[i].fs)
+                w += if (words[i].boxW >= 0.0) words[i].boxW else textWidth(words[i].text, words[i].fs)
             }
             return w
         }
@@ -907,3 +926,4 @@ object LayoutEngine {
         }
     }
 }
+

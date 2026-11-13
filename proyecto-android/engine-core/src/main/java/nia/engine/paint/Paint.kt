@@ -10,7 +10,7 @@ import nia.engine.layout.LayoutResult
  * y las tiras de sus bordes; DrawText pinta una palabra con la caja del
  * fragmento de layout y el color y tamano del contexto heredado. El orden es
  * documental (pre-orden). Limitaciones v2: sin z-index/stacking contexts,
- * sin imagenes, sin transformaciones ni clip.
+ * sin transformaciones ni clip.
  */
 sealed class PaintOp {
     abstract val x: Double
@@ -39,6 +39,17 @@ sealed class PaintOp {
         val fontSize: Double,
         override val node: DomNode
     ) : PaintOp()
+
+    data class DrawImage(
+        override val x: Double,
+        override val y: Double,
+        override val width: Double,
+        override val height: Double,
+        val data: ByteArray?,
+        override val node: DomNode
+    ) : PaintOp() {
+        override val color: String = ""
+    }
 }
 
 /**
@@ -69,10 +80,19 @@ class PaintScene(val ops: List<PaintOp>) {
  * (TK-111-11, R0443): visualWordsOf(texto) da la forma VISUAL (bidi v1)
  * de cada palabra y sustituye a la cruda al pintar (fallback a wordsOf
  * si el layout no la calculo).
+ *
+ * T111 v8 (TK-111-5, R0448, RES-0176): el elemento img con caja pinta
+ * PaintOp.DrawImage con los bytes crudos por src (null = placeholder
+ * del shell); el orden sigue siendo documental (el rect va antes).
  */
 object PaintSceneBuilder {
 
-    fun build(root: DomNode.Document, computed: CssComputedStyle, layout: LayoutResult): PaintScene {
+    fun build(
+        root: DomNode.Document,
+        computed: CssComputedStyle,
+        layout: LayoutResult,
+        imagenes: Map<String, ByteArray> = emptyMap()
+    ): PaintScene {
         val ops = mutableListOf<PaintOp>()
 
         fun parsePx(v: String?): Double? {
@@ -115,6 +135,16 @@ object PaintSceneBuilder {
                             ops.add(PaintOp.DrawRect(box.x + box.width - br, box.y + bt, br, ih, bcol, node))
                         }
                     }
+                    // T111 v8 (TK-111-5, R0448, RES-0176): la imagen pinta
+                    // con los bytes crudos por src; sin bytes, placeholder.
+                    if (node.name.equals("img", ignoreCase = true)) {
+                        val f = layout.fragmentsOf(node).firstOrNull()
+                        if (f != null) {
+                            ops.add(
+                                PaintOp.DrawImage(f.x, f.y, f.width, f.height, imagenes[node.attributes["src"]], node)
+                            )
+                        }
+                    }
                     for (c in node.children) walk(c, elFs, elColor)
                 }
                 is DomNode.Text -> {
@@ -138,3 +168,4 @@ object PaintSceneBuilder {
         return PaintScene(ops.toList())
     }
 }
+
