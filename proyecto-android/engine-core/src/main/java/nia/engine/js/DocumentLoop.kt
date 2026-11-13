@@ -23,7 +23,10 @@ import nia.engine.media.MediaPuente
  * window: EventTarget minimo con addEventListener/removeEventListener
  * y registro en el lado Kotlin; el host dispara popstate/hashchange
  * con despacharWindow. Un listener que revienta JAMAS rompe la
- * navegacion (el fallo se traga). Exclusiones v1: sin timers (nadie
+ * navegacion (el fallo se traga). Hotfix v7.2 (R0450, RES-0175): el constructor gana fetch y storage
+ * (JsFetchApi/JsStorageApi del perfil) y los instala en la sesion
+ * viva, espejando los globals de evaluateWithDom.
+ * Exclusiones v1: sin timers (nadie
  * bombea el reloj), sin dispatchEvent propio, sin self/parent/top ni
  * handlers on*, y el subframe NO recibe event loop (sus scripts
  * siguen con sesiones propias por evaluacion).
@@ -33,7 +36,9 @@ class DocumentLoop(
     doc: DomDocument,
     puente: MediaPuente?,
     baseUrl: String,
-    history: JsHistoryApi?
+    history: JsHistoryApi?,
+    fetch: JsFetchApi? = null,
+    storage: JsStorageApi? = null
 ) {
     private val genv: Env = JsInterpreter.startLoopSession(cuotas)
     private val listeners = LinkedHashMap<String, MutableList<JsValue>>()
@@ -42,6 +47,11 @@ class DocumentLoop(
     init {
         JsDomBindings.install(genv, doc, puente, baseUrl)
         if (history != null) history.install(genv)
+        // Hotfix v7.2 (R0450, RES-0175): la sesion viva instala fetch y
+        // storage del perfil, como evaluateWithDom hacia; sin esto los
+        // scripts del documento no ven localStorage (run 43435223064).
+        if (fetch != null) fetch.install(genv)
+        if (storage != null) storage.install(genv)
         installWindow()
     }
 

@@ -503,7 +503,9 @@ class NavController(
             (if (finalUrl.port != null) ":" + finalUrl.port else "")
         // Hotfix v7 (R0448): la sesion viva se abre DESPUES de declarar
         // baseMedia e historyApi (referencia adelantada rota en d0c260ee).
-        loop = DocumentLoop(cuotasScript, document, puenteMedia, baseMedia, historyApi)
+        // Hotfix v7.2 (R0450, RES-0175): fetchApi y storageApi se pasan
+        // al loop, que los instala en la sesion viva (localStorage/fetch).
+        loop = DocumentLoop(cuotasScript, document, puenteMedia, baseMedia, historyApi, fetchApi, storageApi)
         var inlineCount = 0
         val deferPendientes = ArrayList<DeferPendiente>()
         var deferInline = 0
