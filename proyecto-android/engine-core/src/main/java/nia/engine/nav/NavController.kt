@@ -3,6 +3,8 @@ package nia.engine.nav
 import nia.contracts.ErrorCode
 import nia.contracts.Outcome
 import nia.contracts.WallClock
+import nia.engine.css.CssFontFace
+import nia.engine.css.CssStylesheet
 import nia.engine.dom.DomDocument
 import nia.engine.html.DomNode
 import nia.engine.js.DocumentLoop
@@ -225,7 +227,9 @@ data class NavPage(
     val html: String? = null,
     val subframes: List<NavSubframe> = emptyList(),
     val csp: String? = null,
-    val imagenes: Map<String, ByteArray> = emptyMap()
+    val imagenes: Map<String, ByteArray> = emptyMap(),
+    val cssExterno: String = "",
+    val fuentes: Map<String, ByteArray> = emptyMap()
 )
 
 /**
@@ -489,6 +493,9 @@ class NavController(
         // T111 v8 (TK-111-5, R0448, RES-0176): bytes crudos de las
         // imagenes del documento, por src CRUDO.
         val imagenes = LinkedHashMap<String, ByteArray>()
+        // T111 v10 (TK-111-6, R0456, RES-0178): texto + URL de cada hoja
+        // <link> stylesheet descargada (el cuerpo ya NO se descarta).
+        val hojasExternas = ArrayList<Pair<String, String>>()
         val storageApi = JsStorageApi(profile.storage, profile.idb, site, origin)
         val fetchApi = JsFetchApi(transport, clock, null, filter, current)
         val historyApi = JsHistoryApi(object : JsHistoryHost {
@@ -544,6 +551,12 @@ class NavController(
                         subresources.add(NavSubresource(item.kind, item.url, describe(r)))
                         if (item.kind == "image" && r is SideResult.Ok && r.crudo != null) {
                             imagenes[item.srcCrudo ?: item.url] = r.crudo
+                        }
+                        // T111 v10 (TK-111-6, R0456, RES-0178): el texto de
+                        // la hoja viaja a la pagina (cssExterno) y sus caras
+                        // @font-face se resuelven contra la URL de la hoja.
+                        if (item.kind == "stylesheet" && r is SideResult.Ok) {
+                            hojasExternas.add(r.source to item.url)
                         }
                     }
                 }
@@ -622,6 +635,85 @@ class NavController(
                 }
             }
         }
+        // T111 v10 (TK-111-6, R0456, RES-0178): @font-face y @import.
+        // cssExterno junta el texto de las hojas <link> y de las hojas
+        // importadas a nivel 1 (los @import de una hoja importada NO se
+        // piden); fuentes guarda los bytes crudos por familia (primera
+        // cara gana, URL dedup, tope 8). Las caras del CSS inline se
+        // resuelven contra la base del documento y las de cada hoja,
+        // contra la URL de ESA hoja (spec CSS).
+        val cssExterno = StringBuilder()
+        val fuentes = LinkedHashMap<String, ByteArray>()
+        val caras = ArrayList<CssFontFace>()
+        val basesCaras = ArrayList<Url>()
+        val cssInline = textoEstilosDe(document.nodeOf(document.rootHandle()))
+        if (cssInline.isNotBlank()) {
+            val hojaInline = CssStylesheet.parse(cssInline)
+            for (f in hojaInline.fonts) {
+                caras.add(f)
+                basesCaras.add(baseDeResolucion(document, finalUrl))
+            }
+        }
+        val urlsHojas = HashSet<String>()
+        for (par in hojasExternas) {
+            cssExterno.append('\n').append(par.first)
+            val baseHoja = try {
+                UrlParser.parse(par.second)
+            } catch (e: UrlParseException) {
+                finalUrl
+            }
+            val hoja = CssStylesheet.parse(par.first)
+            for (f in hoja.fonts) {
+                caras.add(f)
+                basesCaras.add(baseHoja)
+            }
+            for (imp in hoja.imports) {
+                val full = resolveUrl(baseHoja, imp) ?: continue
+                if (!urlsHojas.add(full)) continue
+                if (!cspPermite(csp, "style-src", full, origin, false)) {
+                    subresources.add(NavSubresource("stylesheet", full, "blocked-csp"))
+                    continue
+                }
+                val r = fetchSide(full, finalUrl, site, "stylesheet", current)
+                if (r is SideResult.NavFailure) {
+                    return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+                }
+                subresources.add(NavSubresource("stylesheet", full, describe(r)))
+                if (r is SideResult.Ok) {
+                    cssExterno.append('\n').append(r.source)
+                    val hojaImp = CssStylesheet.parse(r.source)
+                    val baseImp = try {
+                        UrlParser.parse(full)
+                    } catch (e: UrlParseException) {
+                        baseHoja
+                    }
+                    for (f in hojaImp.fonts) {
+                        caras.add(f)
+                        basesCaras.add(baseImp)
+                    }
+                }
+            }
+        }
+        val urlsFuentes = HashSet<String>()
+        for (idx in caras.indices) {
+            val cara = caras[idx]
+            if (fuentes.containsKey(cara.familia)) continue
+            if (fuentes.size >= 8) break
+            val full = resolveUrl(basesCaras[idx], cara.src) ?: continue
+            if (!urlsFuentes.add(full)) continue
+            if (!cspPermite(csp, "font-src", full, origin, false)) {
+                subresources.add(NavSubresource("font", full, "blocked-csp"))
+                continue
+            }
+            val r = fetchSide(full, finalUrl, site, "font", current)
+            if (r is SideResult.NavFailure) {
+                return NavOutcome.Failed(NavState.LOADED, r.code, r.message, committed)
+            }
+            subresources.add(NavSubresource("font", full, describe(r)))
+            if (r is SideResult.Ok && r.crudo != null) {
+                fuentes[cara.familia] = r.crudo
+            }
+        }
         events.add(NavEvent(NavState.LOADED, current))
         val loaded = committed.copy(
             url = historyApi.urlActual(),
@@ -629,7 +721,9 @@ class NavController(
             scripts = scripts,
             events = ArrayList(events),
             subframes = subframes,
-            imagenes = imagenes
+            imagenes = imagenes,
+            cssExterno = cssExterno.toString(),
+            fuentes = fuentes
         )
         page = loaded
         return NavOutcome.Loaded(loaded)
@@ -979,6 +1073,33 @@ class NavController(
         if (kids != null) {
             for (c in kids) walkLoadItems(c, page, out)
         }
+    }
+
+    /**
+     * T111 v10 (TK-111-6, R0456, RES-0178): texto concatenado de los
+     * <style> inline del documento (espejo de styleTextOf del shell); el
+     * parser de caras @font-face lo consume con la base del documento.
+     */
+    private fun textoEstilosDe(root: DomNode): String {
+        val sb = StringBuilder()
+        fun go(node: DomNode) {
+            when (node) {
+                is DomNode.Document -> for (c in node.children) go(c)
+                is DomNode.Element -> {
+                    if (node.name.equals("style", ignoreCase = true)) {
+                        for (c in node.children) {
+                            if (c is DomNode.Text) sb.append('\n').append(c.data)
+                        }
+                        return
+                    }
+                    for (c in node.children) go(c)
+                }
+                else -> {
+                }
+            }
+        }
+        go(root)
+        return sb.toString()
     }
 
     /**

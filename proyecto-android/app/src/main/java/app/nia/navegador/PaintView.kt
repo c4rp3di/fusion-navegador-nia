@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
 import android.text.Selection
@@ -23,6 +24,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import java.io.File
 import nia.contracts.ContractsVersion
 import nia.engine.css.CssCascade
 import nia.engine.css.CssComputedStyle
@@ -144,6 +146,15 @@ class PaintView(context: Context) : View(context) {
     // del documento actual (por src CRUDO) y cache de bitmaps decodificados.
     private var imagenesPendientes: Map<String, ByteArray> = emptyMap()
     private val bitmaps = HashMap<String, Bitmap>()
+
+    // T111 v10 (TK-111-6, R0456, RES-0178): CSS de las hojas <link> e
+    // importadas del documento, fuentes web por familia (bytes crudos),
+    // typefaces decodificados y la primera familia computada por op de
+    // texto (lista paralela a scene.ops).
+    private var cssExternoPendiente: String = ""
+    private var fuentesPendientes: Map<String, ByteArray> = emptyMap()
+    private val typefaces = HashMap<String, Typeface>()
+    private var familiasTexto: List<String> = emptyList()
 
     /** C5 v1 (R0280, RES-0121): sesion del loop del script VIVO; la
      *  sesion anterior muere ANTES de abrir la del documento nuevo
@@ -296,6 +307,10 @@ class PaintView(context: Context) : View(context) {
         hostCosmeticos = null
         // T111 v8 (TK-111-5, R0448, RES-0176): demo/SAF no trae imagenes.
         imagenesPendientes = emptyMap()
+        // T111 v10 (TK-111-6): demo/SAF tampoco trae hojas externas ni fuentes.
+        cssExternoPendiente = ""
+        fuentesPendientes = emptyMap()
+        typefaces.clear()
         correrScriptDocumento()
         rebuild()
     }
@@ -360,6 +375,36 @@ class PaintView(context: Context) : View(context) {
      * imagenes del documento actual (por src CRUDO). */
     fun cargarImagenes(imagenes: Map<String, ByteArray>) {
         imagenesPendientes = imagenes
+    }
+
+    /** T111 v10 (TK-111-6, R0456, RES-0178): CSS de las hojas <link> e
+     * importadas del documento actual (null o vacio = sin hojas externas). */
+    fun cargarCssExterno(css: String?) {
+        cssExternoPendiente = css ?: ""
+    }
+
+    /** T111 v10 (TK-111-6, R0456, RES-0178): fuentes web por familia; cada
+     * una se decodifica UNA vez a Typeface (archivo temporal en cacheDir);
+     * la que Android no cargue se omite fail-closed y su texto queda con
+     * el typeface por defecto. */
+    fun cargarFuentes(fuentes: Map<String, ByteArray>) {
+        fuentesPendientes = fuentes
+        typefaces.clear()
+        for (par in fuentes) {
+            var tmp: File? = null
+            try {
+                tmp = File(
+                    context.cacheDir,
+                    "nia-fuente-" + par.key.hashCode().toString(16) + "-" + par.value.size + ".bin"
+                )
+                tmp.writeBytes(par.value)
+                typefaces[par.key] = Typeface.createFromFile(tmp)
+            } catch (e: Exception) {
+                // fail-closed: una fuente que Android no carga se omite
+            } finally {
+                tmp?.delete()
+            }
+        }
     }
 
     /**
@@ -458,7 +503,10 @@ class PaintView(context: Context) : View(context) {
      *  pipeline del rebuild() con viewport de impresion; la pagina
      *  impresa es el MISMO render del motor, jamas una captura. */
     fun escenaParaImprimir(anchoUtil: Double): PaintScene {
-        var css = baseCss + styleTextOf()
+        // T111 v10 (TK-111-6): las hojas <link>/importadas van ENTRE el CSS
+        // de base y los <style> inline; la impresion SIN fuentes web es
+        // exclusion v1 (typeface por defecto).
+        var css = baseCss + cssExternoPendiente + styleTextOf()
         if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
         val laid = LayoutEngine.layout(rootDoc, styleOfDe(computed), anchoUtil)
@@ -543,12 +591,27 @@ class PaintView(context: Context) : View(context) {
 
     /** Recalcula cascada+layout+escena con las reglas del usuario (v4). */
     private fun rebuild() {
-        var css = baseCss + styleTextOf()
+        // T111 v10 (TK-111-6): las hojas <link>/importadas van ENTRE el CSS
+        // de base y los <style> inline del documento.
+        var css = baseCss + cssExternoPendiente + styleTextOf()
         if (DevToolsState.userCss.isNotEmpty()) css = css + "\n" + DevToolsState.userCss
         val computed = CssCascade.compute(root, CssStylesheet.parse(css))
         val laid = LayoutEngine.layout(rootDoc, styleOfDe(computed), viewport)
         layout = laid
         scene = PaintSceneBuilder.build(rootDoc, computed, laid, imagenesPendientes)
+        // T111 v10 (TK-111-6): primera familia del font-family computado
+        // por op de texto, paralela a scene.ops para el typeface en onDraw.
+        val fams = ArrayList<String>()
+        for (op in scene.ops) {
+            fams.add(
+                if (op is PaintOp.DrawText) {
+                    primeraFamiliaDe(computed.propertyOf(op.node, "font-family"))
+                } else {
+                    ""
+                }
+            )
+        }
+        familiasTexto = fams
         builtRevision = DevToolsState.revision
     }
 
@@ -574,7 +637,7 @@ class PaintView(context: Context) : View(context) {
         if (DevToolsState.revision != builtRevision) rebuild()
         canvas.drawColor(Color.rgb(20, 20, 34))
         val scale = width / viewport.toFloat()
-        for (op in scene.ops) {
+        for ((idx, op) in scene.ops.withIndex()) {
             when (op) {
                 is PaintOp.DrawRect -> {
                     fillPaint.color = parseColor(op.color)
@@ -589,6 +652,9 @@ class PaintView(context: Context) : View(context) {
                 is PaintOp.DrawText -> {
                     textPaint.color = parseColor(op.color)
                     textPaint.textSize = (op.fontSize * scale).toFloat()
+                    // T111 v10 (TK-111-6): typeface de la fuente web de la
+                    // familia del op; sin fuente cargada, el de por defecto.
+                    textPaint.typeface = typefaces[familiasTexto.getOrNull(idx) ?: ""]
                     canvas.drawText(
                         op.text,
                         (op.x * scale).toFloat(),
@@ -1232,5 +1298,20 @@ class PaintView(context: Context) : View(context) {
             // parsea no puede quedar negro invisible.
             Color.rgb(176, 176, 192)
         }
+
+    /** T111 v10 (TK-111-6): primera familia de un valor font-family
+     * computado (comillas quitadas); vacio si no hay valor util. */
+    private fun primeraFamiliaDe(v: String?): String {
+        if (v == null) return ""
+        val primera = v.split(',')[0].trim()
+        if (primera.length >= 2) {
+            val a = primera[0]
+            val b = primera[primera.length - 1]
+            if ((a == '"' && b == '"') || (a == '\'' && b == '\'')) {
+                return primera.substring(1, primera.length - 1)
+            }
+        }
+        return primera
+    }
 }
 

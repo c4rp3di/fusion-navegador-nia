@@ -189,3 +189,31 @@ file, action sin <base> (se resuelve contra la pagina),
 form.submit() desde JS sigue siendo SOLO el evento submit
 (navegacion programatica en v2: re-entrancia con el event loop de
 documento).
+
+## v10 (R0456, RES-0178): @font-face y @import TK-111-6
+
+T111 v10 (contrato y entrega en R0456): TK-111-6 CERRADO v1 sobre
+da91bd1. Css.kt: @font-face (familia con comillas quitadas y PRIMERA
+url() de src; sin familia o sin url util -> invalid-font-face) y
+@import (string entre comillas o url(), cualificador media ignorado)
+se reconocen SOLO a nivel raiz y sin error; CssStylesheet gana fonts
+e imports; la forma invalida "@import x;" (ident desnudo) SIGUE dando
+unsupported-at-rule, por lo que el test atRuleSeSalta queda verde sin
+editar. NavController: el cuerpo de cada hoja <link> stylesheet ya NO
+se descarta (viaja como cssExterno), textoEstilosDe extrae los
+<style> inline, las caras @font-face se resuelven contra la base de
+SU hoja (inline: base del documento; externa: su propia URL, spec),
+@import nivel 1 se pide kind stylesheet con CSP style-src y su texto
+se suma a cssExterno; fuentes: primera familia gana, URL dedup, tope
+8, CSP font-src, kind font, bytes crudos por familia en NavPage.
+Shell: PaintView decodifica cada fuente a Typeface (archivo temporal
+en cacheDir, fallo -> se omite fail-closed), aplica el typeface por
+op de texto segun la PRIMERA familia del font-family computado
+(familiasTexto paralela a scene.ops) y suma cssExterno entre el CSS
+de base y los <style> inline; BrowserActivity pasa page.fuentes y
+page.cssExterno a pintar.
+
+Exclusiones v1: sin format()/unicode-range/font-display, sin local(),
+sin @font-face dentro de @media, sin @import anidado (profundidad 1),
+sin orden real de cascada de hojas, impresion PDF sin fuentes web
+(typeface por defecto), tope 8 fuentes por documento.

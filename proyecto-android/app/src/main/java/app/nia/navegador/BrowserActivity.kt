@@ -2835,11 +2835,15 @@ class BrowserActivity : Activity() {
     }
 
     /** TK-071-6 (R0419, RES-0166): pintar con los subframes del frame tree.
-     * T111 v8 (TK-111-5, R0448, RES-0176): imagenes = bytes crudos por src. */
+     * T111 v8 (TK-111-5, R0448, RES-0176): imagenes = bytes crudos por src.
+     * T111 v10 (TK-111-6, R0456, RES-0178): fuentes web por familia y CSS
+     * de las hojas <link>/importadas, ambos viajan con la pagina. */
     private fun pintar(
         html: String,
         subframes: List<NavSubframe>,
-        imagenes: Map<String, ByteArray> = emptyMap()
+        imagenes: Map<String, ByteArray> = emptyMap(),
+        fuentes: Map<String, ByteArray> = emptyMap(),
+        cssExterno: String = ""
     ) {
         val hoja = hojaParaPintar
         hojaParaPintar = null
@@ -2855,6 +2859,8 @@ class BrowserActivity : Activity() {
             pagina.cargarCosmeticosModulo(cosmeticos, hostCos)
             pagina.cargarSubframes(subframes)
             pagina.cargarImagenes(imagenes)
+            pagina.cargarFuentes(fuentes)
+            pagina.cargarCssExterno(cssExterno)
             pagina.loadPagina(html, cssNavegador(), true)
             scroll.scrollTo(0, 0)
         } catch (e: Exception) {
@@ -2887,7 +2893,7 @@ class BrowserActivity : Activity() {
         indicador.setTextColor(NiaUi.color(if (cifrada) colores.accent else colores.warn))
         val html = page.html
         if (html != null) {
-            pintar(html, page.subframes, page.imagenes)
+            pintar(html, page.subframes, page.imagenes, page.fuentes, page.cssExterno)
         } else {
             // C6 v1: sin html la hoja ganada se descarta (vive con el documento)
             hojaParaPintar = null
@@ -3055,7 +3061,7 @@ class BrowserActivity : Activity() {
         estado.text = "LOADED " + page.status + " - " + hostDe(page.url) + " - " + page.url + " | ops=" + pagina.opsCount()
         val html = page.html
         if (html != null) {
-            pintar(html, page.subframes, page.imagenes)
+            pintar(html, page.subframes, page.imagenes, page.fuentes, page.cssExterno)
         }
     }
 

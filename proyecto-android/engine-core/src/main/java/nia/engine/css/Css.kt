@@ -10,9 +10,12 @@ package nia.engine.css
  * unsupported-pseudo, unterminated-block, invalid-declaration,
  * unexpected-character. v3 (R0090, RES-0050): @media con min-width y
  * max-width; el query se guarda por regla y lo evalua la cascada contra el
- * viewport. Limitaciones v3: resto de @-rules sin soporte, sin pseudo-clases
- * dinamicas u otras (hover, :not, :root...), nombres de pseudo-clase solo
- * en minusculas.
+ * viewport. v10 (TK-111-6, R0456, RES-0178): @font-face (familia y primera
+ * url() de src, solo a nivel raiz) y @import (string o url(), solo a nivel
+ * raiz) se reconocen sin error; el resto de @-rules sigue dando
+ * unsupported-at-rule. Limitaciones v1: sin format()/unicode-range/
+ * font-display, sin local(), sin @font-face dentro de @media, sin
+ * cualificador media en @import, sin @import anidado.
  */
 data class CssNth(val a: Int, val b: Int)
 
@@ -42,7 +45,19 @@ data class CssRule(
     val media: String? = null
 )
 
-class CssStylesheet private constructor(val rules: List<CssRule>, val errors: List<String>) {
+/**
+ * Cara @font-face v10 (TK-111-6): familia declarada (comillas quitadas) y
+ * la primera url() cruda de src; quien la resuelva contra la base y la
+ * pida es el navegador (NavController), nunca el parser.
+ */
+data class CssFontFace(val familia: String, val src: String)
+
+class CssStylesheet private constructor(
+    val rules: List<CssRule>,
+    val errors: List<String>,
+    val fonts: List<CssFontFace> = emptyList(),
+    val imports: List<String> = emptyList()
+) {
 
     companion object {
         fun parse(text: String): CssStylesheet = Machine(text).run()
@@ -52,13 +67,15 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
         private var order = 0
         private val rules = mutableListOf<CssRule>()
         private val errors = mutableListOf<String>()
+        private val fonts = mutableListOf<CssFontFace>()
+        private val imports = mutableListOf<String>()
         private var i = 0
         private val n = text.length
         private val mediaStack = mutableListOf<String>()
 
         fun run(): CssStylesheet {
             parseLoop()
-            return CssStylesheet(rules.toList(), errors.toList())
+            return CssStylesheet(rules.toList(), errors.toList(), fonts.toList(), imports.toList())
         }
 
         private fun isIdentStart(c: Char): Boolean = (c in 'a'..'z') || (c in 'A'..'Z') || c == '_'
@@ -135,6 +152,8 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                 i++
             }
             val name = sb.toString()
+            if (name == "font-face") return fontFace()
+            if (name == "import") return importRule()
             if (name != "media") {
                 errors.add("unsupported-at-rule")
                 skipAtRule()
@@ -165,6 +184,133 @@ class CssStylesheet private constructor(val rules: List<CssRule>, val errors: Li
                 i++
                 mediaStack.removeAt(mediaStack.size - 1)
             }
+        }
+
+        /**
+         * v10 (TK-111-6): @font-face SOLO a nivel raiz (dentro de @media
+         * se salta como @-rule sin soporte). Descriptores de interes:
+         * font-family (comillas quitadas) y la PRIMERA url() de src; un
+         * src sin url() (p.ej. solo local()) no es usable en v1. Sin
+         * familia o sin url util -> invalid-font-face y la cara se
+         * descarta; el bloque no produce reglas normales.
+         */
+        private fun fontFace() {
+            if (mediaStack.isNotEmpty()) {
+                errors.add("unsupported-at-rule")
+                skipAtRule()
+                return
+            }
+            skipNoise()
+            if (i >= n || text[i] != '{') {
+                errors.add("invalid-font-face")
+                skipAtRule()
+                return
+            }
+            i++
+            var familia: String? = null
+            var src: String? = null
+            while (true) {
+                skipNoise()
+                if (i >= n) {
+                    errors.add("unterminated-block")
+                    return
+                }
+                if (text[i] == '}') {
+                    i++
+                    break
+                }
+                val psb = StringBuilder()
+                while (i < n && isIdent(text[i])) {
+                    psb.append(text[i])
+                    i++
+                }
+                val prop = psb.toString().lowercase()
+                skipNoise()
+                if (i < n && text[i] == ':') i++
+                val vsb = StringBuilder()
+                while (i < n && text[i] != ';' && text[i] != '}') {
+                    vsb.append(text[i])
+                    i++
+                }
+                val value = vsb.toString().trim()
+                if (i < n && text[i] == ';') i++
+                if (prop == "font-family" && familia == null) familia = sinComillas(value)
+                if (prop == "src" && src == null) src = primeraUrl(value)
+            }
+            if (familia.isNullOrEmpty() || src.isNullOrEmpty()) {
+                errors.add("invalid-font-face")
+            } else {
+                fonts.add(CssFontFace(familia, src))
+            }
+        }
+
+        /**
+         * v10 (TK-111-6): @import SOLO a nivel raiz; la URL es una string
+         * entre comillas o url(...) y el cualificador media tras ella se
+         * IGNORA en v1. La forma invalida (ident desnudo tipo
+         * "@import x;") sigue dando unsupported-at-rule y se salta,
+         * como el resto de @-rules sin soporte.
+         */
+        private fun importRule() {
+            if (mediaStack.isNotEmpty()) {
+                errors.add("unsupported-at-rule")
+                skipAtRule()
+                return
+            }
+            skipNoise()
+            val psb = StringBuilder()
+            while (i < n && text[i] != ';') {
+                psb.append(text[i])
+                i++
+            }
+            if (i >= n) {
+                errors.add("unsupported-at-rule")
+                return
+            }
+            i++
+            val url = urlDeImport(psb.toString().trim())
+            if (url == null) {
+                errors.add("unsupported-at-rule")
+                return
+            }
+            imports.add(url)
+        }
+
+        /** v10: quita un par de comillas exteriores si las hay. */
+        private fun sinComillas(v: String): String {
+            if (v.length >= 2) {
+                val a = v[0]
+                val b = v[v.length - 1]
+                if ((a == '"' && b == '"') || (a == '\'' && b == '\'')) return v.substring(1, v.length - 1)
+            }
+            return v
+        }
+
+        /** v10: primera url(...) de un valor src, sin comillas; null si no hay. */
+        private fun primeraUrl(value: String): String? {
+            val idx = value.lowercase().indexOf("url(")
+            if (idx < 0) return null
+            val desde = idx + 4
+            val cierre = value.indexOf(')', desde)
+            if (cierre < 0) return null
+            return sinComillas(value.substring(desde, cierre).trim())
+        }
+
+        /** v10: URL de un prelude @import: string entre comillas o url(...). */
+        private fun urlDeImport(prelude: String): String? {
+            if (prelude.isEmpty()) return null
+            val a = prelude[0]
+            if (a == '"' || a == '\'') {
+                val cierre = prelude.indexOf(a, 1)
+                if (cierre < 0) return null
+                return prelude.substring(1, cierre)
+            }
+            if (prelude.length >= 5 && prelude.substring(0, 4).lowercase() == "url(") {
+                val cierre = prelude.lastIndexOf(')')
+                if (cierre < 0) return null
+                return sinComillas(prelude.substring(4, cierre).trim())
+            }
+            return null
         }
 
         /** Argumento an+b de :nth-child: odd/even, entero, an, an+b, -n+b, an-b. */
