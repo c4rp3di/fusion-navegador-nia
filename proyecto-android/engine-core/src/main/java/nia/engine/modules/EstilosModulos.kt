@@ -42,6 +42,11 @@ object EstilosModulos {
     fun validar(css: String): List<CssRule>? {
         val hoja = CssStylesheet.parse(css)
         if (hoja.errors.isNotEmpty()) return null
+        // v10 (R0456): el parser ahora acepta @font-face y @import
+        // sin error; la lista cerrada del modulo los rechaza AQUI
+        // (fail-closed igual que antes, cuando daban
+        // unsupported-at-rule).
+        if (hoja.fonts.isNotEmpty() || hoja.imports.isNotEmpty()) return null
         var selectores = 0
         for (regla in hoja.rules) {
             if (regla.media != null) return null
