@@ -167,3 +167,25 @@ Exclusiones honestas de v2:
 - El shell se describe por entregas verificadas (T035 IME, T034
   workers, T092 v2 puente); MainActivity/PaintView no se auditaron
   linea a linea en v2.
+
+## v9 (R0453, RES-0177): submit de formularios TK-111-8
+
+T111 v9 (contrato y entrega en R0453): TK-111-8 CERRADO v1 sobre
+fb92d6cb. nav/FormSubmit.kt NUEVO (calculo PURO: action resuelto
+contra la URL de la pagina como resolveUrl, metodo GET/POST,
+controles con name: input de texto/hidden/password/... con value,
+checkbox/radio solo con checked, textarea con su texto profundo;
+codificacion application/x-www-form-urlencoded UTF-8, espacio como
++). NavController gana enviarFormulario(metodo, url, cuerpo): el
+POST viaja como cuerpo de la peticion con Content-Type urlencoded y
+una redireccion a GET suelta el cuerpo (RedirectPolicy manda).
+Shell: toque largo dentro de un formulario ofrece Enviar
+formulario (mismo camino explicito que los enlaces, R0189) y
+navega por el camino del omnibox.
+
+Exclusiones v1: multipart/form-data y text/plain NO envian (null
+honesto; multipart en v2 con JsFetchApi), select sin recoger, sin
+file, action sin <base> (se resuelve contra la pagina),
+form.submit() desde JS sigue siendo SOLO el evento submit
+(navegacion programatica en v2: re-entrancia con el event loop de
+documento).

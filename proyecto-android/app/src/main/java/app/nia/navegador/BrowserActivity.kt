@@ -80,6 +80,7 @@ import nia.engine.inspector.InspectorSession
 import nia.engine.js.CuotasJs
 import nia.engine.js.JsLimits
 import nia.engine.lectura.Lector
+import nia.engine.nav.FormSubmit
 import nia.engine.nav.NavController
 import nia.engine.nav.NavOutcome
 import nia.engine.media.MediaEngine
@@ -1288,7 +1289,7 @@ class BrowserActivity : Activity() {
         }
     }
 
-    private fun navegar(url: String, dominioImplicito: Boolean, textoOriginal: String?) {
+    private fun navegar(url: String, dominioImplicito: Boolean, textoOriginal: String?, metodo: String = "GET", cuerpo: String? = null) {
         val id = tabs.activa()
         val nc = navActual()
         if (nc == null) {
@@ -1304,7 +1305,11 @@ class BrowserActivity : Activity() {
         val ctxModulo = if (id == null) null else contextoModulos.nuevaNavegacion(id)
         poolNavegacion.execute {
             val inicio = clock.nowMillis()
-            val o = nc.navigate(url)
+            val o = if (metodo == "POST" && cuerpo != null) {
+                nc.enviarFormulario(metodo, url, cuerpo)
+            } else {
+                nc.navigate(url)
+            }
             scriptsInterrumpidos = contarScriptsInterrumpidos(o)
             if (scriptsInterrumpidos == 0) reintentosCuotas = 0
             dispararModulos(o, ctxModulo)
@@ -3184,6 +3189,39 @@ class BrowserActivity : Activity() {
         startActivity(Intent.createChooser(envio, "Compartir"))
     }
 
+    /** T111 v9 / TK-111-8 (R0453, RES-0177): envio REAL del formulario
+     * que contiene el nodo tocado (menu de toque largo, el mismo camino
+     * explicito que los enlaces): FormSubmit.preparar calcula metodo,
+     * url y cuerpo sobre el documento vivo; GET navega por el camino de
+     * siempre y POST viaja como cuerpo urlencoded. La traza lleva SOLO
+     * el host. El null del calculo (multipart/text-plain, url invalida)
+     * NO navega JAMAS. */
+    private fun enviarFormularioActual(formNodeId: Int) {
+        val id = tabs.activa()
+        val h = pagina.handlePorNodeId(formNodeId)
+        if (h == null) {
+            estado.text = "formulario no encontrado"
+            return
+        }
+        val urlPagina = id?.let { tabs.tarjeta(it)?.url } ?: ""
+        if (urlPagina.isEmpty()) {
+            estado.text = "sin url de pagina"
+            return
+        }
+        val envio = FormSubmit.preparar(pagina.documento(), h, urlPagina)
+        if (envio == null) {
+            estado.text = "envio no soportado (enctype o url)"
+            traza("form", "submit no soportado")
+            return
+        }
+        traza("form", "submit " + envio.metodo + " " + hostDe(envio.url))
+        if (envio.metodo == "POST") {
+            navegar(envio.url, false, null, "POST", envio.cuerpo)
+        } else {
+            navegar(envio.url, false, null)
+        }
+    }
+
     /** T077 v1 (R0195, RES-0093): menu propio ANCLADO al contenido bajo
      * el toque largo (enlace/imagen/texto resueltos con el hitTest del
      * motor). El portapapeles es explicito y solo copia lo resuelto;
@@ -3202,6 +3240,10 @@ class BrowserActivity : Activity() {
                 "Copiar URL de imagen",
                 "Compartir imagen"
             )
+            "formulario" -> arrayOf(
+                "Enviar formulario",
+                "Copiar texto"
+            )
             else -> arrayOf("Copiar texto")
         }
         AlertDialog.Builder(this)
@@ -3219,6 +3261,10 @@ class BrowserActivity : Activity() {
                         0 -> navegar(info.url, false, info.url)
                         1 -> copiarAlPortapapeles(info.url)
                         2 -> compartirTexto(info.url)
+                    }
+                    "formulario" -> when (cual) {
+                        0 -> enviarFormularioActual(info.formNodeId)
+                        1 -> copiarAlPortapapeles(info.texto)
                     }
                     else -> copiarAlPortapapeles(info.texto)
                 }

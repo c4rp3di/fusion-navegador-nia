@@ -283,6 +283,19 @@ class NavController(
     fun navigate(url: String, deadlineMillis: Long = -1): NavOutcome =
         navigateInternal(url, deadlineMillis, true)
 
+    /**
+     * T111 v9 / TK-111-8 (R0453, RES-0177): submit REAL de formularios.
+     * GET: la url ya lleva la query codificada (FormSubmit.preparar).
+     * POST: el cuerpo urlencoded viaja como body de la peticion con
+     * Content-Type application/x-www-form-urlencoded; una redireccion
+     * que cambie el metodo a GET suelta el cuerpo (RedirectPolicy manda).
+     * Exclusion v1: la navegacion desde JS (form.submit() de los
+     * bindings sigue disparando SOLO el evento submit, sin navegacion:
+     * re-entrancia con el event loop de documento, v2).
+     */
+    fun enviarFormulario(metodo: String, url: String, cuerpo: String?, deadlineMillis: Long = -1): NavOutcome =
+        navigateInternal(url, deadlineMillis, true, metodo, cuerpo)
+
     /** Re-navega a la entrada anterior; null si no hay entrada previa.
      * T111 v4 (TK-111-3): a una entrada SPA del documento actual se le
      * sirve ese documento sin fetch ni re-navegacion. */
@@ -369,13 +382,13 @@ class NavController(
         return p.document.snapshot().revision != p.layoutRevision
     }
 
-    private fun navigateInternal(url: String, deadlineMillis: Long, push: Boolean): NavOutcome {
+    private fun navigateInternal(url: String, deadlineMillis: Long, push: Boolean, metodoInicial: String = "GET", cuerpo: String? = null): NavOutcome {
         manager.invalidate()
         val events = ArrayList<NavEvent>()
         events.add(NavEvent(NavState.NAVIGATING, url))
         lastState = NavState.NAVIGATING
         var current = url
-        var method = "GET"
+        var method = metodoInicial
         var hops = 0
         var response: FetchResponse? = null
         while (true) {
@@ -402,7 +415,15 @@ class NavController(
             val headers = HashMap<String, String>()
             val cookie = profile.cookies.cookieHeader(u.host, u.path, u.scheme == "https", SiteContext.TOP_LEVEL_CROSS_SITE)
             if (cookie.isNotEmpty()) headers["Cookie"] = cookie
-            val request = manager.newRequest(method, current, headers)
+            // TK-111-8: el cuerpo SOLO viaja mientras el metodo sea POST
+            // (una redireccion que cambia a GET lo suelta, como el spec).
+            val envio = if (method == "POST") cuerpo else null
+            if (envio != null) headers["Content-Type"] = "application/x-www-form-urlencoded"
+            val request = if (envio != null) {
+                manager.newRequest(method, current, headers, envio.toByteArray(Charsets.UTF_8))
+            } else {
+                manager.newRequest(method, current, headers)
+            }
             val outcome = manager.fetch(request, null, deadlineMillis, RequestContext.of(current, "document", ""))
             if (outcome is Outcome.Failure) {
                 return NavOutcome.Failed(NavState.NAVIGATING, outcome.error.code, outcome.error.safeMessage, null)

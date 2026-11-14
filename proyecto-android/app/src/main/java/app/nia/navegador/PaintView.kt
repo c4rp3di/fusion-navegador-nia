@@ -961,7 +961,7 @@ class PaintView(context: Context) : View(context) {
 
     /** T077 v1: contenido resuelto bajo el toque largo (enlace, imagen
      * o texto), anclado al documento real del motor. */
-    class InfoToqueLargo(val tipo: String, val url: String, val texto: String)
+    class InfoToqueLargo(val tipo: String, val url: String, val texto: String, val formNodeId: Int = -1)
 
     /** Resuelve el contenido bajo (x, y): hitTest del motor y subida por
      * los padres hasta <a href> o <img src>; si no, el texto del nodo. */
@@ -970,6 +970,7 @@ class PaintView(context: Context) : View(context) {
         val hit = scene.hitTest((x / scale).toDouble(), (y / scale).toDouble()) ?: return null
         var enlace: String? = null
         var imagen: String? = null
+        var formId = -1
         var h = devtoolsModel.handleOf(hit.node)
         var vueltas = 0
         while (h != null && vueltas < 64) {
@@ -990,6 +991,11 @@ class PaintView(context: Context) : View(context) {
                         null
                     }
                 }
+                // TK-111-8 (R0453): el <form> que contiene el nodo
+                // tocado (el menu ofrece Enviar formulario).
+                if (formId == -1 && nombre == "form") {
+                    formId = h.nodeId
+                }
                 if (enlace != null) break
             }
             h = parentHandleOf(h)
@@ -999,10 +1005,18 @@ class PaintView(context: Context) : View(context) {
         return when {
             enlace != null -> InfoToqueLargo("enlace", enlace ?: "", texto.trim())
             imagen != null -> InfoToqueLargo("imagen", imagen ?: "", texto.trim())
+            formId != -1 -> InfoToqueLargo("formulario", "", texto.trim(), formId)
             texto.isNotBlank() -> InfoToqueLargo("texto", "", texto.trim())
             else -> null
         }
     }
+
+    /** T111 v9 / TK-111-8 (R0453): acceso del shell al documento vivo y
+     * al handle de un nodeId (envio de formularios desde el menu). */
+    fun documento(): DomDocument = document
+
+    /** Handle del nodo con el nodeId dado (wrapper de handleById). */
+    fun handlePorNodeId(nodeId: Int): DomHandle? = handleById(nodeId)
 
     /** T035 v1 (IME): enfoca el input tocado y muestra el teclado; tocar
      * fuera limpia el foco y lo esconde. */
