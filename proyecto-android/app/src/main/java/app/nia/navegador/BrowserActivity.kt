@@ -2665,8 +2665,11 @@ class BrowserActivity : Activity() {
                 is PaintOp.DrawImage -> {
                     // T111 v8 (TK-111-5, R0448, RES-0176): imagen en el
                     // PDF/impresion; placeholder gris si no decodifica.
-                    val bmp = if (op.data != null) {
-                        BitmapFactory.decodeByteArray(op.data, 0, op.data.size)
+                    // Hotfix v7.3 (R0451): val local; el smart cast sobre
+                    // op.data (modulo distinto) no compila.
+                    val data = op.data
+                    val bmp = if (data != null) {
+                        BitmapFactory.decodeByteArray(data, 0, data.size)
                     } else {
                         null
                     }
