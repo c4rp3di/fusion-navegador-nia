@@ -1751,28 +1751,31 @@ object JsInterpreter {
         var aborted: JsAbortReason? = null
         JsQuotas.begin(limits)
         try {
-            hoist(parse.program.statements, genv)
-            for (s in parse.program.statements) {
-                val c = runStatement(s, genv, emptyList())
-                if (c.type != CType.NORMAL) break
-                if (c.value != null) last = c.value
-            }
-        } catch (ex: JsAbort) {
-            aborted = ex.reason
-        } catch (ex: Exception) {
-            if (ex is JsThrown) thrown = ex.value else throw ex
-        }
-        if (aborted == null) {
             try {
-                val mv = drainMicrotasks()
-                if (mv != null) last = mv
+                hoist(parse.program.statements, genv)
+                for (s in parse.program.statements) {
+                    val c = runStatement(s, genv, emptyList())
+                    if (c.type != CType.NORMAL) break
+                    if (c.value != null) last = c.value
+                }
             } catch (ex: JsAbort) {
                 aborted = ex.reason
+            } catch (ex: Exception) {
+                if (ex is JsThrown) thrown = ex.value else throw ex
             }
-        } else {
-            cleanupRunners()
+            if (aborted == null) {
+                try {
+                    val mv = drainMicrotasks()
+                    if (mv != null) last = mv
+                } catch (ex: JsAbort) {
+                    aborted = ex.reason
+                }
+            } else {
+                cleanupRunners()
+            }
+        } finally {
+            JsQuotas.end()
         }
-        JsQuotas.end()
         return JsEvalResult(last, thrown != null, thrown, aborted)
     }
 
@@ -1814,28 +1817,31 @@ object JsInterpreter {
         var aborted: JsAbortReason? = null
         JsQuotas.begin(limits)
         try {
-            hoist(parse.program.statements, genv)
-            for (s in parse.program.statements) {
-                val c = runStatement(s, genv, emptyList())
-                if (c.type != CType.NORMAL) break
-                if (c.value != null) last = c.value
-            }
-        } catch (ex: JsAbort) {
-            aborted = ex.reason
-        } catch (ex: Exception) {
-            if (ex is JsThrown) thrown = ex.value else throw ex
-        }
-        if (aborted == null) {
             try {
-                val mv = drainMicrotasks()
-                if (mv != null) last = mv
+                hoist(parse.program.statements, genv)
+                for (s in parse.program.statements) {
+                    val c = runStatement(s, genv, emptyList())
+                    if (c.type != CType.NORMAL) break
+                    if (c.value != null) last = c.value
+                }
             } catch (ex: JsAbort) {
                 aborted = ex.reason
+            } catch (ex: Exception) {
+                if (ex is JsThrown) thrown = ex.value else throw ex
             }
-        } else {
-            cleanupRunners()
+            if (aborted == null) {
+                try {
+                    val mv = drainMicrotasks()
+                    if (mv != null) last = mv
+                } catch (ex: JsAbort) {
+                    aborted = ex.reason
+                }
+            } else {
+                cleanupRunners()
+            }
+        } finally {
+            JsQuotas.end()
         }
-        JsQuotas.end()
         return JsEvalResult(last, thrown != null, thrown, aborted)
     }
 
@@ -1928,9 +1934,9 @@ object JsInterpreter {
     /**
      * Abre la sesion del MOTOR para los workers (T034): como el loop de T025
      * (runners vivos entre pumps y cuotas activas) pero SIN crear el genv,
-     * porque cada worker crea el suyo con makeWorkerGlobal. La sesion es
-     * unica por motor: las cuotas (T021) son del motor y quedan compartidas
-     * entre los workers (limitacion documentada de la v1).
+     * porque cada worker crea el suyo con makeWorkerGlobal. Las cuotas
+     * (T021) son POR HILO desde T-CONC-1: cada worker lleva la suya y no
+     * pisa la de la pagina ni la de otro worker.
      */
     internal fun beginWorkerSession(limits: JsLimits) {
         keepAliveRunners = true
@@ -2053,8 +2059,13 @@ object JsInterpreter {
     private fun startRunner(body: () -> JsValue): Runner {
         val r = Runner()
         activeRunners.add(r)
+        // T-CONC-1: el runner corre en hilo propio y ADOPTA la sesion de
+        // cuotas del hilo que lo lanza; sin esto sus safepoints serian
+        // no-op y un bucle infinito dentro del runner nunca abortaria.
+        val herencia = JsQuotas.sesionActual()
         val t = Thread {
             currentRunner.set(r)
+            JsQuotas.adoptar(herencia)
             try {
                 val v = body()
                 r.finished = true
@@ -2072,6 +2083,7 @@ object JsInterpreter {
                 r.out.put(OutMsg.ThrowErr(JsRuntime.makeErrorObj("Error", "internal runner error")))
             } finally {
                 currentRunner.set(null)
+                JsQuotas.end()
             }
         }
         r.thread = t

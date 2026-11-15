@@ -159,4 +159,89 @@ class JsQuotasTest {
         assertEquals(JsAbortReason.STEP_QUOTA, r.abortReason)
         assertEquals("interrupted step-quota", JsInterpreter.dumpResult(r))
     }
+
+    // ---- Sesion POR HILO (T-CONC-1): el begin/end de un hilo JAMAS pisa
+    // la sesion de otro; antes, el end del primero que terminaba dejaba
+    // al resto sin cuotas (pasos y heap sin limite). ----
+
+    @Test
+    fun elBeginEndDeOtroHiloNoDesactivaMiSesion() {
+        JsQuotas.begin(JsLimits(maxSteps = 150L, maxAllocs = 1_000_000L))
+        try {
+            val otro = Thread {
+                JsQuotas.begin(JsLimits(maxSteps = 10L, maxAllocs = 10L))
+                JsQuotas.end()
+            }
+            otro.start()
+            otro.join()
+            var abortado: JsAbortReason? = null
+            try {
+                for (i in 1..200) JsQuotas.tick()
+            } catch (ex: JsAbort) {
+                abortado = ex.reason
+            }
+            assertEquals(JsAbortReason.STEP_QUOTA, abortado)
+        } finally {
+            JsQuotas.end()
+        }
+    }
+
+    @Test
+    fun dosHilosEvaluanConCuotasIndependientes() {
+        val prog = "var s = 0; for (var i = 0; i < 2000; i++) { s += i; } s;"
+        val resultados = java.util.concurrent.ConcurrentHashMap<String, JsEvalResult>()
+        val t1 = Thread { resultados["a"] = JsInterpreter.evaluate(prog, JsLimits(maxSteps = 100_000L)) }
+        val t2 = Thread { resultados["b"] = JsInterpreter.evaluate(prog, JsLimits(maxSteps = 100_000L)) }
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        for (k in listOf("a", "b")) {
+            val r = assertNotNull(resultados[k])
+            assertFalse(r.interrupted)
+            assertEquals("1999000", JsInterpreter.dumpResult(r))
+        }
+    }
+
+    @Test
+    fun laSesionAnidadaSeRestauraAlCerrar() {
+        JsQuotas.begin(JsLimits(maxSteps = 100L, maxAllocs = 1_000_000L))
+        try {
+            JsQuotas.begin(JsLimits(maxSteps = 10L, maxAllocs = 1_000_000L))
+            try {
+                for (i in 1..5) JsQuotas.tick()
+            } finally {
+                JsQuotas.end()
+            }
+            for (i in 1..50) JsQuotas.tick()
+            var abortado: JsAbortReason? = null
+            try {
+                for (i in 1..100) JsQuotas.tick()
+            } catch (ex: JsAbort) {
+                abortado = ex.reason
+            }
+            assertEquals(JsAbortReason.STEP_QUOTA, abortado)
+        } finally {
+            JsQuotas.end()
+        }
+    }
+
+    @Test
+    fun interruptDesdeOtroHiloAlcanzaLaSesionViva() {
+        JsQuotas.begin(JsLimits(maxSteps = 1_000_000L, maxAllocs = 1_000_000L))
+        try {
+            val otro = Thread { JsQuotas.interrupt() }
+            otro.start()
+            otro.join()
+            var abortado: JsAbortReason? = null
+            try {
+                JsQuotas.tick()
+            } catch (ex: JsAbort) {
+                abortado = ex.reason
+            }
+            assertEquals(JsAbortReason.INTERRUPTED, abortado)
+        } finally {
+            JsQuotas.end()
+        }
+    }
 }
