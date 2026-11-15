@@ -15,6 +15,17 @@ package nia.engine.js
  * banderas) y end cierra. El flag de interrupcion es volatile para que otro
  * hilo pueda pedir el corte: el hilo que ejecuta JS aborta en el siguiente
  * safepoint (la UI pide la interrupcion y nunca se bloquea esperando).
+ *
+ * Sesion POR HILO (T-CONC-1): el estado ya no es un singleton plano. Cada
+ * hilo (dos pestanas del pool de navegacion, un worker, un plugin) lleva
+ * sus propias sesiones en una pila ThreadLocal, asi que el begin/end de un
+ * hilo JAMAS pisa los contadores ni desactiva la sesion de otro (antes, el
+ * end del primero que terminaba dejaba al resto sin cuotas: pasos y heap
+ * sin limite). Las sesiones anidadas en el MISMO hilo se apilan LIFO: al
+ * cerrar la interior se restaura la exterior. interrupt() consulta el
+ * registro global de sesiones vivas, asi que el corte desde la UI sigue
+ * llegando al hilo que ejecuta JS; sin sesiones vivas es un no-op (no
+ * envenena la siguiente evaluacion).
  */
 
 /** Motivo del abort de una evaluacion con cuotas (T021; DEBUG_PAUSE: T028). */
@@ -40,31 +51,64 @@ class JsLimits(val maxSteps: Long = 100_000_000L, val maxAllocs: Long = 10_000_0
  */
 object JsQuotas {
 
-    @Volatile
-    internal var active: Boolean = false
-
-    @Volatile
-    internal var interruptRequested: Boolean = false
-
-    internal var maxSteps: Long = 0L
-    internal var maxAllocs: Long = 0L
-    internal var steps: Long = 0L
-    internal var allocs: Long = 0L
-
-    /** Abre la sesion de la evaluacion: fija topes y resetea contadores. */
-    internal fun begin(limits: JsLimits) {
-        maxSteps = limits.maxSteps
-        maxAllocs = limits.maxAllocs
-        steps = 0L
-        allocs = 0L
-        interruptRequested = false
-        active = true
+    /** Sesion de un hilo: topes fijos, contadores propios y bandera volatile. */
+    internal class Sesion(val maxSteps: Long, val maxAllocs: Long) {
+        @Volatile
+        var interruptRequested: Boolean = false
+        var steps: Long = 0L
+        var allocs: Long = 0L
     }
 
-    /** Cierra la sesion de la evaluacion. */
+    // Pila de sesiones del hilo: begin empuja y end saca. Dos pestanas del
+    // pool de navegacion llevan pilas independientes; dentro de un mismo
+    // hilo, una evaluacion anidada (filtro de plugin durante un fetch de
+    // la pagina) apila la suya y al cerrar se restaura la exterior.
+    private val pilaHilo: ThreadLocal<ArrayDeque<Sesion>> =
+        ThreadLocal.withInitial { ArrayDeque<Sesion>() }
+
+    // Registro global de sesiones vivas: interrupt() se llama desde OTRO
+    // hilo (la UI pide el Stop) y debe alcanzar la sesion del hilo que
+    // ejecuta JS. begin da de alta y end de baja; adoptar suma otra
+    // referencia (la del runner que la hereda), asi la sesion sigue
+    // alcanzable para interrupt mientras CUALQUIER hilo la use.
+    private val vivas =
+        java.util.Collections.synchronizedMap(java.util.IdentityHashMap<Sesion, Int>())
+
+    private fun registrar(s: Sesion) {
+        vivas.merge(s, 1) { a, b -> a + b }
+    }
+
+    private fun darDeBaja(s: Sesion) {
+        val n = vivas[s] ?: return
+        if (n <= 1) vivas.remove(s) else vivas[s] = n - 1
+    }
+
+    /** Abre la sesion de la evaluacion en ESTE hilo: fija topes y resetea contadores. */
+    internal fun begin(limits: JsLimits) {
+        val s = Sesion(limits.maxSteps, limits.maxAllocs)
+        pilaHilo.get().addLast(s)
+        registrar(s)
+    }
+
+    /** Cierra la sesion mas reciente de ESTE hilo (LIFO) y restaura la exterior si la habia. */
     internal fun end() {
-        active = false
-        interruptRequested = false
+        val s = pilaHilo.get().removeLastOrNull() ?: return
+        darDeBaja(s)
+    }
+
+    /** Sesion viva del hilo llamador (la mas interior de su pila). */
+    internal fun sesionActual(): Sesion? = pilaHilo.get().lastOrNull()
+
+    /**
+     * Adopta en ESTE hilo la sesion capturada en otro (los runners de
+     * async/await y generators corren en hilo propio y heredan la sesion
+     * del hilo que los lanzo: sin esto su safepoint seria no-op y un
+     * bucle infinito dentro del runner JAMAS abortaria por cuotas).
+     */
+    internal fun adoptar(s: Sesion?) {
+        if (s == null) return
+        pilaHilo.get().addLast(s)
+        registrar(s)
     }
 
     /**
@@ -73,10 +117,10 @@ object JsQuotas {
      * la interrupcion. Fuera de sesion no hace nada.
      */
     internal fun tick() {
-        if (!active) return
-        steps = steps + 1L
-        if (steps > maxSteps) throw JsAbort(JsAbortReason.STEP_QUOTA)
-        if (interruptRequested) throw JsAbort(JsAbortReason.INTERRUPTED)
+        val s = pilaHilo.get().lastOrNull() ?: return
+        s.steps = s.steps + 1L
+        if (s.steps > s.maxSteps) throw JsAbort(JsAbortReason.STEP_QUOTA)
+        if (s.interruptRequested) throw JsAbort(JsAbortReason.INTERRUPTED)
     }
 
     /**
@@ -84,19 +128,21 @@ object JsQuotas {
      * contra el tope de heap y aborta con HEAP_QUOTA (o INTERRUPTED).
      */
     internal fun alloc() {
-        if (!active) return
-        allocs = allocs + 1L
-        if (allocs > maxAllocs) throw JsAbort(JsAbortReason.HEAP_QUOTA)
-        if (interruptRequested) throw JsAbort(JsAbortReason.INTERRUPTED)
+        val s = pilaHilo.get().lastOrNull() ?: return
+        s.allocs = s.allocs + 1L
+        if (s.allocs > s.maxAllocs) throw JsAbort(JsAbortReason.HEAP_QUOTA)
+        if (s.interruptRequested) throw JsAbort(JsAbortReason.INTERRUPTED)
     }
 
     /**
-     * Pide la interrupcion de la evaluacion en curso (T021): conmuta el
-     * flag volatile y el hilo que ejecuta JS aborta en el siguiente
-     * safepoint. Sin sesion abierta no hace nada (no envenena la
-     * siguiente evaluacion).
+     * Pide la interrupcion de las evaluaciones en curso (T021): conmuta el
+     * flag volatile de cada sesion viva y el hilo que ejecuta JS aborta en
+     * el siguiente safepoint. Sin sesiones vivas no hace nada (no envenena
+     * la siguiente evaluacion).
      */
     internal fun interrupt() {
-        if (active) interruptRequested = true
+        synchronized(vivas) {
+            for (s in vivas.keys) s.interruptRequested = true
+        }
     }
 }
